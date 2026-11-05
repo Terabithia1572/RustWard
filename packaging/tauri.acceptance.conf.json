@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "windows": {
+      "wix": {
+        "fragmentPaths": ["../../../packaging/wix/rustward-service.wxs"],
+        "componentRefs": ["RustWardServiceComponent", "RustWardDataDirComponent"]
+      }
+    }
+  }
+}

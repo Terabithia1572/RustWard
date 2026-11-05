@@ -8,22 +8,32 @@
 | Service | `LocalSystem` initially; evaluate a virtual service account + specific rights in Phase 7 | Read device state, apply/verify the enforcement provider, write audit | Accept unauthenticated requests |
 | Enforcement | Windows OS policy | Enforce independently of RustWard processes | — |
 
-## IPC (Phase 5)
+## IPC — implemented, NOT Windows-verified
 
-- Named pipe with a DACL allowing only `SYSTEM` and `BUILTIN\Administrators` for privileged
-  operations, and a separate read-only pipe for status (Authenticated Users, read).
-- `PIPE_REJECT_REMOTE_CLIENTS`; server verifies the client token (`ImpersonateNamedPipeClient`
-  + group check) for every privileged request, not once per connection.
-- Versioned request/response contracts; strict size limits; schema validation on the service side.
-- No generic "execute"/"write file"/"set registry" requests exist in the protocol.
-- Administrator confirmation (UAC-elevated helper or re-authentication) for policy changes;
-  no stored reusable passwords.
+- Two pipes: `\\.\pipe\RustWard.Status.v1` (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`,
+  read-only requests) and `\\.\pipe\RustWard.Admin.v1` (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
+- `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`. The client checks with
+  `GetNamedPipeServerSessionId` that the pipe server runs in session 0 (the service), to
+  reject an impostor server created in a user session.
+- Per request, not per connection: `ImpersonateNamedPipeClient` → `CheckTokenMembership`
+  (Administrators) + `TokenElevation`; impersonation is always reverted or the process aborts.
+  Clients connect with `SECURITY_IDENTIFICATION`.
+- Versioned envelopes; length-prefixed JSON frames ≤ 4 MiB; reads bounded with `PeekNamedPipe`;
+  every field validated server-side (`rustward-ipc::validate`).
+- No generic "execute", "write file" or "set registry" request exists; the 21 request types
+  are fixed by a golden contract test.
+- Authorization never depends on the UI. A frontend password prompt would not be a boundary
+  and is not used; the Windows token of the caller decides.
 
-## Tauri 2 hardening (Phase 6)
+## Tauri 2 hardening — implemented, NOT Windows-verified
 
-- Capabilities: only the RustWard IPC commands; no shell, fs, http or updater plugins.
-- Strict CSP (`default-src 'self'`), no remote URLs, bundled fonts/assets only.
-- Devtools disabled in release builds.
+- One command (`ipc_call`); capability `default` grants only `allow-ipc-call` to window
+  `main`; no core, shell, fs, http, opener or updater plugins. Tested on Linux: other
+  commands are rejected by the ACL.
+- CSP `default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+  `freezePrototype: true`; `withGlobalTauri: false`.
+- No devtools feature; release builds have no devtools and no development backend.
+- All assets local (system font stack, bundled lucide icons).
 
 ## Data protection
 
@@ -31,7 +41,7 @@
 - Audit records: no PINs, no file names or contents, no document data.
 - Hash-chained audit entries + Windows Event Log; described as tamper-*evident*.
 
-## Phase 1 guarantees (verifiable today)
+## Guarantees checked by automated tests
 
 - `rustward-windows` imports only five read-only Win32 functions; a unit test fails if
   any other `SetupDi*`, `CM_*`, `Reg*`, `DeviceIoControl` or class-installer API appears.

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DRAFT - NOT BUILT, NOT INSTALLED, NOT VERIFIED.
+  WiX v3 fragment merged into the Tauri MSI by packaging/tauri.acceptance.conf.json.
+  Must be built and tested ONLY on the isolated Windows 10 Pro acceptance VM.
+
+  Installs rustward-service.exe next to the desktop app, registers it as an
+  auto-start LocalSystem service and creates %ProgramData%\RustWard with a
+  protected DACL (SYSTEM + BUILTIN\Administrators only).
+
+  It does NOT change any device, driver, registry policy or Group Policy.
+  Enforcement stays disabled (dry-run) in this build.
+
+  The service binary path comes from the TAURI_RUSTWARD_SERVICE_EXE
+  environment variable: tauri-bundler clears the WiX environment except
+  SYSTEMROOT/TMP/TEMP and variables starting with TAURI (tauri-bundler 2.10.4,
+  msi/mod.rs clear_env_for_wix). scripts/build-release.ps1 sets it.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="RustWardServiceComponent" Guid="7C1E2A8B-3F4D-4E6A-9B21-5D8C0F3A7E11" Win64="yes">
+        <File Id="RustWardServiceExe" Name="rustward-service.exe"
+              Source="$(env.TAURI_RUSTWARD_SERVICE_EXE)" KeyPath="yes" Checksum="yes" />
+        <ServiceInstall Id="RustWardServiceInstall"
+                        Name="RustWardService"
+                        DisplayName="RustWard USB Storage Control"
+                        Description="Offline USB storage access control (RustWard). Simulation build: enforcement disabled."
+                        Type="ownProcess" Start="auto" ErrorControl="normal"
+                        Account="LocalSystem" Arguments="service" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+        <ServiceControl Id="RustWardServiceControl" Name="RustWardService"
+                        Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="TARGETDIR">
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="RustWardDataDir" Name="RustWard">
+          <!-- Permanent: audit data is kept on uninstall unless the administrator
+               exports/removes it (docs/OFFLINE-DEPLOYMENT.md, uninstall). -->
+          <Component Id="RustWardDataDirComponent" Guid="2B9F6D4E-8A13-4C57-B0E2-91F4A6C3D58E" Win64="yes" Permanent="yes">
+            <CreateFolder>
+              <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" />
+            </CreateFolder>
+          </Component>
+        </Directory>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

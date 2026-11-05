@@ -1,54 +1,82 @@
 # RustWard
 
-Bağımsız (çevrimdışı) Windows 10 Pro iş istasyonları için USB depolama erişim denetimi.
+Bağımsız (çevrimdışı) Windows 10 Pro x64 iş istasyonları için marka tabanlı USB depolama
+erişim denetimi.
 
-> **Mevcut durum: Faz 0 tamamlandı, Faz 1 temeli (salt okunur).**
-> RustWard şu anda **hiçbir şeyi engellemez**. Tüm çıktılar simülasyondur ve bunu açıkça belirtir.
+> **Mevcut durum (2026-11-06): geliştirme sürümü, yalnızca simülasyon.**
+> RustWard **hiçbir USB aygıtını engellemez**. Tüm kararlar simülasyondur
+> (`SİMÜLE İZİN` / `SİMÜLE RET`) ve genel bakış ekranı
+> **"Koruma henüz gerçek Windows ortamında doğrulanmadı."** uyarısını gösterir. Yerel Windows
+> ve fiziksel USB testleri son kabul aşamasına ertelenmiştir. Üretime hazır değildir.
 
-## Bugün neler var
+## Neler var
 
-- `rustward-core` — saf Rust iş mantığı: Windows PnP kimlik ayrıştırma, üretici kataloğu,
-  iş istasyonu bazlı marka politikası (varsayılan: reddet), aygıt sınıflandırma, kanıtlı
-  karar üretimi ve Faz 2'de test edilecek Windows "Aygıt Yükleme Kısıtlamaları"
-  yapılandırmasının *önizlemesi*.
-- `rustward-windows` — SetupAPI ile salt okunur aygıt envanteri.
-- `rustward-enforcement` — dürüst koruma durumu türleri; henüz uygulama (enforcement) sağlayıcısı yok.
-- `rustward-inventory` — salt okunur komut satırı aracı.
+| Bileşen | Yol | Durum |
+|---|---|---|
+| Politika motoru | `crates/rustward-core` | Test edildi |
+| SQLite depolama, zincirli denetim kaydı | `crates/rustward-storage` | Test edildi |
+| Uygulama hizmeti (tüm istekler) | `crates/rustward-app` | Test edildi |
+| Windows hizmeti | `crates/rustward-service` | Konsol modu test edildi; SCM derlenmedi/doğrulanmadı |
+| Kuru çalıştırma uygulama sağlayıcıları | `crates/rustward-enforcement` | Model olarak test edildi; **engelleme yok** |
+| Yerel IPC (sahte taşıyıcı + adlandırılmış kanallar) | `crates/rustward-ipc` | Protokol test edildi; kanallar yalnızca tür denetiminden geçti |
+| Salt okunur SetupAPI envanteri | `crates/rustward-windows`, `crates/rustward-inventory` | Mantık test edildi; yerel çalıştırma YAPILMADI |
+| Masaüstü uygulaması (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | Arayüz test edildi; Tauri kabuğu yalnızca Linux'ta test edildi |
+| Uygulama için arka uç seçimi | `crates/rustward-ui-bridge` | Test edildi |
+| Çevrimdışı paketleme hazırlığı | `scripts/`, `packaging/` | Bağımlılık arşivleme Linux'ta test edildi; MSI YAPILMADI |
 
-## Hızlı başlangıç (Windows, MSVC araç zinciri)
+Ayrıntılar ve sınıflandırma: [`docs/PHASE-STATUS.md`](docs/PHASE-STATUS.md).
+Test kanıtları: [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md).
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\check-prereqs.ps1   # salt okunur ortam raporu
-cargo test --workspace
-cargo run -p rustward-inventory -- scan                                  # canlı, salt okunur
-cargo run -p rustward-inventory -- evaluate --snapshot tests\fixtures\synthetic-lab-snapshot.json
-cargo run -p rustward-inventory -- plan --live                           # önizleme, asla uygulanmaz
+## Geliştirme
+
+```bash
+./scripts/verify-all.sh                       # fmt, clippy, tüm testler, arayüz tür denetimi/testler/derleme
+
+cd apps/rustward-desktop && npm ci
+npm test                                      # Vitest
+npx tauri dev                                 # hata ayıklama sürümü: süreç içi geliştirme arka ucu, geçici veritabanı
 ```
 
-## Fizibilite özeti
+Hata ayıklama sürümü bir geliştirme arka ucu kullanır (geçici veritabanı, sentetik yönetici,
+hizmetle aynı doğrulama ve yetkilendirme kodu). Yayın sürümleri her zaman Windows
+hizmetiyle konuşur; geliştirme arka ucu bu sürümlere derlenemez.
 
-Windows'un marka düzeyinde uygulayabildiği tek tanımlayıcı, aygıt yazılımının bildirdiği
-SCSI INQUIRY üretici alanıdır (ör. `USBSTOR\DiskSanDisk_`). Aday mekanizma, katmanlı
-değerlendirmeli Windows Aygıt Yükleme Kısıtlamalarıdır. Bu yöntem:
+Windows (MSVC araç zinciri), salt okunur:
 
-- taklit edilmeye (spoofing) karşı korumalı **değildir**;
-- daha önce yüklenmiş aygıtları yeniden değerlendirmez (önce denetimli temizlik gerekir);
-- genel denetleyici adı (ör. "Generic", "JMicron") bildiren ürünlerde marka tanıyamaz.
+```powershell
+cargo test --workspace
+cargo run -p rustward-inventory -- scan
+cargo run -p rustward-service -- console      # geçici veritabanı, sentetik envanter, kurulum yok
+```
 
-TÜBİTAK SIR II tanımlayıcıları fiziksel inceleme yapılana kadar bilinmiyor; o zamana kadar
-bu aygıtlar varsayılan olarak reddedilir.
+Hizmeti geliştirme bilgisayarına asla kurmayın veya kaydetmeyin. Paketleme:
+[`docs/OFFLINE-DEPLOYMENT.md`](docs/OFFLINE-DEPLOYMENT.md).
 
-Öneri: yalnızca izole test bilgisayarında Faz 2 kavram kanıtı için **KOŞULLU EVET (CONDITIONAL GO)**.
-Ayrıntılar: [`docs/ENFORCEMENT-FEASIBILITY.md`](docs/ENFORCEMENT-FEASIBILITY.md) (İngilizce).
+## Tek paragrafta uygulanabilirlik
 
-## Bildirim metinleri
+Windows'un marka düzeyinde uygulayabildiği tek tanımlayıcı SCSI INQUIRY üretici dizesidir;
+`USBSTOR\DiskSanDisk_` gibi üretici düzeyinde bir donanım kimliği olarak görünür. Aday
+mekanizma, katmanlı değerlendirmeli Windows "Aygıt Yükleme Kısıtlamaları"dır. Sahteciliğe
+karşı dayanıklı değildir, önceden yüklenmiş aygıtları yeniden değerlendirmez ve genel bir
+denetleyici adı bildiren ürünlere yardımcı olamaz. TÜBİTAK SIR II tanımlayıcıları hâlâ
+bilinmiyor. Bkz. [`docs/ENFORCEMENT-FEASIBILITY.md`](docs/ENFORCEMENT-FEASIBILITY.md).
 
-- Doğrulanmış engelleme: **"USB engellenmiştir. İşlem kayıt altına alınmıştır."**
-  (yalnızca uygulama mekanizması kanıt ürettiğinde gösterilir)
-- Doğrulanamayan durum: "Koruma doğrulanamadı: bu USB depolama aygıtının engellendiği teyit edilemedi."
+## Belgeler
 
-## Güvenlik kuralları
+| Belge | İçerik |
+|---|---|
+| [PHASE-STATUS](docs/PHASE-STATUS.md) | Kilometre taşları, sınıflandırma, eksikler, işlemeler |
+| [TEST-RESULTS](docs/TEST-RESULTS.md) | Nerede ne test edildi, neler ERTELENDİ |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Crate'ler, güven sınırları, IPC sözleşmesi |
+| [SECURITY-MODEL](docs/SECURITY-MODEL.md) / [THREAT-MODEL](docs/THREAT-MODEL.md) | Yetki ayrımı, kanallar, Tauri sıkılaştırması |
+| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Kalan riskler L-01…L-21 |
+| [OFFLINE-DEPLOYMENT](docs/OFFLINE-DEPLOYMENT.md) | Arşivleme, MSI, WebView2, kurulum/kaldırma |
 
-Geliştirme bilgisayarında veya üretimdeki iş istasyonlarında Windows güvenlik politikası
-değiştirmeyin, sürücü yüklemeyin, aygıt devre dışı bırakmayın. Faz 2 denemeleri yalnızca
-imajı alınmış, izole bir test bilgisayarında ve yazılı onayla yapılır.
+Belgelerin ayrıntılı sürümleri İngilizcedir.
+
+## Katkıda bulunanlar için güvenlik kuralları
+
+Geliştirme bilgisayarında veya herhangi bir üretim iş istasyonunda Windows güvenlik
+politikasını değiştirmeyin, sürücü kurmayın, aygıtları devre dışı bırakmayın ve hizmeti
+kaydetmeyin. Uygulama (engelleme) deneyleri yalnızca yazılı onayla, yalıtılmış ve imajı
+alınmış bir kabul sanal makinesinde yapılır.

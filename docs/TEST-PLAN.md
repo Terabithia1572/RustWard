@@ -4,21 +4,11 @@ Results vocabulary: PASS · FAIL · BLOCKED · NOT RUN · NOT APPLICABLE.
 A test passes only when the observed result matches the security requirement.
 Use sacrificial media and synthetic files only.
 
-## 1. Automated tests (executed)
+## 1. Automated tests
 
-Run on 2026-11-05 in a Linux build workspace (rustc 1.97.0). These test RustWard's
-*logic and model*, not Windows behaviour.
-
-| Suite | Tests | Result |
-|---|---|---|
-| `rustward-core` unit (ids, device, catalog, policy, classify) | 24 | PASS |
-| `rustward-core` fixture end-to-end (`tests/fixture_eval.rs`) | 11 | PASS |
-| `rustward-enforcement` unit | 3 | PASS |
-| `rustward-inventory` unit | 2 | PASS |
-| `rustward-windows` unit (property decoding, live-snapshot assembly, read-only API allowlist, non-Windows behaviour) | 7 | PASS |
-| `cargo clippy --workspace --all-targets -D warnings` | — | PASS |
-| `cargo clippy -p rustward-windows --features host-typecheck -D warnings` (type-checks the SetupAPI backend) | — | PASS |
-| Native Windows build / live `rustward-inventory scan` | — | **NOT RUN** (no Windows execution available from the build workspace) |
+Current results, environment and the full DEFERRED list: **`TEST-RESULTS.md`**
+(run `./scripts/verify-all.sh`). Automated tests check RustWard's logic on Linux; they are
+not evidence of Windows behaviour.
 
 ## 2. Phase 1 on-Windows checks (read-only, run on the dev PC)
 

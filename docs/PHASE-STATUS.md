@@ -1,52 +1,72 @@
 # Phase Status
 
-Last updated: 2026-11-05.
+Last updated: 2026-11-06.
 
-| Phase | Status | Notes |
+> RustWard is **not production-ready** and **does not block any USB device**. All policy
+> decisions are simulations. Native Windows and physical USB testing were postponed by the
+> project owner to the final acceptance stage and are **DEFERRED / NOT RUN**.
+
+## Classification used
+
+| Class | Meaning |
+|---|---|
+| **IMPLEMENTED AND AUTOMATED-TESTED** | Platform-independent code with passing automated tests (Linux). |
+| **IMPLEMENTED BUT NOT WINDOWS-VERIFIED** | Windows-specific code that is written and type-checked (or compiled on Linux) but never executed on Windows. |
+| **PARTIALLY IMPLEMENTED** | Some required parts missing or only drafted. |
+| **BLOCKED** | Cannot progress without hardware, the acceptance VM or an owner decision. |
+
+## Milestones (development without physical Windows testing)
+
+| Milestone | Content | Classification |
 |---|---|---|
-| 0 — Repository and feasibility | **Done** | Feasibility matrix, threat model, limitations, workspace design, docs |
-| 1 — Read-only inventory | **Foundation done; Windows execution pending** | Core logic + SetupAPI backend implemented and type-checked; needs a native run on Windows (TEST-PLAN W-01..W-05) |
-| 2 — Enforcement feasibility PoC | Not started — **CONDITIONAL GO** | Requires isolated test PC, hardware set, SIR II inspection, written approval |
-| 3 — Policy engine | Partially pre-built in `rustward-core` (validation, default deny, versioning, catalog binding) | Change history and persistence pending |
-| 4–9 | Not started | — |
+| A — Policy engine (`rustward-core`) | PnP ID parsing, catalog + policy validation, default deny, classification, evaluation with evidence, policy editing with versioned history, explanations (TR/EN), snapshot diff and re-enumeration correlation | IMPLEMENTED AND AUTOMATED-TESTED |
+| B — Storage (`rustward-storage`) | SQLite (bundled), versioned migrations, settings, policy history with optimistic versioning, device inventory, hash-chained security events, retention with chain anchor, backup/restore | IMPLEMENTED AND AUTOMATED-TESTED (restore not exposed in UI) |
+| C — Service (`rustward-app`, `rustward-service`) | Application service (all IPC requests), periodic inventory refresh, health/degradation, retention scheduling, console mode | App logic + console runtime: IMPLEMENTED AND AUTOMATED-TESTED. SCM integration (`scm.rs`): IMPLEMENTED BUT NOT WINDOWS-VERIFIED (not compiled anywhere) |
+| D — Enforcement provider (`rustward-enforcement`) | `DeviceInstallRestrictionProvider` dry-run plan (layered Device Installation Restrictions model), preconditions, risks, gaps; states NotConfigured / Simulated / PendingValidation / ActiveUnverified / VerifiedProtected / Degraded / Error; activation compiled out | Dry-run model: IMPLEMENTED AND AUTOMATED-TESTED. Real effect on Windows: **BLOCKED** (needs acceptance VM + approval) |
+| E — IPC (`rustward-ipc`) | Versioned envelopes, per-request access levels, server-side validation, length-prefixed frames (4 MiB), mock transport, golden contract; named pipes with DACLs, remote-client rejection, impersonation + elevation check | Protocol + mock: IMPLEMENTED AND AUTOMATED-TESTED. Named pipes: IMPLEMENTED BUT NOT WINDOWS-VERIFIED (type-checked) |
+| F — Desktop app (`apps/rustward-desktop`) | Tauri 2 + React 19 + TS strict + Tailwind 4; Dashboard, Devices, Allowed Manufacturers, Blocked Devices, Audit Logs, Diagnostics, Settings; Turkish primary, English; mandatory not-validated banner | Frontend: IMPLEMENTED AND AUTOMATED-TESTED. Tauri shell: compiled + IPC-tested on Linux/webkit2gtk; on WebView2: IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
+| G — Integration | UI → `ipc_call` → `rustward-ui-bridge` → (dev backend \| service pipe) → `rustward-app` → policy engine → SQLite | Dev-backend path: IMPLEMENTED AND AUTOMATED-TESTED (Tauri mock runtime). Service path: IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
+| H — Offline packaging preparation | Vendoring script (tested on Linux), offline build verified on Linux, release build script, MSI service fragment (draft), deployment/uninstall documentation | PARTIALLY IMPLEMENTED (Windows build and MSI NOT RUN) |
+
+## Feature gaps (known, not hidden)
+
+| Gap | Status |
+|---|---|
+| Desktop notification when a device is denied | Setting stored; delivery **not implemented** |
+| Windows Event Log entries | **Not implemented** (audit goes to SQLite only) |
+| Real-time PnP arrival notification (`CM_Register_Notification`) | **Not implemented**; periodic refresh (default 30 s) |
+| Per-workstation ID | Not configurable; initial policy uses `PC-01` |
+| Restore from backup in UI | Storage function exists; no IPC/UI |
+| Elevation UX | Admin actions need the app started "Run as administrator"; no in-app elevation |
+| Real enforcement | Compiled out (`ACTIVATION_ENABLED = false`) |
 
 ## Separation of facts
 
 | Category | Items |
 |---|---|
-| Verified facts | Microsoft docs: DeviceInstallation CSP editions/versions/layering order; USBSTOR vendor-level hardware ID format; MDE requires internet connectivity and MDE licensing; kernel driver signing rules; windows-drivers-rs not production-ready. Public usb.ids VIDs for SanDisk, Kingston, Seagate. |
-| Engineering assumptions | Install prevention ⇒ no volume ⇒ no access; non-retroactive rules leave installed devices untouched; SCSI-namespace padding; comma→`_` rule; SanDisk/Kingston/Seagate INQUIRY vendor strings. |
-| Implemented | ID parsing/encoding, snapshot model, catalog + policy validation, classification, evaluation with evidence, plan preview, layered-evaluation model, consistency check, read-only SetupAPI enumerator, enforcement/protection-state types, inventory CLI, prereq script. |
-| Tested | 47 automated tests + clippy (Linux workspace). Windows backend type-checked, **not executed**. |
+| Verified facts (documentation) | Microsoft docs: DeviceInstallation CSP editions/versions/layering; USBSTOR vendor-level hardware ID format. Tauri bundler behaviour read from tauri-bundler 2.10.4 source (WiX download, WebView2 HEAD request, environment clearing). |
+| Engineering assumptions | Install prevention ⇒ no volume ⇒ no access; non-retroactive rules; SCSI-namespace padding; INQUIRY vendor strings of SanDisk/Kingston/Seagate; WiX fragment works with Tauri's template. |
+| Tested | See `TEST-RESULTS.md`: 151 Rust workspace tests, 2 release-mode bridge tests, 4 Tauri IPC tests, 30 Vitest tests, fmt/clippy/tsc/build — all on Linux. |
 | Not tested | Anything on Windows; anything on hardware. |
-| Remaining risks | `KNOWN-LIMITATIONS.md` L-01…L-12. |
 
-## Environment observed (2026-11-05)
+## Commits (private local repository, never pushed)
 
-### Development PC (Windows x64, device name `yunuss`) — observed read-only by folder listing
-
-| Item | Observation |
+| Commit | Content |
 |---|---|
-| OS edition/build | **Not determined** (run `scripts\check-prereqs.ps1`) |
-| Rust | rustup toolchain `stable-x86_64-pc-windows-msvc` present; exact version not readable remotely |
-| MSVC | Visual Studio 2022 Enterprise (MSVC 14.44.35207) and Visual Studio 18 Enterprise/Insiders (MSVC 14.51.36231) |
-| Windows SDK | 10.0.22621.0 and 10.0.26100.0 |
-| WDK | **Not installed** (no `km` headers) — only needed for the minifilter fallback |
-| Node.js | Installed under `C:\Program Files\nodejs`; version not readable remotely |
-| Git | Git for Windows installed; version not readable remotely |
-| WebView2 | 156.0.4314.58 |
-| Tauri CLI | Not checked (Phase 6) |
+| `2894098` | Phase 0 + Phase 1 read-only foundation |
+| `9df731f` | Phase 1 hardening |
+| `9ce785d` | Milestone A — policy engine |
+| `0aaec8c` | Milestone B — storage |
+| `20a1263` | Milestones D + E — dry-run enforcement, IPC |
+| `f173fea` | Milestones C + G — application backend, service foundation |
+| `a77c9d8` | Milestone F — Tauri desktop app |
+| (this commit) | Milestone H — offline packaging preparation, documentation |
 
-The development PC is **not** the deployment target. The deployment target is
-Windows 10 Pro x64 on five standalone workstations; none were accessed.
+## Environment
 
-### Build/verification workspace (Linux x86_64)
-
-rustc 1.97.0, cargo 1.97.0, clippy, rustfmt, Node 22.23.4, git 2.43.0. The
-`x86_64-pc-windows-msvc` Rust target could not be downloaded (network policy), so the
-Windows backend was type-checked through the `host-typecheck` feature instead of a
-cross-compile.
-
-### Dependency versions (Cargo.lock)
-
-serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21, windows-sys 0.61.2.
+| Item | Value |
+|---|---|
+| Development PC | Windows x64 with MSVC 14.44/14.51, Windows SDK 10.0.22621/26100, WebView2 156; not the deployment target. RustWard was never installed or run on it. |
+| Build/verification workspace | Ubuntu 24.04.5, rustc 1.97.0, Node 22.23.4 (`TEST-RESULTS.md`) |
+| Deployment target | Five standalone Windows 10 Pro x64 workstations — not accessed |
+| Acceptance VM | Not yet provided |
