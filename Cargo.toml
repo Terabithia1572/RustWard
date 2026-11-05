@@ -5,12 +5,13 @@ members = [
     "crates/rustward-windows",
     "crates/rustward-enforcement",
     "crates/rustward-inventory",
+    "crates/rustward-storage",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 publish = false
 
 # Versions recorded in docs/PHASE-STATUS.md; exact resolution is pinned by Cargo.lock.
@@ -23,7 +24,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_Properties",
 ] }
+# Bundled SQLite: no system library needed on the offline workstations.
+rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
+sha2 = "0.11.1"
 rustward-core = { path = "crates/rustward-core" }
+rustward-storage = { path = "crates/rustward-storage" }
 rustward-windows = { path = "crates/rustward-windows" }
 rustward-enforcement = { path = "crates/rustward-enforcement" }
 

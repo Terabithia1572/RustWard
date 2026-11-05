@@ -1,0 +1,18 @@
+[package]
+name = "rustward-storage"
+description = "Local SQLite persistence for RustWard: policy state, settings, device inventory, change history and hash-chained security events."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustward-core.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
