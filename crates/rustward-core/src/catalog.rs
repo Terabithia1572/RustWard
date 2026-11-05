@@ -304,7 +304,7 @@ impl ValidatedCatalog {
         let mut names: HashMap<String, Vec<String>> = HashMap::new();
         for brand in &catalog.brands {
             for name in std::iter::once(&brand.display_name).chain(brand.aliases.iter()) {
-                let key = name.trim().to_lowercase();
+                let key = crate::names::normalize_brand_name(name);
                 if key.is_empty() {
                     continue;
                 }

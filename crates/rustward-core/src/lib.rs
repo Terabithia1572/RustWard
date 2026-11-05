@@ -10,6 +10,10 @@
 //! - [`policy`]: per-workstation brand allowlist policy and its validation.
 //! - [`classify`]: device classification (USB storage vs. peripherals vs. system storage).
 //! - [`evaluate`]: default-deny policy decisions with evidence.
+//! - [`policy_edit`]: validated, versioned catalog/allowlist edits with change records.
+//! - [`names`]: Turkish-aware brand-name normalization (hints/duplicates only).
+//! - [`explain`]: Turkish/English audit explanations of simulated decisions.
+//! - [`diff`]: inventory diffs and re-enumeration correlation (audit only).
 //! - [`report`]: raw and sanitized diagnostic reports (always "NOT ACTIVE").
 //! - [`plan`]: compilation of the policy into a *preview* of a Windows
 //!   Device Installation Restriction configuration, and a model of how
@@ -23,10 +27,14 @@
 pub mod catalog;
 pub mod classify;
 pub mod device;
+pub mod diff;
 pub mod evaluate;
+pub mod explain;
 pub mod ids;
+pub mod names;
 pub mod plan;
 pub mod policy;
+pub mod policy_edit;
 pub mod report;
 
 /// Well-known Windows device setup class GUIDs (lower-case, with braces).
