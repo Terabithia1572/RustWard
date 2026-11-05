@@ -433,6 +433,92 @@
       "inf_manufacturer": "(Standard disk drives)"
     },
     {
+      "instance_id": "USB\\VID_1B1C&PID_1A0E\\NAMESPOOF01",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_1B1C&PID_1A0E&REV_0100",
+        "USB\\VID_1B1C&PID_1A0E"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "SanDisk Extreme",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Kingston&Prod_DataTraveler_SE9&Rev_PMAP\\NAMESPOOF01&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_1B1C&PID_1A0E\\NAMESPOOF01",
+      "hardware_ids": [
+        "USBSTOR\\DiskKingstonDataTraveler_SE9PMAP",
+        "USBSTOR\\DiskKingstonDataTraveler_SE9",
+        "USBSTOR\\DiskKingston",
+        "USBSTOR\\KingstonDataTraveler_SE9P",
+        "KingstonDataTraveler_SE9P",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk Extreme USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0781&PID_5571\\VIDONLY0001",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0781&PID_5571&REV_0100",
+        "USB\\VID_0781&PID_5571"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "Cruzer Fit",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Generic&Prod_Mass_Storage&Rev_1.00\\VIDONLY0001&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0781&PID_5571\\VIDONLY0001",
+      "hardware_ids": [
+        "USBSTOR\\DiskGeneric_Mass_Storage____1.00",
+        "USBSTOR\\DiskGeneric_Mass_Storage____",
+        "USBSTOR\\DiskGeneric_",
+        "USBSTOR\\Generic_Mass_Storage____1",
+        "Generic_Mass_Storage____1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Generic Mass Storage USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
       "instance_id": "USB\\VID_090C&PID_1000\\AA00000000000489",
       "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
       "class_name": "USB",
@@ -505,6 +591,152 @@
       ],
       "friendly_name": "HL-DT-ST DVDRAM GP57EB40 USB Device",
       "present": true
+    },
+    {
+      "instance_id": "USB\\VID_0781&PID_5406\\0774910E4B21C9A8",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0781&PID_5406&REV_0200",
+        "USB\\VID_0781&PID_5406"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "U3 Cruzer Micro",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_SanDisk&Prod_U3_Cruzer_Micro&Rev_8.02\\0774910E4B21C9A8&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0781&PID_5406\\0774910E4B21C9A8",
+      "hardware_ids": [
+        "USBSTOR\\DiskSanDisk_U3_Cruzer_Micro_8.02",
+        "USBSTOR\\DiskSanDisk_U3_Cruzer_Micro_",
+        "USBSTOR\\DiskSanDisk_",
+        "USBSTOR\\SanDisk_U3_Cruzer_Micro_8",
+        "SanDisk_U3_Cruzer_Micro_8",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk U3 Cruzer Micro USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\CdRom&Ven_SanDisk&Prod_U3_Cruzer_Micro&Rev_8.02\\0774910E4B21C9A8&1",
+      "class_guid": "{4d36e965-e325-11ce-bfc1-08002be10318}",
+      "class_name": "CDROM",
+      "service": "cdrom",
+      "parent_instance_id": "USB\\VID_0781&PID_5406\\0774910E4B21C9A8",
+      "hardware_ids": [
+        "USBSTOR\\CdRomSanDisk_U3_Cruzer_Micro_8.02",
+        "USBSTOR\\CdRomSanDisk_U3_Cruzer_Micro_",
+        "USBSTOR\\CdRomSanDisk_",
+        "USBSTOR\\SanDisk_U3_Cruzer_Micro_8",
+        "SanDisk_U3_Cruzer_Micro_8",
+        "USBSTOR\\GenCdRom",
+        "GenCdRom"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\CdRom",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk U3 Cruzer Micro USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_0BDA&PID_0307\\201006010301",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0BDA&PID_0307&REV_9312",
+        "USB\\VID_0BDA&PID_0307"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "USB3.0 Card Reader",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Generic-&Prod_SD_MMC&Rev_1.00\\201006010301&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0BDA&PID_0307\\201006010301",
+      "hardware_ids": [
+        "USBSTOR\\DiskGeneric-SD/MMC__________1.00",
+        "USBSTOR\\DiskGeneric-SD/MMC__________",
+        "USBSTOR\\DiskGeneric-",
+        "USBSTOR\\Generic-SD/MMC__________1",
+        "Generic-SD/MMC__________1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Generic- SD/MMC USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Generic-&Prod_MS_MS-Pro&Rev_1.00\\201006010301&1",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0BDA&PID_0307\\201006010301",
+      "hardware_ids": [
+        "USBSTOR\\DiskGeneric-MS/MS-Pro_______1.00",
+        "USBSTOR\\DiskGeneric-MS/MS-Pro_______",
+        "USBSTOR\\DiskGeneric-",
+        "USBSTOR\\Generic-MS/MS-Pro_______1",
+        "Generic-MS/MS-Pro_______1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Generic- MS/MS-Pro USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "SCSI\\Disk&Ven_Samsung&Prod_PSSD_T7\\8&1A2B3C4D&0&000000",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_04E8&PID_4001\\S6XANOTINSNAPSHOT",
+      "present": false,
+      "hardware_ids": [
+        "SCSI\\DiskSamsung_PSSD_T7_________0___",
+        "SCSI\\DiskSamsung_PSSD_T7_________",
+        "SCSI\\DiskSamsung_",
+        "SCSI\\Samsung_PSSD_T7_________0",
+        "Samsung_PSSD_T7_________0",
+        "SCSI\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "SCSI\\Disk",
+        "SCSI\\RAW"
+      ],
+      "friendly_name": "Samsung PSSD T7 SCSI Disk Device"
     },
     {
       "instance_id": "USB\\VID_1A2B&PID_0001\\COMBO0001",

@@ -10,6 +10,7 @@
 //! - [`policy`]: per-workstation brand allowlist policy and its validation.
 //! - [`classify`]: device classification (USB storage vs. peripherals vs. system storage).
 //! - [`evaluate`]: default-deny policy decisions with evidence.
+//! - [`report`]: raw and sanitized diagnostic reports (always "NOT ACTIVE").
 //! - [`plan`]: compilation of the policy into a *preview* of a Windows
 //!   Device Installation Restriction configuration, and a model of how
 //!   Windows would evaluate it. Nothing in this crate applies anything.
@@ -26,6 +27,7 @@ pub mod evaluate;
 pub mod ids;
 pub mod plan;
 pub mod policy;
+pub mod report;
 
 /// Well-known Windows device setup class GUIDs (lower-case, with braces).
 pub mod class_guids {

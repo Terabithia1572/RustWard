@@ -299,6 +299,42 @@ impl ValidatedCatalog {
                 });
             }
         }
+        // Aliases never authorize, but a name shared between brands or equal
+        // to a generic vendor would mislead an administrator reading hints.
+        let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        for brand in &catalog.brands {
+            for name in std::iter::once(&brand.display_name).chain(brand.aliases.iter()) {
+                let key = name.trim().to_lowercase();
+                if key.is_empty() {
+                    continue;
+                }
+                if reserved.contains(&normalize_generic(name)) {
+                    warnings.push(CatalogIssue {
+                        severity: Severity::Warning,
+                        code: "alias_generic",
+                        detail: format!(
+                            "brand {:?}: alias {name:?} is a reserved generic vendor name",
+                            brand.id
+                        ),
+                    });
+                }
+                let entry = names.entry(key).or_default();
+                if !entry.contains(&brand.id) {
+                    entry.push(brand.id.clone());
+                }
+            }
+        }
+        let mut shared: Vec<_> = names.iter().filter(|(_, b)| b.len() > 1).collect();
+        shared.sort();
+        for (name, brands) in shared {
+            warnings.push(CatalogIssue {
+                severity: Severity::Warning,
+                code: "alias_shared",
+                detail: format!(
+                    "name {name:?} is used by several brands {brands:?}; hints for it are ambiguous"
+                ),
+            });
+        }
         for (vid, brands) in &vid_index {
             if brands.len() > 1 {
                 warnings.push(CatalogIssue {
@@ -463,6 +499,20 @@ mod tests {
         let c = codes(e);
         assert!(c.contains(&"brand_id"));
         assert!(c.contains(&"brand_id_duplicate"));
+    }
+
+    #[test]
+    fn alias_conflicts_are_reported_but_never_authorize() {
+        let mut a = brand("a", vec![ident(IdentifierKind::InquiryVendor, "AAAA")]);
+        a.aliases = vec!["Shared Corp".into(), "USB".into()];
+        let mut b = brand("b", vec![ident(IdentifierKind::InquiryVendor, "BBBB")]);
+        b.aliases = vec!["shared corp ".into()];
+        let c = ValidatedCatalog::validate(cat(vec![a, b])).unwrap();
+        let codes: Vec<_> = c.warnings().iter().map(|w| w.code).collect();
+        assert!(codes.contains(&"alias_shared"));
+        assert!(codes.contains(&"alias_generic"));
+        // Aliases do not create enforceable identities.
+        assert_eq!(c.brand_for_inquiry_field("Shared_C"), None);
     }
 
     #[test]

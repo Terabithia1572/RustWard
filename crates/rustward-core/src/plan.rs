@@ -42,8 +42,8 @@ pub struct AllowDeviceIdRule {
     pub namespace: StorageIdNamespace,
     /// Whether the catalog identifier is lab-verified.
     pub identifier_lab_verified: bool,
-    /// Whether Microsoft documents this namespace's vendor-level format.
-    pub namespace_format_documented: bool,
+    /// Whether internal/virtual disks share this namespace (SCSI).
+    pub namespace_shared_with_internal_disks: bool,
 }
 
 /// A prevent rule on a setup class.
@@ -117,7 +117,7 @@ pub fn compile_plan(
                             namespace: ns,
                             identifier_lab_verified: ident.verification
                                 == Verification::LabVerified,
-                            namespace_format_documented: ns.vendor_level_format_documented(),
+                            namespace_shared_with_internal_disks: ns.shared_with_internal_disks(),
                         });
                     }
                     Err(e) => warnings.push(format!("brand {:?}: {e}", brand.id)),
@@ -139,7 +139,7 @@ pub fn compile_plan(
         .any(|r| r.namespace == StorageIdNamespace::Scsi)
     {
         warnings.push(
-            "SCSI\\Disk<vendor> allow rules also match internal/virtual disks with the same INQUIRY vendor and their padding is unconfirmed; validate on UASP hardware".into(),
+            "SCSI\\Disk<vendor> allow rules also match internal/virtual disks with the same INQUIRY vendor; UASP enumeration must be validated on hardware".into(),
         );
     }
 

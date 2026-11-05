@@ -12,6 +12,7 @@
 
 #![cfg_attr(not(any(windows, feature = "host-typecheck")), forbid(unsafe_code))]
 
+pub mod engine;
 pub mod wide;
 
 #[cfg(any(windows, feature = "host-typecheck"))]
@@ -63,9 +64,12 @@ pub enum InventoryError {
     /// A property kept growing between reads.
     #[error("property size changed repeatedly while reading")]
     PropertyUnstable,
-    /// Buffer size does not fit the API.
+    /// Buffer size does not fit the API or exceeds the sanity limit.
     #[error("property buffer too large")]
     BufferTooLarge,
+    /// The API reported "insufficient buffer" with a non-growing size.
+    #[error("property size reported inconsistently")]
+    PropertySizeInconsistent,
     /// Device index overflow.
     #[error("too many devices")]
     TooManyDevices,
@@ -135,7 +139,7 @@ mod tests {
     /// Win32 functions, and none of the known state-changing APIs.
     #[test]
     fn backend_imports_only_allowlisted_read_only_apis() {
-        let src = include_str!("setupapi.rs");
+        let src = concat!(include_str!("setupapi.rs"), include_str!("engine.rs"));
         let tokens: Vec<&str> = src
             .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .filter(|t| !t.is_empty())

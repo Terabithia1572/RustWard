@@ -143,11 +143,11 @@ fn identity_verdict(
         "hardware_ids",
         format!("vendor-level hardware ID {:?}", inq.vendor_level_id),
     ));
-    if !inq.namespace.vendor_level_format_documented() {
+    if inq.namespace.shared_with_internal_disks() {
         evidence.push(ev(
             EvidenceKind::Warning,
             "hardware_ids",
-            "SCSI-namespace vendor-level ID format is not yet confirmed on hardware; the SCSI namespace is shared with internal disks".into(),
+            "SCSI-namespace ID: shared with internal/virtual disks; UASP enumeration not yet observed on hardware".into(),
         ));
     }
     if catalog.is_generic_vendor(&inq.vendor_field) {
@@ -262,7 +262,16 @@ pub fn evaluate_device(
             ));
             (Verdict::Deny, DecisionReason::ScopeDecisionPending)
         }
-        StorageScope::InScope => identity_verdict(&classification, policy, catalog, &mut evidence),
+        StorageScope::InScope => {
+            if classification.category == DeviceCategory::StorageAttachmentUnknown {
+                evidence.push(ev(
+                    EvidenceKind::Warning,
+                    "parent_instance_id",
+                    "parent chain is broken or unreadable; USB vs. internal attachment cannot be proven, so the device is treated as in scope (fail-closed)".into(),
+                ));
+            }
+            identity_verdict(&classification, policy, catalog, &mut evidence)
+        }
     };
     if matches!(
         classification.category,

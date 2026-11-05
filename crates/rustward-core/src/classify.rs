@@ -65,8 +65,12 @@ pub enum DeviceCategory {
     /// MTP/PTP/WPD device on USB (phones, cameras). Scope decision pending.
     UsbPortableDevice,
     /// A disk not below any USB device (internal SATA/NVMe, virtual
-    /// disks). Out of scope; must never be touched.
+    /// disks), with a fully resolved parent chain. Out of scope; must never
+    /// be touched.
     SystemOrNonUsbStorage,
+    /// A disk whose parent chain is broken or unreadable, so neither USB
+    /// nor internal attachment can be proven. **In scope** (fail-closed).
+    StorageAttachmentUnknown,
     /// A non-storage peripheral or USB infrastructure.
     Peripheral {
         /// Kind.
@@ -94,7 +98,7 @@ impl DeviceCategory {
     #[must_use]
     pub fn scope(&self) -> StorageScope {
         match self {
-            Self::UsbStorageDisk { .. } => StorageScope::InScope,
+            Self::UsbStorageDisk { .. } | Self::StorageAttachmentUnknown => StorageScope::InScope,
             Self::UsbStorageOtherType { .. } | Self::UsbPortableDevice => {
                 StorageScope::ScopeDecisionPending
             }
@@ -146,13 +150,21 @@ fn find_usb_ancestor(index: &SnapshotIndex<'_>, device: &DeviceRecord) -> Option
 }
 
 fn is_disk_like(device_type: &str) -> bool {
-    device_type.eq_ignore_ascii_case("Disk") || device_type.eq_ignore_ascii_case("SFloppy")
+    crate::ids::is_block_storage_type(device_type)
 }
 
 /// Classify one device within its snapshot.
 #[must_use]
 pub fn classify(index: &SnapshotIndex<'_>, device: &DeviceRecord) -> Classification {
     let usb_ancestor = find_usb_ancestor(index, device);
+    let attachment_proven = device.parent_instance_id.is_some() && index.ancestry_complete(device);
+    let non_usb_storage = || {
+        if attachment_proven {
+            DeviceCategory::SystemOrNonUsbStorage
+        } else {
+            DeviceCategory::StorageAttachmentUnknown
+        }
+    };
     let enumerator = device.enumerator_name();
     let inquiry = match enumerator.as_str() {
         "USBSTOR" | "SCSI" => parse_inquiry_identity(&device.hardware_ids),
@@ -207,10 +219,10 @@ pub fn classify(index: &SnapshotIndex<'_>, device: &DeviceRecord) -> Classificat
                     transport: UsbStorageTransport::Unknown,
                 }
             } else {
-                DeviceCategory::SystemOrNonUsbStorage
+                non_usb_storage()
             }
         }
-        "SCSI" => DeviceCategory::SystemOrNonUsbStorage,
+        "SCSI" => non_usb_storage(),
         "USB" => {
             if device.service_is("USBSTOR") || device.service_is("UASPStor") {
                 DeviceCategory::UsbStorageInterface
@@ -327,6 +339,66 @@ mod tests {
         );
         assert_eq!(c.category, DeviceCategory::SystemOrNonUsbStorage);
         assert_eq!(c.category.scope(), StorageScope::NotInScope);
+    }
+
+    #[test]
+    fn storage_with_broken_parent_chain_fails_closed() {
+        let mut orphan = rec(
+            "SCSI\\Disk&Ven_Samsung&Prod_X\\9&1&0&000000",
+            Some("USB\\VID_0BC2&PID_2344\\GONE"),
+        );
+        orphan.class_guid = Some(class_guids::DISK_DRIVE.into());
+        let mut parentless = rec("SCSI\\Disk&Ven_Seagate&Prod_Y\\9&2&0&000000", None);
+        parentless.class_guid = Some(class_guids::DISK_DRIVE.into());
+        let s = snapshot(vec![orphan, parentless]);
+        let idx = s.index();
+        for d in &s.devices {
+            let c = classify(&idx, d);
+            assert_eq!(
+                c.category,
+                DeviceCategory::StorageAttachmentUnknown,
+                "{}",
+                d.instance_id
+            );
+            assert_eq!(c.category.scope(), StorageScope::InScope);
+        }
+    }
+
+    #[test]
+    fn enumerator_beats_misleading_class_metadata() {
+        // A USBSTOR devnode that claims the Keyboard class is still storage.
+        let mut fake_kbd = rec("USBSTOR\\Disk&Ven_ACME\\1&0", None);
+        fake_kbd.class_guid = Some(class_guids::KEYBOARD.into());
+        // A HID-enumerated node that claims DiskDrive under USB fails closed.
+        let usb = rec("USB\\VID_1234&PID_0001\\X", None);
+        let mut fake_disk = rec(
+            "HID\\VID_1234&PID_0001\\1",
+            Some("USB\\VID_1234&PID_0001\\X"),
+        );
+        fake_disk.class_guid = Some(class_guids::DISK_DRIVE.into());
+        // A plain keyboard is never storage.
+        let mut kbd = rec(
+            "HID\\VID_046D&PID_C31C\\2",
+            Some("USB\\VID_1234&PID_0001\\X"),
+        );
+        kbd.class_guid = Some(class_guids::KEYBOARD.into());
+        let s = snapshot(vec![fake_kbd, usb, fake_disk, kbd]);
+        let idx = s.index();
+        let cat = |id: &str| classify(&idx, idx.get(id).unwrap()).category;
+        assert!(matches!(
+            cat("USBSTOR\\Disk&Ven_ACME\\1&0"),
+            DeviceCategory::UsbStorageDisk { .. }
+        ));
+        assert!(matches!(
+            cat("HID\\VID_1234&PID_0001\\1"),
+            DeviceCategory::UsbStorageDisk { .. }
+        ));
+        assert_eq!(
+            cat("HID\\VID_046D&PID_C31C\\2"),
+            DeviceCategory::Peripheral {
+                peripheral: PeripheralKind::Keyboard
+            }
+        );
     }
 
     #[test]

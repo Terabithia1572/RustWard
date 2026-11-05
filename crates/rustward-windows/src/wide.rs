@@ -210,6 +210,47 @@ mod tests {
     }
 
     #[test]
+    fn invalid_and_missing_attributes_degrade_safely() {
+        // Lone surrogate -> replacement character, never a panic.
+        let lone = [0x00u8, 0xD8, 0x41, 0x00, 0x00, 0x00];
+        assert_eq!(
+            decode_property(DEVPROP_TYPE_STRING, &lone)
+                .into_string()
+                .as_deref(),
+            Some("\u{FFFD}A")
+        );
+        // Empty strings are treated as absent.
+        assert_eq!(
+            decode_property(DEVPROP_TYPE_STRING, &[0, 0]).into_string(),
+            None
+        );
+        assert!(
+            decode_property(DEVPROP_TYPE_STRING, &[])
+                .into_string()
+                .is_none()
+        );
+        // Type confusion: a GUID where a string list is expected yields nothing.
+        let guid = decode_property(DEVPROP_TYPE_GUID, &[0u8; 16]);
+        assert!(guid.clone().into_string_list().is_empty());
+        assert_eq!(guid.into_bool(), None);
+        // A list with only the double terminator is empty.
+        assert!(
+            decode_property(DEVPROP_TYPE_STRING_LIST, &[0, 0, 0, 0])
+                .into_string_list()
+                .is_empty()
+        );
+        // A list without terminators still yields its single entry.
+        assert_eq!(
+            decode_property(
+                DEVPROP_TYPE_STRING_LIST,
+                &wide_bytes("USB\\VID_0781&PID_5581")
+            )
+            .into_string_list(),
+            vec!["USB\\VID_0781&PID_5581".to_string()]
+        );
+    }
+
+    #[test]
     fn odd_byte_and_missing_nul_are_tolerated() {
         assert_eq!(utf16_until_nul(&bytes_to_u16(&[0x41, 0x00, 0x42])), "A");
         assert_eq!(

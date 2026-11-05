@@ -23,6 +23,7 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 "Caption        $($os.Caption)"
 "Version        $($os.Version)  DisplayVersion=$($cv.DisplayVersion)  Build=$($cv.CurrentBuild).$($cv.UBR)"
 "Architecture   $($os.OSArchitecture)"
+"EditionID      $($cv.EditionID)  ProductName=$($cv.ProductName)"
 
 "`n== Development tools =="
 Show-Tool 'rustc'  @('-V')
@@ -52,12 +53,19 @@ $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\
 
 "`n== Current device installation policy (baseline, read-only) =="
 $di = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall'
-if (Test-Path $di) { Get-ChildItem $di -Recurse | ForEach-Object { $_.Name; Get-ItemProperty $_.PSPath | Format-List | Out-String } }
-else { "(no DeviceInstall policy key)" }
+if (Test-Path $di) {
+    Get-ItemProperty $di | Format-List | Out-String
+    Get-ChildItem $di -Recurse | ForEach-Object { $_.Name; Get-ItemProperty $_.PSPath | Format-List | Out-String }
+} else { "(no DeviceInstall policy key)" }
 
 "`n== Current removable storage policy (baseline, read-only) =="
-$rs = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices'
-if (Test-Path $rs) { Get-ChildItem $rs -Recurse | ForEach-Object { $_.Name; Get-ItemProperty $_.PSPath | Format-List | Out-String } }
-else { "(no RemovableStorageDevices policy key)" }
+foreach ($rs in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices',
+                  'HKCU:\SOFTWARE\Policies\Microsoft\Windows\RemovableStorageDevices')) {
+    if (Test-Path $rs) {
+        "[$rs]"
+        Get-ItemProperty $rs | Format-List | Out-String
+        Get-ChildItem $rs -Recurse | ForEach-Object { $_.Name; Get-ItemProperty $_.PSPath | Format-List | Out-String }
+    } else { "(no policy key: $rs)" }
+}
 
 "`nDone. Nothing was modified."

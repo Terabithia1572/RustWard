@@ -231,6 +231,30 @@ impl<'a> SnapshotIndex<'a> {
         out
     }
 
+    /// True when every parent reference resolves inside the snapshot up to a
+    /// root (a node without a parent), with no cycle and within
+    /// [`MAX_ANCESTOR_DEPTH`]. A broken chain means the attachment of the
+    /// device (USB or internal) cannot be proven.
+    #[must_use]
+    pub fn ancestry_complete(&self, device: &DeviceRecord) -> bool {
+        let mut seen = HashSet::new();
+        seen.insert(device.instance_id.to_ascii_uppercase());
+        let mut cur = device;
+        for _ in 0..=MAX_ANCESTOR_DEPTH {
+            let Some(parent_id) = cur.parent_instance_id.as_deref() else {
+                return true;
+            };
+            let Some(parent) = self.get(parent_id) else {
+                return false;
+            };
+            if !seen.insert(parent.instance_id.to_ascii_uppercase()) {
+                return false;
+            }
+            cur = parent;
+        }
+        false
+    }
+
     /// Direct children.
     #[must_use]
     pub fn children(&self, device: &DeviceRecord) -> Vec<&'a DeviceRecord> {
@@ -292,6 +316,39 @@ mod tests {
         let idx = s.index();
         let chain = idx.ancestors(idx.get("A").unwrap());
         assert_eq!(chain.len(), 1);
+        assert!(!idx.ancestry_complete(idx.get("A").unwrap()));
+    }
+
+    #[test]
+    fn ancestry_completeness_detects_missing_parents_and_depth() {
+        let s = snap(vec![
+            rec("ROOT", None),
+            rec("MID", Some("ROOT")),
+            rec("LEAF", Some("MID")),
+            rec("ORPHAN", Some("NOT-IN-SNAPSHOT")),
+        ]);
+        let idx = s.index();
+        assert!(idx.ancestry_complete(idx.get("LEAF").unwrap()));
+        assert!(idx.ancestry_complete(idx.get("ROOT").unwrap()));
+        assert!(!idx.ancestry_complete(idx.get("ORPHAN").unwrap()));
+
+        let deep: Vec<_> = (0..=MAX_ANCESTOR_DEPTH + 2)
+            .map(|i| {
+                let parent = (i > 0).then(|| format!("N{}", i - 1));
+                rec(&format!("N{i}"), parent.as_deref())
+            })
+            .collect();
+        let s = snap(deep);
+        let idx = s.index();
+        let last = format!("N{}", MAX_ANCESTOR_DEPTH + 2);
+        assert!(
+            !idx.ancestry_complete(idx.get(&last).unwrap()),
+            "over-deep chains are not trusted"
+        );
+        assert_eq!(
+            idx.ancestors(idx.get(&last).unwrap()).len(),
+            MAX_ANCESTOR_DEPTH
+        );
     }
 
     #[test]
