@@ -6,6 +6,7 @@ members = [
     "crates/rustward-enforcement",
     "crates/rustward-inventory",
     "crates/rustward-storage",
+    "crates/rustward-ipc",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
 sha2 = "0.11.1"
 rustward-core = { path = "crates/rustward-core" }
 rustward-storage = { path = "crates/rustward-storage" }
+rustward-ipc = { path = "crates/rustward-ipc" }
 rustward-windows = { path = "crates/rustward-windows" }
 rustward-enforcement = { path = "crates/rustward-enforcement" }
 

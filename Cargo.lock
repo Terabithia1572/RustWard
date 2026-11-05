@@ -209,7 +209,10 @@ dependencies = [
 name = "rustward-enforcement"
 version = "0.1.0"
 dependencies = [
+ "rustward-core",
  "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -221,6 +224,18 @@ dependencies = [
  "rustward-windows",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rustward-ipc"
+version = "0.1.0"
+dependencies = [
+ "rustward-core",
+ "rustward-enforcement",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

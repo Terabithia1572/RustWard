@@ -1,0 +1,30 @@
+[package]
+name = "rustward-ipc"
+description = "Versioned, validated, authorized local IPC between the RustWard UI backend and the privileged service (mock transport + Windows named pipes)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Type-check the Windows named-pipe transport on non-Windows hosts.
+host-typecheck = []
+
+[dependencies]
+rustward-core.workspace = true
+rustward-enforcement.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+] }
+
+[lints]
+workspace = true

@@ -141,7 +141,7 @@ fn print_report(snapshot: &DeviceSnapshot, warnings: &[String], a: &Args) -> Res
         println!("{BANNER}");
         println!(
             "Protection state: {}\n",
-            SimulationOnlyProvider.protection_state().label_tr()
+            SimulationOnlyProvider.status().label_tr()
         );
         print!("{}", render_markdown(&report));
     }

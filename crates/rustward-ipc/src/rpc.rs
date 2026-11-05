@@ -1,0 +1,205 @@
+//! Client and server loops over any [`Transport`].
+
+use std::time::Duration;
+
+use crate::frame::{self, FrameError};
+use crate::transport::{Transport, TransportError};
+use crate::validate::validate_request;
+use crate::{
+    ClientIdentity, ErrorCode, IpcError, PROTOCOL_VERSION, Request, RequestEnvelope, ResponseBody,
+    ResponseEnvelope, authorize,
+};
+
+/// Default client timeout.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Idle timeout after which the server closes a connection.
+pub const SERVER_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Handles validated, authorized requests.
+pub trait Handler {
+    /// Process one request.
+    fn handle(
+        &self,
+        request: &Request,
+        identity: &ClientIdentity,
+    ) -> Result<ResponseBody, IpcError>;
+}
+
+/// Client-side errors.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ClientError {
+    /// Transport failure.
+    #[error("transport: {0}")]
+    Transport(#[from] TransportError),
+    /// Bad frame from the server.
+    #[error("frame: {0}")]
+    Frame(#[from] FrameError),
+    /// Server returned an error.
+    #[error("server: {0}")]
+    Server(IpcError),
+    /// Response did not match the request.
+    #[error("protocol violation: {0}")]
+    Protocol(String),
+}
+
+impl ClientError {
+    /// Map to an [`IpcError`] for the UI.
+    #[must_use]
+    pub fn into_ipc_error(self) -> IpcError {
+        match self {
+            Self::Server(e) => e,
+            Self::Transport(TransportError::Timeout) => {
+                IpcError::new(ErrorCode::Timeout, "the service did not answer in time")
+            }
+            Self::Transport(TransportError::Disconnected) => IpcError::new(
+                ErrorCode::Unavailable,
+                "the RustWard service is not reachable",
+            ),
+            Self::Transport(TransportError::PeerRejected(m)) => IpcError::new(
+                ErrorCode::Unavailable,
+                format!("service identity could not be verified: {m}"),
+            ),
+            other => IpcError::new(ErrorCode::Internal, other.to_string()),
+        }
+    }
+}
+
+/// IPC client.
+#[derive(Debug)]
+pub struct Client<T: Transport> {
+    transport: T,
+    next_id: u64,
+    timeout: Duration,
+}
+
+impl<T: Transport> Client<T> {
+    /// New client.
+    pub fn new(transport: T, timeout: Duration) -> Self {
+        Self {
+            transport,
+            next_id: 1,
+            timeout,
+        }
+    }
+
+    /// Send a request and wait for its response.
+    pub fn call(&mut self, request: Request) -> Result<ResponseBody, ClientError> {
+        let request_id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let frame = frame::encode(&RequestEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id,
+            request,
+        })?;
+        self.transport.send(&frame)?;
+        let reply = self.transport.recv(self.timeout)?;
+        let env: ResponseEnvelope = frame::decode(&reply)?;
+        if env.version != PROTOCOL_VERSION {
+            return Err(ClientError::Protocol(format!(
+                "server protocol version {}",
+                env.version
+            )));
+        }
+        if env.request_id != request_id {
+            return Err(ClientError::Protocol(format!(
+                "response id {} does not match request id {request_id}",
+                env.request_id
+            )));
+        }
+        env.result.map_err(ClientError::Server)
+    }
+}
+
+/// Process one decoded request: version check, validation, authorization,
+/// then the handler. Never panics on bad input.
+pub fn process(
+    env: &RequestEnvelope,
+    identity: &ClientIdentity,
+    handler: &dyn Handler,
+) -> ResponseEnvelope {
+    let result = if env.version == PROTOCOL_VERSION {
+        validate_request(&env.request)
+            .and_then(|()| authorize(&env.request, identity))
+            .and_then(|()| handler.handle(&env.request, identity))
+    } else {
+        Err(IpcError::new(
+            ErrorCode::VersionMismatch,
+            format!(
+                "protocol version {} is not supported (server {PROTOCOL_VERSION})",
+                env.version
+            ),
+        ))
+    };
+    ResponseEnvelope {
+        version: PROTOCOL_VERSION,
+        request_id: env.request_id,
+        result,
+    }
+}
+
+/// How a server connection ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEnd {
+    /// Client disconnected.
+    Disconnected,
+    /// Idle timeout.
+    IdleTimeout,
+    /// A malformed frame was received; connection closed defensively.
+    ProtocolViolation(String),
+    /// Transport error.
+    TransportError(String),
+}
+
+/// Serve one connection until it ends. The identity is fixed for the whole
+/// connection (established by the transport before this call).
+pub fn serve_connection<T: Transport>(
+    transport: &mut T,
+    identity: &ClientIdentity,
+    handler: &dyn Handler,
+    idle_timeout: Duration,
+) -> SessionEnd {
+    loop {
+        let frame = match transport.recv(idle_timeout) {
+            Ok(f) => f,
+            Err(TransportError::Disconnected) => return SessionEnd::Disconnected,
+            Err(TransportError::Timeout) => return SessionEnd::IdleTimeout,
+            Err(e) => return SessionEnd::TransportError(e.to_string()),
+        };
+        let env: RequestEnvelope = match frame::decode(&frame) {
+            Ok(e) => e,
+            Err(e) => {
+                let reply = ResponseEnvelope {
+                    version: PROTOCOL_VERSION,
+                    request_id: 0,
+                    result: Err(IpcError::new(
+                        ErrorCode::InvalidRequest,
+                        "malformed request",
+                    )),
+                };
+                if let Ok(f) = frame::encode(&reply) {
+                    let _ = transport.send(&f);
+                }
+                return SessionEnd::ProtocolViolation(e.to_string());
+            }
+        };
+        let reply = process(&env, identity, handler);
+        let encoded = frame::encode(&reply).or_else(|e| {
+            frame::encode(&ResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                request_id: env.request_id,
+                result: Err(IpcError::new(
+                    ErrorCode::Internal,
+                    format!("response could not be encoded: {e}"),
+                )),
+            })
+        });
+        match encoded {
+            Ok(f) => {
+                if let Err(e) = transport.send(&f) {
+                    return SessionEnd::TransportError(e.to_string());
+                }
+            }
+            Err(e) => return SessionEnd::TransportError(e.to_string()),
+        }
+    }
+}
