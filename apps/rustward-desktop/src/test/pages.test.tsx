@@ -1,0 +1,190 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Api } from "../api/client";
+import { App, type PageId } from "../App";
+import { BANNER_TR, fakeBackend, type FakeState } from "./fakeBackend";
+
+function setup(page: PageId, init: Partial<FakeState> = {}) {
+  const { backend, state } = fakeBackend(init);
+  const user = userEvent.setup();
+  render(<App api={new Api(backend)} initialPage={page} />);
+  return { state, user };
+}
+
+beforeEach(() => {
+  try {
+    window.localStorage.clear();
+  } catch {
+    /* ignore */
+  }
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("Dashboard", () => {
+  it("shows the mandated not-validated banner verbatim", async () => {
+    setup("dashboard");
+    const banner = await screen.findByTestId("not-validated-banner");
+    expect(banner).toHaveTextContent(BANNER_TR);
+  });
+
+  it("keeps the Turkish banner sentence in English mode", async () => {
+    setup("dashboard", {
+      settings: { theme: "light", language: "en", notifications_enabled: true, audit_retention_days: 365, inventory_refresh_seconds: 30 },
+    });
+    await screen.findByRole("heading", { name: "Dashboard" });
+    expect(screen.getByTestId("not-validated-banner")).toHaveTextContent(BANNER_TR);
+  });
+
+  it("labels synthetic data and simulated decisions, never as enforced", async () => {
+    setup("dashboard");
+    await screen.findByText("PC-TEST", { exact: false });
+    expect(screen.getAllByText("SENTETİK").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("SİMÜLE RET").length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/engellendi|engellenmiştir/i);
+  });
+});
+
+describe("Devices", () => {
+  it("explains a selected device", async () => {
+    const { user } = setup("devices");
+    const rows = await screen.findAllByText("EXAMPLEX SYNTH DRIVE");
+    await user.click(rows[0]!);
+    expect(await screen.findByText("SİMÜLE RET: üretici katalogda yok.")).toBeInTheDocument();
+  });
+
+  it("refreshes the inventory through the backend", async () => {
+    const { user, state } = setup("devices");
+    await user.click(await screen.findByRole("button", { name: "Envanteri yenile" }));
+    expect(await screen.findByText("refresh_inventory done")).toBeInTheDocument();
+    expect(state.calls.some((c) => c.type === "refresh_inventory")).toBe(true);
+  });
+});
+
+describe("Allowed manufacturers", () => {
+  it("toggles allowed with the expected policy version", async () => {
+    const { user, state } = setup("manufacturers");
+    const sw = await screen.findByRole("switch", { name: "İzinli: ExampleX (synthetic)" });
+    await user.click(sw);
+    await waitFor(() => expect(state.manufacturers[0]!.allowed).toBe(false));
+    const call = state.calls.find((c) => c.type === "set_manufacturer_allowed");
+    expect(call).toEqual({ type: "set_manufacturer_allowed", id: "examplex", allowed: false, expected_policy_version: 3 });
+  });
+
+  it("shows a version conflict from the service", async () => {
+    const { user, state } = setup("manufacturers");
+    const sw = await screen.findByRole("switch", { name: "Kural etkin: ExampleX (synthetic)" });
+    state.version = 9; // changed elsewhere
+    await user.click(sw);
+    expect(await screen.findByText("Çakışma — politika bu arada değişmiş olabilir; yenileyip yeniden deneyin")).toBeInTheDocument();
+    expect(screen.getByText("policy changed (expected 3, current 9)")).toBeInTheDocument();
+    expect(state.manufacturers[0]!.enabled).toBe(true);
+  });
+
+  it("validates identifiers client-side before calling the service", async () => {
+    const { user, state } = setup("manufacturers");
+    await user.click(await screen.findByRole("button", { name: "Üretici ekle" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Görünen ad"), "Synthetic Brand");
+    await user.click(within(dialog).getByRole("button", { name: "Kimlik ekle" }));
+    await user.selectOptions(within(dialog).getByLabelText("Tür"), "usb_vid");
+    await user.type(within(dialog).getByLabelText("Değer"), "XYZ");
+    await user.click(within(dialog).getByRole("button", { name: "Kaydet" }));
+    expect(within(dialog).getByText("USB VID 4 onaltılık basamak olmalıdır (ör. 0781).")).toBeInTheDocument();
+    expect(within(dialog).getByText("Her kimlik için kaynak gerekli.")).toBeInTheDocument();
+    expect(state.calls.some((c) => c.type === "add_manufacturer")).toBe(false);
+  });
+
+  it("adds a manufacturer through the backend", async () => {
+    const { user, state } = setup("manufacturers");
+    await user.click(await screen.findByRole("button", { name: "Üretici ekle" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Görünen ad"), "Synthetic Brand");
+    await user.click(within(dialog).getByRole("button", { name: "Kaydet" }));
+    await waitFor(() => expect(state.manufacturers).toHaveLength(2));
+    expect(await screen.findByText("added synthetic-brand")).toBeInTheDocument();
+  });
+
+  it("asks for confirmation before removing", async () => {
+    const { user, state } = setup("manufacturers");
+    await user.click(await screen.findByRole("button", { name: "Kaldır" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(state.calls.some((c) => c.type === "remove_manufacturer")).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Kaldır" }));
+    await waitFor(() => expect(state.manufacturers).toHaveLength(0));
+  });
+});
+
+describe("Blocked devices", () => {
+  it("states that the decision was not enforced", async () => {
+    setup("blocked");
+    expect(await screen.findByText("Uygulanmadı — yalnızca simüle karar")).toBeInTheDocument();
+    expect(screen.getByText("Reddedilen Aygıtlar (simülasyon)")).toBeInTheDocument();
+  });
+});
+
+describe("Audit logs", () => {
+  it("sends text filters to the backend", async () => {
+    const { user, state } = setup("audit");
+    await screen.findByText("SYNTHETIC device would be denied (simulation)");
+    await user.type(screen.getByLabelText("Ara"), "nomatch");
+    await waitFor(() => {
+      const last = [...state.calls].reverse().find((c) => c.type === "list_events");
+      expect(last).toMatchObject({ query: { text: "nomatch", offset: 0 } });
+    });
+    expect(await screen.findByText("Kayıt yok.")).toBeInTheDocument();
+  });
+
+  it("exports events as a local download", async () => {
+    const create = vi.fn(() => "blob:test");
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const { user, state } = setup("audit");
+    await user.click(await screen.findByRole("button", { name: "CSV dışa aktar" }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(create).toHaveBeenCalled();
+    expect(state.calls.find((c) => c.type === "export_events")).toMatchObject({ format: "csv" });
+  });
+});
+
+describe("Diagnostics", () => {
+  it("runs a simulation and reports counts", async () => {
+    const { user } = setup("diagnostics");
+    await user.click(await screen.findByRole("button", { name: "Simülasyonu çalıştır" }));
+    expect(await screen.findByTestId("simulation-result")).toHaveTextContent("2 aygıt değerlendirildi: 1 simüle izin, 1 simüle ret");
+    expect(screen.getByText("Bu sürümde devre dışı (yalnızca kuru çalıştırma)")).toBeInTheDocument();
+  });
+});
+
+describe("Settings", () => {
+  it("saves the theme and applies it", async () => {
+    const { user, state } = setup("settings");
+    await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
+    await user.selectOptions(await screen.findByLabelText("Tema"), "light");
+    await user.click(screen.getByRole("button", { name: "Kaydet" }));
+    await waitFor(() => expect(state.settings.theme).toBe("light"));
+    expect(document.documentElement).not.toHaveClass("dark");
+  });
+
+  it("rejects an out-of-range retention value without calling the service", async () => {
+    const { user, state } = setup("settings");
+    const input = await screen.findByLabelText("Saklama süresi (gün)");
+    await user.clear(input);
+    await user.type(input, "5");
+    expect(screen.getByRole("button", { name: "Kaydet" })).toBeDisabled();
+    expect(state.calls.some((c) => c.type === "update_settings")).toBe(false);
+  });
+
+  it("shows the backend's authorization error", async () => {
+    const { user, state } = setup("settings");
+    await user.click(await screen.findByRole("button", { name: "Yedek oluştur" }));
+    await screen.findByText("create_backup done");
+    state.failNext = { code: "unauthorized", message: "elevation required" };
+    await user.click(screen.getByRole("button", { name: "Yedek oluştur" }));
+    expect(await screen.findByText("Bu işlem için yükseltilmiş yönetici yetkisi gerekir.")).toBeInTheDocument();
+  });
+});

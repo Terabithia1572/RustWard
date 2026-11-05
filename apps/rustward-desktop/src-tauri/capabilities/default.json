@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The main window may only call the validated ipc_call command. No core plugins, file system, shell, HTTP or opener access.",
+  "windows": ["main"],
+  "permissions": ["allow-ipc-call"]
+}

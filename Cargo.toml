@@ -9,7 +9,10 @@ members = [
     "crates/rustward-ipc",
     "crates/rustward-app",
     "crates/rustward-service",
+    "crates/rustward-ui-bridge",
 ]
+# The Tauri shell is its own workspace (needs WebView2/WebKit system libraries).
+exclude = ["apps/rustward-desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -34,6 +37,7 @@ rustward-core = { path = "crates/rustward-core" }
 rustward-storage = { path = "crates/rustward-storage" }
 rustward-ipc = { path = "crates/rustward-ipc" }
 rustward-app = { path = "crates/rustward-app" }
+rustward-ui-bridge = { path = "crates/rustward-ui-bridge" }
 rustward-windows = { path = "crates/rustward-windows" }
 rustward-enforcement = { path = "crates/rustward-enforcement" }
 

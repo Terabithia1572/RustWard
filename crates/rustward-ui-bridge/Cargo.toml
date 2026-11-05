@@ -1,0 +1,21 @@
+[package]
+name = "rustward-ui-bridge"
+description = "Backend selection for the RustWard desktop app: Windows service over named pipes (production) or the in-process development backend (debug builds with the dev-backend feature only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# In-process development backend. Compiled only when debug_assertions are
+# also on, so a release build can never contain it.
+dev-backend = []
+host-typecheck = ["rustward-ipc/host-typecheck"]
+
+[dependencies]
+rustward-app.workspace = true
+rustward-ipc.workspace = true
+rustward-storage.workspace = true
+
+[lints]
+workspace = true

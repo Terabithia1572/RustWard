@@ -1,0 +1,89 @@
+{
+  "protocol_version": 1,
+  "requests": [
+    {
+      "access": "read_only",
+      "type": "get_dashboard"
+    },
+    {
+      "access": "read_only",
+      "type": "list_devices"
+    },
+    {
+      "access": "read_only",
+      "type": "list_manufacturers"
+    },
+    {
+      "access": "read_only",
+      "type": "explain_device"
+    },
+    {
+      "access": "read_only",
+      "type": "list_blocked"
+    },
+    {
+      "access": "read_only",
+      "type": "list_events"
+    },
+    {
+      "access": "read_only",
+      "type": "list_policy_changes"
+    },
+    {
+      "access": "read_only",
+      "type": "get_diagnostics"
+    },
+    {
+      "access": "read_only",
+      "type": "get_settings"
+    },
+    {
+      "access": "read_only",
+      "type": "run_simulation"
+    },
+    {
+      "access": "administrator",
+      "type": "add_manufacturer"
+    },
+    {
+      "access": "administrator",
+      "type": "update_manufacturer"
+    },
+    {
+      "access": "administrator",
+      "type": "remove_manufacturer"
+    },
+    {
+      "access": "administrator",
+      "type": "set_manufacturer_allowed"
+    },
+    {
+      "access": "administrator",
+      "type": "set_rule_enabled"
+    },
+    {
+      "access": "administrator",
+      "type": "update_settings"
+    },
+    {
+      "access": "administrator",
+      "type": "export_events"
+    },
+    {
+      "access": "administrator",
+      "type": "apply_retention"
+    },
+    {
+      "access": "administrator",
+      "type": "create_backup"
+    },
+    {
+      "access": "administrator",
+      "type": "refresh_inventory"
+    },
+    {
+      "access": "administrator",
+      "type": "load_synthetic_inventory"
+    }
+  ]
+}
