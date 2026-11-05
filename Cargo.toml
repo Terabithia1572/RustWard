@@ -7,6 +7,8 @@ members = [
     "crates/rustward-inventory",
     "crates/rustward-storage",
     "crates/rustward-ipc",
+    "crates/rustward-app",
+    "crates/rustward-service",
 ]
 
 [workspace.package]
@@ -31,6 +33,7 @@ sha2 = "0.11.1"
 rustward-core = { path = "crates/rustward-core" }
 rustward-storage = { path = "crates/rustward-storage" }
 rustward-ipc = { path = "crates/rustward-ipc" }
+rustward-app = { path = "crates/rustward-app" }
 rustward-windows = { path = "crates/rustward-windows" }
 rustward-enforcement = { path = "crates/rustward-enforcement" }
 

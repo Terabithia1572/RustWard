@@ -1,0 +1,20 @@
+[package]
+name = "rustward-app"
+description = "RustWard application service: implements every IPC request over storage, policy engine and the dry-run enforcement provider. Used by the Windows service and by the desktop development backend."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustward-core.workspace = true
+rustward-storage.workspace = true
+rustward-ipc.workspace = true
+rustward-enforcement.workspace = true
+rustward-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
