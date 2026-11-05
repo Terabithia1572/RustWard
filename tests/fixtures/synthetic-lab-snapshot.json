@@ -1,0 +1,729 @@
+{
+  "schema_version": 1,
+  "source": {
+    "kind": "synthetic",
+    "description": "SYNTHETIC lab model - not captured from real hardware. Identifier strings follow Microsoft's documented USBSTOR format; SCSI/UASP and all product values are illustrative. Contains no TUBITAK SIR II data (unknown until physical inspection)."
+  },
+  "devices": [
+    {
+      "instance_id": "PCI\\VEN_8086&DEV_A36D&SUBSYS_00000000&REV_10\\3&11583659&0&A0",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBXHCI",
+      "description": "USB xHCI Compliant Host Controller",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBHUB3",
+      "description": "USB Root Hub (USB 3.0)",
+      "parent_instance_id": "PCI\\VEN_8086&DEV_A36D&SUBSYS_00000000&REV_10\\3&11583659&0&A0",
+      "hardware_ids": [
+        "USB\\ROOT_HUB30&VID8086&PIDA36D&REV0010",
+        "USB\\ROOT_HUB30"
+      ],
+      "present": true
+    },
+    {
+      "instance_id": "PCI\\VEN_8086&DEV_A352&SUBSYS_00000000&REV_10\\3&11583659&0&B8",
+      "class_guid": "{4d36e96a-e325-11ce-bfc1-08002be10318}",
+      "class_name": "hdc",
+      "service": "storahci",
+      "description": "Standard SATA AHCI Controller",
+      "present": true
+    },
+    {
+      "instance_id": "SCSI\\Disk&Ven_Samsung&Prod_SSD_870_EVO_500GB\\4&2B5C7D1&0&000000",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "PCI\\VEN_8086&DEV_A352&SUBSYS_00000000&REV_10\\3&11583659&0&B8",
+      "hardware_ids": [
+        "SCSI\\DiskSamsung_SSD_870_EVO_500GSVT0",
+        "SCSI\\DiskSamsung_SSD_870_EVO_500G",
+        "SCSI\\DiskSamsung_",
+        "SCSI\\Samsung_SSD_870_EVO_500GS",
+        "Samsung_SSD_870_EVO_500GS",
+        "SCSI\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "SCSI\\Disk",
+        "SCSI\\RAW"
+      ],
+      "friendly_name": "Samsung SSD 870 EVO 500GB",
+      "inf_manufacturer": "(Standard disk drives)",
+      "present": true
+    },
+    {
+      "instance_id": "PCI\\VEN_15B7&DEV_5006&SUBSYS_500615B7&REV_00\\4&2F1E0A&0&00E8",
+      "class_guid": "{4d36e97b-e325-11ce-bfc1-08002be10318}",
+      "class_name": "SCSIAdapter",
+      "service": "stornvme",
+      "description": "Standard NVM Express Controller",
+      "present": true
+    },
+    {
+      "instance_id": "SCSI\\Disk&Ven_NVMe&Prod_WDC_PC_SN730_SDB\\5&3A1B2C&0&000000",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "PCI\\VEN_15B7&DEV_5006&SUBSYS_500615B7&REV_00\\4&2F1E0A&0&00E8",
+      "hardware_ids": [
+        "SCSI\\DiskNVMe____WDC_PC_SN730_SDB1114",
+        "SCSI\\DiskNVMe____WDC_PC_SN730_SDB",
+        "SCSI\\DiskNVMe____",
+        "SCSI\\NVMe____WDC_PC_SN730_SDB1",
+        "NVMe____WDC_PC_SN730_SDB1",
+        "SCSI\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "SCSI\\Disk",
+        "SCSI\\RAW"
+      ],
+      "friendly_name": "WDC PC SN730 SDBQNTY-512G-1001",
+      "inf_manufacturer": "(Standard disk drives)",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_0781&PID_5581\\4C530001230615110223",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0781&PID_5581&REV_0100",
+        "USB\\VID_0781&PID_5581"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": " SanDisk 3.2Gen1",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\4C530001230615110223&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0781&PID_5581\\4C530001230615110223",
+      "hardware_ids": [
+        "USBSTOR\\DiskSanDisk_Ultra___________1.00",
+        "USBSTOR\\DiskSanDisk_Ultra___________",
+        "USBSTOR\\DiskSanDisk_",
+        "USBSTOR\\SanDisk_Ultra___________1",
+        "SanDisk_Ultra___________1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk Ultra USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0781&PID_5583\\4C530001110509107295",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0781&PID_5583&REV_0100",
+        "USB\\VID_0781&PID_5583"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": " SanDisk 3.2Gen1",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra_Fit&Rev_1.00\\4C530001110509107295&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0781&PID_5583\\4C530001110509107295",
+      "hardware_ids": [
+        "USBSTOR\\DiskSanDisk_Ultra_Fit_______1.00",
+        "USBSTOR\\DiskSanDisk_Ultra_Fit_______",
+        "USBSTOR\\DiskSanDisk_",
+        "USBSTOR\\SanDisk_Ultra_Fit_______1",
+        "SanDisk_Ultra_Fit_______1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk Ultra Fit USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0951&PID_1666\\E0D55EA573DCF450E97C0B8A",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0951&PID_1666&REV_0100",
+        "USB\\VID_0951&PID_1666"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "DataTraveler 3.0",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Kingston&Prod_DataTraveler_3.0&Rev_PMAP\\E0D55EA573DCF450E97C0B8A&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0951&PID_1666\\E0D55EA573DCF450E97C0B8A",
+      "hardware_ids": [
+        "USBSTOR\\DiskKingstonDataTraveler_3.0PMAP",
+        "USBSTOR\\DiskKingstonDataTraveler_3.0",
+        "USBSTOR\\DiskKingston",
+        "USBSTOR\\KingstonDataTraveler_3.0P",
+        "KingstonDataTraveler_3.0P",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Kingston DataTraveler 3.0 USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0BC2&PID_2344\\NAAB1234",
+      "class_guid": "{4d36e97b-e325-11ce-bfc1-08002be10318}",
+      "class_name": "SCSIAdapter",
+      "service": "UASPStor",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0BC2&PID_2344&REV_0100",
+        "USB\\VID_0BC2&PID_2344"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_62",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Attached SCSI (UAS) Mass Storage Device",
+      "bus_reported_description": "Expansion HDD",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "SCSI\\Disk&Ven_Seagate&Prod_Expansion_HDD\\7&d&0&000000",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0BC2&PID_2344\\NAAB1234",
+      "hardware_ids": [
+        "SCSI\\DiskSeagate_Expansion_HDD___0605",
+        "SCSI\\DiskSeagate_Expansion_HDD___",
+        "SCSI\\DiskSeagate_",
+        "SCSI\\Seagate_Expansion_HDD___0",
+        "Seagate_Expansion_HDD___0",
+        "SCSI\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "SCSI\\Disk",
+        "SCSI\\RAW"
+      ],
+      "friendly_name": "Seagate Expansion HDD SCSI Disk Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_152D&PID_0583\\0123456789AB",
+      "class_guid": "{4d36e97b-e325-11ce-bfc1-08002be10318}",
+      "class_name": "SCSIAdapter",
+      "service": "UASPStor",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_152D&PID_0583&REV_0100",
+        "USB\\VID_152D&PID_0583"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_62",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Attached SCSI (UAS) Mass Storage Device",
+      "bus_reported_description": "USB Storage",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "SCSI\\Disk&Ven_JMicron&Prod_Generic\\7&e&0&000000",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_152D&PID_0583\\0123456789AB",
+      "hardware_ids": [
+        "SCSI\\DiskJMicron_Generic_________0205",
+        "SCSI\\DiskJMicron_Generic_________",
+        "SCSI\\DiskJMicron_",
+        "SCSI\\JMicron_Generic_________0",
+        "JMicron_Generic_________0",
+        "SCSI\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "SCSI\\Disk",
+        "SCSI\\RAW"
+      ],
+      "friendly_name": "JMicron Generic SCSI Disk Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_058F&PID_6387\\3A6F7C21",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_058F&PID_6387&REV_0100",
+        "USB\\VID_058F&PID_6387"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "Mass Storage",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Generic&Prod_Flash_Disk&Rev_8.07\\3A6F7C21&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_058F&PID_6387\\3A6F7C21",
+      "hardware_ids": [
+        "USBSTOR\\DiskGeneric_Flash_Disk______8.07",
+        "USBSTOR\\DiskGeneric_Flash_Disk______",
+        "USBSTOR\\DiskGeneric_",
+        "USBSTOR\\Generic_Flash_Disk______8",
+        "Generic_Flash_Disk______8",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Generic Flash Disk USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_1234&PID_5678\\SPOOF0001",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_1234&PID_5678&REV_0100",
+        "USB\\VID_1234&PID_5678"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "Cruzer Blade",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_SanDisk&Prod_Cruzer_Blade&Rev_1.00\\SPOOF0001&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_1234&PID_5678\\SPOOF0001",
+      "hardware_ids": [
+        "USBSTOR\\DiskSanDisk_Cruzer_Blade____1.00",
+        "USBSTOR\\DiskSanDisk_Cruzer_Blade____",
+        "USBSTOR\\DiskSanDisk_",
+        "USBSTOR\\SanDisk_Cruzer_Blade____1",
+        "SanDisk_Cruzer_Blade____1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "SanDisk Cruzer Blade USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0951&PID_1643\\001CC0EC3450F9A0B5A8001C",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0951&PID_1643&REV_0100",
+        "USB\\VID_0951&PID_1643"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "DT 101 G2",
+      "present": false,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_Kingston&Prod_DT_101_G2&Rev_1.00\\001CC0EC3450F9A0B5A8001C&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0951&PID_1643\\001CC0EC3450F9A0B5A8001C",
+      "hardware_ids": [
+        "USBSTOR\\DiskKingstonDT_101_G2_______1.00",
+        "USBSTOR\\DiskKingstonDT_101_G2_______",
+        "USBSTOR\\DiskKingston",
+        "USBSTOR\\KingstonDT_101_G2_______1",
+        "KingstonDT_101_G2_______1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "Kingston DT 101 G2 USB Device",
+      "present": false,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_090C&PID_1000\\AA00000000000489",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_090C&PID_1000&REV_0100",
+        "USB\\VID_090C&PID_1000"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "USB DISK",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_SMI&Prod_USB_DISK&Rev_1100\\AA00000000000489&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_090C&PID_1000\\AA00000000000489",
+      "hardware_ids": [],
+      "compatible_ids": [],
+      "friendly_name": "USB DISK USB Device",
+      "present": true,
+      "inf_manufacturer": "(Standard disk drives)"
+    },
+    {
+      "instance_id": "USB\\VID_0E8D&PID_1887\\5&2F3E4D&0&2",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_0E8D&PID_1887&REV_0100",
+        "USB\\VID_0E8D&PID_1887"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08&SubClass_06",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "bus_reported_description": "External DVD",
+      "present": true,
+      "inf_manufacturer": "Compatible USB storage device"
+    },
+    {
+      "instance_id": "USBSTOR\\CdRom&Ven_HL-DT-ST&Prod_DVDRAM_GP57EB40&Rev_PR10\\5&2F3E4D&0&2&0",
+      "class_guid": "{4d36e965-e325-11ce-bfc1-08002be10318}",
+      "class_name": "CDROM",
+      "service": "cdrom",
+      "parent_instance_id": "USB\\VID_0E8D&PID_1887\\5&2F3E4D&0&2",
+      "hardware_ids": [
+        "USBSTOR\\CdRomHL-DT-STDVDRAM_GP57EB40_PR10",
+        "USBSTOR\\CdRomHL-DT-STDVDRAM_GP57EB40_",
+        "USBSTOR\\CdRomHL-DT-ST",
+        "USBSTOR\\HL-DT-STDVDRAM_GP57EB40_P",
+        "HL-DT-STDVDRAM_GP57EB40_P",
+        "USBSTOR\\GenCdRom",
+        "GenCdRom"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\CdRom",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "HL-DT-ST DVDRAM GP57EB40 USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_1A2B&PID_0001\\COMBO0001",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "usbccgp",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_1A2B&PID_0001&REV_0100",
+        "USB\\VID_1A2B&PID_0001"
+      ],
+      "compatible_ids": [
+        "USB\\DevClass_00&SubClass_00&Prot_00",
+        "USB\\COMPOSITE"
+      ],
+      "description": "USB Composite Device",
+      "bus_reported_description": "Combo Keyboard Storage",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_1A2B&PID_0001&MI_00\\7&1F2E3D&0&0000",
+      "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c91efb8b}",
+      "class_name": "HIDClass",
+      "service": "HidUsb",
+      "parent_instance_id": "USB\\VID_1A2B&PID_0001\\COMBO0001",
+      "hardware_ids": [
+        "USB\\VID_1A2B&PID_0001&REV_0100&MI_00",
+        "USB\\VID_1A2B&PID_0001&MI_00"
+      ],
+      "compatible_ids": [
+        "USB\\Class_03&SubClass_01&Prot_01",
+        "USB\\Class_03"
+      ],
+      "description": "USB Input Device",
+      "present": true
+    },
+    {
+      "instance_id": "HID\\VID_1A2B&PID_0001&MI_00\\8&2A3B4C&0&0000",
+      "class_guid": "{4d36e96b-e325-11ce-bfc1-08002be10318}",
+      "class_name": "Keyboard",
+      "service": "kbdhid",
+      "parent_instance_id": "USB\\VID_1A2B&PID_0001&MI_00\\7&1F2E3D&0&0000",
+      "hardware_ids": [
+        "HID\\VID_1A2B&PID_0001&MI_00"
+      ],
+      "compatible_ids": [
+        "HID_DEVICE_SYSTEM_KEYBOARD",
+        "HID_DEVICE"
+      ],
+      "description": "HID Keyboard Device",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_1A2B&PID_0001&MI_01\\7&1F2E3D&0&0001",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "parent_instance_id": "USB\\VID_1A2B&PID_0001\\COMBO0001",
+      "hardware_ids": [
+        "USB\\VID_1A2B&PID_0001&REV_0100&MI_01",
+        "USB\\VID_1A2B&PID_0001&MI_01"
+      ],
+      "compatible_ids": [
+        "USB\\Class_08&SubClass_06&Prot_50",
+        "USB\\Class_08"
+      ],
+      "description": "USB Mass Storage Device",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\Disk&Ven_ACMEDATA&Prod_Combo_Storage&Rev_1.00\\8&3C4D5E&0&0001&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_1A2B&PID_0001&MI_01\\7&1F2E3D&0&0001",
+      "hardware_ids": [
+        "USBSTOR\\DiskACMEDATACombo_Storage___1.00",
+        "USBSTOR\\DiskACMEDATACombo_Storage___",
+        "USBSTOR\\DiskACMEDATA",
+        "USBSTOR\\ACMEDATACombo_Storage___1",
+        "ACMEDATACombo_Storage___1",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW"
+      ],
+      "friendly_name": "ACMEDATA Combo Storage USB Device",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_046D&PID_C31C\\6&3B1E2A0&0&3",
+      "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c91efb8b}",
+      "class_name": "HIDClass",
+      "service": "HidUsb",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_046D&PID_C31C&REV_6400",
+        "USB\\VID_046D&PID_C31C"
+      ],
+      "compatible_ids": [
+        "USB\\Class_03&SubClass_01&Prot_01",
+        "USB\\Class_03"
+      ],
+      "description": "USB Input Device",
+      "bus_reported_description": "USB Keyboard",
+      "present": true
+    },
+    {
+      "instance_id": "HID\\VID_046D&PID_C31C&MI_00\\7&5A6B7C&0&0000",
+      "class_guid": "{4d36e96b-e325-11ce-bfc1-08002be10318}",
+      "class_name": "Keyboard",
+      "service": "kbdhid",
+      "parent_instance_id": "USB\\VID_046D&PID_C31C\\6&3B1E2A0&0&3",
+      "hardware_ids": [
+        "HID\\VID_046D&PID_C31C&MI_00"
+      ],
+      "compatible_ids": [
+        "HID_DEVICE_SYSTEM_KEYBOARD"
+      ],
+      "description": "HID Keyboard Device",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_046D&PID_C077\\5&1C2D3E&0&4",
+      "class_guid": "{745a17a0-74d3-11d0-b6fe-00a0c91efb8b}",
+      "class_name": "HIDClass",
+      "service": "HidUsb",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_046D&PID_C077&REV_7200",
+        "USB\\VID_046D&PID_C077"
+      ],
+      "compatible_ids": [
+        "USB\\Class_03&SubClass_01&Prot_02",
+        "USB\\Class_03"
+      ],
+      "description": "USB Input Device",
+      "bus_reported_description": "USB Optical Mouse",
+      "present": true
+    },
+    {
+      "instance_id": "HID\\VID_046D&PID_C077\\6&2D3E4F&0&0000",
+      "class_guid": "{4d36e96f-e325-11ce-bfc1-08002be10318}",
+      "class_name": "Mouse",
+      "service": "mouhid",
+      "parent_instance_id": "USB\\VID_046D&PID_C077\\5&1C2D3E&0&4",
+      "hardware_ids": [
+        "HID\\VID_046D&PID_C077"
+      ],
+      "compatible_ids": [
+        "HID_DEVICE_SYSTEM_MOUSE"
+      ],
+      "description": "HID-compliant mouse",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_03F0&PID_002A\\CN12A3B4C5",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "usbprint",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_03F0&PID_002A&REV_0100",
+        "USB\\VID_03F0&PID_002A"
+      ],
+      "compatible_ids": [
+        "USB\\Class_07&SubClass_01&Prot_02",
+        "USB\\Class_07"
+      ],
+      "description": "USB Printing Support",
+      "present": true
+    },
+    {
+      "instance_id": "USBPRINT\\HPLASERJET_P1102\\7&1A2B3C&0&USB001",
+      "class_guid": "{4d36e979-e325-11ce-bfc1-08002be10318}",
+      "class_name": "Printer",
+      "parent_instance_id": "USB\\VID_03F0&PID_002A\\CN12A3B4C5",
+      "hardware_ids": [
+        "USBPRINT\\HPLaserJet_P1102"
+      ],
+      "description": "HP LaserJet Professional P1102",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_04E8&PID_6860\\R58M12345AB",
+      "class_guid": "{eec5ad98-8080-425f-922a-dabf3de3f69a}",
+      "class_name": "WPD",
+      "service": "WUDFWpdMtp",
+      "parent_instance_id": "USB\\ROOT_HUB30\\4&1A2B3C4D&0&0",
+      "hardware_ids": [
+        "USB\\VID_04E8&PID_6860&REV_0400",
+        "USB\\VID_04E8&PID_6860"
+      ],
+      "compatible_ids": [
+        "USB\\MS_COMP_MTP",
+        "USB\\Class_06&SubClass_01&Prot_01"
+      ],
+      "description": "Galaxy phone",
+      "bus_reported_description": "SAMSUNG_Android",
+      "present": true
+    },
+    {
+      "instance_id": "ROOT\\VOLMGR\\0000",
+      "class_guid": "{4d36e97d-e325-11ce-bfc1-08002be10318}",
+      "class_name": "System",
+      "service": "volmgr",
+      "description": "Volume Manager",
+      "present": true
+    },
+    {
+      "instance_id": "STORAGE\\VOLUME\\{8A1B2C3D-0000-0000-0000-100000000000}#0000000000100000",
+      "class_guid": "{71a27cdd-812a-11d0-bec7-08002be10318}",
+      "class_name": "Volume",
+      "service": "volume",
+      "parent_instance_id": "ROOT\\VOLMGR\\0000",
+      "description": "Volume",
+      "present": true
+    }
+  ]
+}

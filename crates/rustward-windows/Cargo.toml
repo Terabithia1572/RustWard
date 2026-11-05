@@ -1,0 +1,21 @@
+[package]
+name = "rustward-windows"
+description = "Read-only Windows device inventory adapter for RustWard (SetupAPI / device properties)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Compile (type-check) the SetupAPI backend on non-Windows hosts, e.g. CI or
+# a Linux workspace. The backend is never *called* off Windows.
+host-typecheck = []
+
+[dependencies]
+rustward-core.workspace = true
+thiserror.workspace = true
+# windows-sys is plain extern declarations and builds on every host.
+windows-sys.workspace = true
+
+[lints]
+workspace = true

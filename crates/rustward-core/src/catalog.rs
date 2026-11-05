@@ -1,0 +1,476 @@
+//! Local, versioned manufacturer catalog.
+//!
+//! The catalog maps an administrator-facing *brand* (e.g. "SanDisk") to the
+//! technical identifiers a device of that brand may expose. It is a local
+//! JSON file, updated only by an authorized administrator; it is never
+//! downloaded.
+//!
+//! Only [`IdentifierKind::InquiryVendor`] identifiers are *enforceable*,
+//! because the INQUIRY vendor is the only brand-level identifier that
+//! Windows exposes as a hardware ID (see [`crate::ids`]). USB VIDs are kept
+//! as *corroborating* evidence only.
+
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::ids::{INQUIRY_VENDOR_LEN, encode_inquiry_field, parse_vid};
+
+/// Current catalog schema version.
+pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+
+/// Kind of brand identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentifierKind {
+    /// SCSI INQUIRY vendor identification (≤ 8 ASCII chars). Enforceable
+    /// through the vendor-level USBSTOR/SCSI hardware ID.
+    InquiryVendor,
+    /// USB-IF vendor ID (4 hex digits). Corroborating evidence only.
+    UsbVid,
+}
+
+impl IdentifierKind {
+    /// Whether a Windows-supported mechanism can match this identifier at
+    /// brand level (without enumerating every product).
+    #[must_use]
+    pub const fn enforceable(self) -> bool {
+        matches!(self, Self::InquiryVendor)
+    }
+}
+
+/// How well an identifier has been confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verification {
+    /// Believed correct but never observed by us.
+    Unverified,
+    /// Taken from a public registry (e.g. the public USB ID list).
+    PublicRegistry,
+    /// Stated in manufacturer documentation.
+    VendorDocumented,
+    /// Observed on physical hardware in the RustWard lab, with evidence.
+    LabVerified,
+}
+
+/// One identifier attached to a brand.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrandIdentifier {
+    /// Identifier kind.
+    pub kind: IdentifierKind,
+    /// Raw value: INQUIRY vendor text (e.g. `SanDisk`) or VID hex (`0781`).
+    pub value: String,
+    /// Confirmation level.
+    pub verification: Verification,
+    /// Where the value came from (document, lab evidence ID, …).
+    pub source: String,
+}
+
+/// A brand in the catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrandEntry {
+    /// Stable slug, e.g. `sandisk`.
+    pub id: String,
+    /// Display name (may contain non-ASCII, e.g. "TÜBİTAK BİLGEM").
+    pub display_name: String,
+    /// Alternative names. Used only for search and *hints*, never for
+    /// authorization.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Technical identifiers.
+    #[serde(default)]
+    pub identifiers: Vec<BrandIdentifier>,
+    /// Free-form administrator notes.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+impl BrandEntry {
+    /// Enforceable identifiers of this brand.
+    pub fn enforceable_identifiers(&self) -> impl Iterator<Item = &BrandIdentifier> {
+        self.identifiers.iter().filter(|i| i.kind.enforceable())
+    }
+}
+
+/// The catalog file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManufacturerCatalog {
+    /// Schema version, currently [`CATALOG_SCHEMA_VERSION`].
+    pub schema_version: u32,
+    /// Catalog content version; policies are bound to it.
+    pub catalog_version: String,
+    /// Brands.
+    pub brands: Vec<BrandEntry>,
+    /// INQUIRY vendor strings that are known to be generic (controller,
+    /// bridge-chip or placeholder values). They can never authorize access.
+    #[serde(default)]
+    pub reserved_generic_vendors: Vec<String>,
+}
+
+/// Severity of a validation issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Blocks activation.
+    Error,
+    /// Allowed but must be shown to the administrator.
+    Warning,
+}
+
+/// A catalog validation finding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogIssue {
+    /// Severity.
+    pub severity: Severity,
+    /// Stable machine-readable code.
+    pub code: &'static str,
+    /// Human-readable detail.
+    pub detail: String,
+}
+
+/// Catalog rejected.
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    /// JSON error.
+    #[error("catalog JSON is invalid: {0}")]
+    Json(#[from] serde_json::Error),
+    /// Validation errors.
+    #[error("catalog failed validation with {} error(s)", .0.iter().filter(|i| i.severity == Severity::Error).count())]
+    Invalid(Vec<CatalogIssue>),
+}
+
+/// A catalog that passed validation. Only obtainable through
+/// [`ValidatedCatalog::validate`].
+#[derive(Debug, Clone)]
+pub struct ValidatedCatalog {
+    catalog: ManufacturerCatalog,
+    warnings: Vec<CatalogIssue>,
+    /// Upper-cased encoded INQUIRY vendor field → brand id.
+    inquiry_index: HashMap<String, String>,
+    /// VID → brand ids (may be shared).
+    vid_index: HashMap<u16, Vec<String>>,
+    reserved: HashSet<String>,
+}
+
+fn normalize_generic(v: &str) -> String {
+    v.trim()
+        .trim_end_matches('_')
+        .replace('_', " ")
+        .trim()
+        .to_ascii_uppercase()
+}
+
+fn valid_slug(s: &str) -> bool {
+    (1..=32).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+impl ValidatedCatalog {
+    /// Parse and validate a catalog from JSON.
+    pub fn from_json(json: &str) -> Result<Self, CatalogError> {
+        let catalog: ManufacturerCatalog = serde_json::from_str(json)?;
+        Self::validate(catalog)
+    }
+
+    /// Validate a catalog.
+    pub fn validate(catalog: ManufacturerCatalog) -> Result<Self, CatalogError> {
+        let mut issues = Vec::new();
+        let mut err = |code: &'static str, detail: String| {
+            issues.push(CatalogIssue {
+                severity: Severity::Error,
+                code,
+                detail,
+            });
+        };
+
+        if catalog.schema_version != CATALOG_SCHEMA_VERSION {
+            err(
+                "schema_version",
+                format!("unsupported catalog schema {}", catalog.schema_version),
+            );
+        }
+        if catalog.catalog_version.trim().is_empty() {
+            err(
+                "catalog_version",
+                "catalog_version must not be empty".into(),
+            );
+        }
+
+        let reserved: HashSet<String> = catalog
+            .reserved_generic_vendors
+            .iter()
+            .map(|v| normalize_generic(v))
+            .collect();
+
+        let mut ids = HashSet::new();
+        let mut inquiry_index: HashMap<String, String> = HashMap::new();
+        let mut vid_index: HashMap<u16, Vec<String>> = HashMap::new();
+        let mut warnings = Vec::new();
+
+        for brand in &catalog.brands {
+            if !valid_slug(&brand.id) {
+                err(
+                    "brand_id",
+                    format!("brand id {:?} must match [a-z0-9-]{{1,32}}", brand.id),
+                );
+            }
+            if !ids.insert(brand.id.clone()) {
+                err(
+                    "brand_id_duplicate",
+                    format!("duplicate brand id {:?}", brand.id),
+                );
+            }
+            if brand.display_name.trim().is_empty() {
+                err(
+                    "display_name",
+                    format!("brand {:?} has no display name", brand.id),
+                );
+            }
+            for ident in &brand.identifiers {
+                if ident.source.trim().is_empty() {
+                    err(
+                        "identifier_source",
+                        format!(
+                            "brand {:?}: identifier {:?} has no source",
+                            brand.id, ident.value
+                        ),
+                    );
+                }
+                match ident.kind {
+                    IdentifierKind::InquiryVendor => {
+                        match encode_inquiry_field(&ident.value, INQUIRY_VENDOR_LEN) {
+                            Err(e) => err(
+                                "inquiry_vendor_invalid",
+                                format!("brand {:?}: {e}", brand.id),
+                            ),
+                            Ok(encoded) => {
+                                if reserved.contains(&normalize_generic(&ident.value)) {
+                                    err(
+                                        "inquiry_vendor_generic",
+                                        format!(
+                                            "brand {:?}: INQUIRY vendor {:?} is a reserved generic value and cannot identify a brand",
+                                            brand.id, ident.value
+                                        ),
+                                    );
+                                }
+                                let key = encoded.to_ascii_uppercase();
+                                if let Some(other) = inquiry_index.get(&key) {
+                                    if other != &brand.id {
+                                        err(
+                                            "inquiry_vendor_ambiguous",
+                                            format!(
+                                                "INQUIRY vendor {:?} is claimed by both {:?} and {:?}",
+                                                ident.value, other, brand.id
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    inquiry_index.insert(key, brand.id.clone());
+                                }
+                            }
+                        }
+                    }
+                    IdentifierKind::UsbVid => match parse_vid(&ident.value) {
+                        None => err(
+                            "usb_vid_invalid",
+                            format!(
+                                "brand {:?}: {:?} is not a 4-digit hex VID",
+                                brand.id, ident.value
+                            ),
+                        ),
+                        Some(vid) => {
+                            let entry = vid_index.entry(vid).or_default();
+                            if !entry.contains(&brand.id) {
+                                entry.push(brand.id.clone());
+                            }
+                        }
+                    },
+                }
+            }
+            if brand.enforceable_identifiers().next().is_none() {
+                warnings.push(CatalogIssue {
+                    severity: Severity::Warning,
+                    code: "brand_not_enforceable",
+                    detail: format!(
+                        "brand {:?} has no enforceable identifier; its devices cannot be recognized and will be denied",
+                        brand.id
+                    ),
+                });
+            }
+        }
+        for (vid, brands) in &vid_index {
+            if brands.len() > 1 {
+                warnings.push(CatalogIssue {
+                    severity: Severity::Warning,
+                    code: "usb_vid_shared",
+                    detail: format!("USB VID {vid:04X} is listed for several brands: {brands:?}"),
+                });
+            }
+        }
+
+        if issues.is_empty() {
+            Ok(Self {
+                catalog,
+                warnings,
+                inquiry_index,
+                vid_index,
+                reserved,
+            })
+        } else {
+            issues.extend(warnings);
+            Err(CatalogError::Invalid(issues))
+        }
+    }
+
+    /// The validated catalog content.
+    #[must_use]
+    pub fn catalog(&self) -> &ManufacturerCatalog {
+        &self.catalog
+    }
+
+    /// Non-blocking findings.
+    #[must_use]
+    pub fn warnings(&self) -> &[CatalogIssue] {
+        &self.warnings
+    }
+
+    /// Look up a brand by id.
+    #[must_use]
+    pub fn brand(&self, id: &str) -> Option<&BrandEntry> {
+        self.catalog.brands.iter().find(|b| b.id == id)
+    }
+
+    /// Brand owning an encoded INQUIRY vendor field (case-insensitive).
+    #[must_use]
+    pub fn brand_for_inquiry_field(&self, vendor_field: &str) -> Option<&str> {
+        self.inquiry_index
+            .get(&vendor_field.to_ascii_uppercase())
+            .map(String::as_str)
+    }
+
+    /// Brands listing a USB VID.
+    #[must_use]
+    pub fn brands_for_vid(&self, vid: u16) -> &[String] {
+        self.vid_index.get(&vid).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether an INQUIRY vendor (raw or `_`-encoded) is a reserved generic value.
+    #[must_use]
+    pub fn is_generic_vendor(&self, vendor: &str) -> bool {
+        let n = normalize_generic(vendor);
+        n.is_empty() || self.reserved.contains(&n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ident(kind: IdentifierKind, value: &str) -> BrandIdentifier {
+        BrandIdentifier {
+            kind,
+            value: value.into(),
+            verification: Verification::Unverified,
+            source: "unit test".into(),
+        }
+    }
+
+    fn brand(id: &str, idents: Vec<BrandIdentifier>) -> BrandEntry {
+        BrandEntry {
+            id: id.into(),
+            display_name: id.to_uppercase(),
+            aliases: vec![],
+            identifiers: idents,
+            notes: None,
+        }
+    }
+
+    fn cat(brands: Vec<BrandEntry>) -> ManufacturerCatalog {
+        ManufacturerCatalog {
+            schema_version: 1,
+            catalog_version: "test-1".into(),
+            brands,
+            reserved_generic_vendors: vec!["Generic".into(), "USB".into()],
+        }
+    }
+
+    fn codes(e: CatalogError) -> Vec<&'static str> {
+        match e {
+            CatalogError::Invalid(v) => v
+                .into_iter()
+                .filter(|i| i.severity == Severity::Error)
+                .map(|i| i.code)
+                .collect(),
+            CatalogError::Json(_) => vec!["json"],
+        }
+    }
+
+    #[test]
+    fn accepts_valid_catalog_and_indexes_it() {
+        let c = ValidatedCatalog::validate(cat(vec![
+            brand(
+                "sandisk",
+                vec![
+                    ident(IdentifierKind::InquiryVendor, "SanDisk"),
+                    ident(IdentifierKind::UsbVid, "0781"),
+                ],
+            ),
+            brand("tubitak", vec![]),
+        ]))
+        .unwrap();
+        assert_eq!(c.brand_for_inquiry_field("SANDISK_"), Some("sandisk"));
+        assert_eq!(c.brands_for_vid(0x0781), ["sandisk".to_string()]);
+        assert!(
+            c.warnings()
+                .iter()
+                .any(|w| w.code == "brand_not_enforceable")
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_inquiry_vendor() {
+        let e = ValidatedCatalog::validate(cat(vec![
+            brand("a", vec![ident(IdentifierKind::InquiryVendor, "ACME")]),
+            brand("b", vec![ident(IdentifierKind::InquiryVendor, "acme")]),
+        ]))
+        .unwrap_err();
+        assert!(codes(e).contains(&"inquiry_vendor_ambiguous"));
+    }
+
+    #[test]
+    fn rejects_generic_non_ascii_and_bad_vid() {
+        let e = ValidatedCatalog::validate(cat(vec![
+            brand("x", vec![ident(IdentifierKind::InquiryVendor, "Generic")]),
+            brand("y", vec![ident(IdentifierKind::InquiryVendor, "TÜBİTAK")]),
+            brand("z", vec![ident(IdentifierKind::UsbVid, "78")]),
+        ]))
+        .unwrap_err();
+        let c = codes(e);
+        assert!(c.contains(&"inquiry_vendor_generic"));
+        assert!(c.contains(&"inquiry_vendor_invalid"));
+        assert!(c.contains(&"usb_vid_invalid"));
+    }
+
+    #[test]
+    fn rejects_bad_slugs_and_duplicates() {
+        let e = ValidatedCatalog::validate(cat(vec![
+            brand("Bad Id", vec![]),
+            brand("dup", vec![]),
+            brand("dup", vec![]),
+        ]))
+        .unwrap_err();
+        let c = codes(e);
+        assert!(c.contains(&"brand_id"));
+        assert!(c.contains(&"brand_id_duplicate"));
+    }
+
+    #[test]
+    fn generic_detection_handles_padding_and_case() {
+        let c = ValidatedCatalog::validate(cat(vec![])).unwrap();
+        assert!(c.is_generic_vendor("Generic_"));
+        assert!(c.is_generic_vendor("usb_____"));
+        assert!(c.is_generic_vendor("________"));
+        assert!(!c.is_generic_vendor("SanDisk_"));
+    }
+}

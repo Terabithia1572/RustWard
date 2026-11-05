@@ -1,0 +1,21 @@
+[package]
+name = "rustward-inventory"
+description = "Read-only RustWard diagnostics CLI: device inventory, simulated brand-policy decisions, and a never-applied enforcement plan preview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rustward-inventory"
+path = "src/main.rs"
+
+[dependencies]
+rustward-core.workspace = true
+rustward-windows.workspace = true
+rustward-enforcement.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

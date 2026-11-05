@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "workstation_id": "PC-01",
+  "policy_version": 1,
+  "mode": "dry_run",
+  "catalog_version": "2026.11.05-phase1",
+  "allowed_brands": [
+    { "brand_id": "sandisk", "enabled": true, "note": "Approved for PC-01" },
+    { "brand_id": "tubitak", "enabled": true, "note": "Approved; identifiers pending SIR II lab inspection" }
+  ]
+}

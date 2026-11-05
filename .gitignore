@@ -1,0 +1,36 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / Tauri (Phase 6)
+node_modules/
+dist/
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/
+
+# Local evidence and baselines may contain serial numbers / computer names
+/evidence/
+/baseline/
+*.snapshot.local.json
+
+# Databases and logs
+*.db
+*.db-journal
+*.sqlite
+*.log
+
+# Secrets and signing material - never commit
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.snk
+.env
+.env.*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

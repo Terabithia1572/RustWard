@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rustward-core",
+    "crates/rustward-windows",
+    "crates/rustward-enforcement",
+    "crates/rustward-inventory",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# Versions recorded in docs/PHASE-STATUS.md; exact resolution is pinned by Cargo.lock.
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
+] }
+rustward-core = { path = "crates/rustward-core" }
+rustward-windows = { path = "crates/rustward-windows" }
+rustward-enforcement = { path = "crates/rustward-enforcement" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

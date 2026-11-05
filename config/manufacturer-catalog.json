@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026.11.05-phase1",
+  "brands": [
+    {
+      "id": "sandisk",
+      "display_name": "SanDisk",
+      "aliases": ["SanDisk", "Sandisk Corp.", "SanDisk, Inc."],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "SanDisk",
+          "verification": "unverified",
+          "source": "Engineering assumption; must be confirmed with rustward-inventory on physical SanDisk media (several models and capacities)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0781",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (github.com/usbids/usbids), '0781 SanDisk Corp.', retrieved 2026-11-05"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0871",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '0871 SanDisk, Inc.', retrieved 2026-11-05"
+        }
+      ],
+      "notes": "Corroborating VIDs never authorize; only the INQUIRY vendor maps to an OS-enforceable hardware ID."
+    },
+    {
+      "id": "tubitak",
+      "display_name": "TÜBİTAK BİLGEM",
+      "aliases": ["TÜBİTAK", "TUBITAK", "BİLGEM", "BILGEM", "SIR II"],
+      "identifiers": [],
+      "notes": "SIR II USB descriptors and SCSI INQUIRY data are unknown until physical inspection (locked and unlocked states). No identifier may be added without lab evidence. No TÜBİTAK entry exists in the public usb.ids registry (checked 2026-11-05)."
+    },
+    {
+      "id": "kingston",
+      "display_name": "Kingston",
+      "aliases": ["Kingston", "Kingston Technology"],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Kingston",
+          "verification": "unverified",
+          "source": "Engineering assumption; confirm on hardware"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0951",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '0951 Kingston Technology', retrieved 2026-11-05"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0E56",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '0e56 Kingston Technology Company, Inc.', retrieved 2026-11-05"
+        }
+      ]
+    },
+    {
+      "id": "seagate",
+      "display_name": "Seagate",
+      "aliases": ["Seagate", "Seagate Technology"],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Seagate",
+          "verification": "unverified",
+          "source": "Engineering assumption; confirm on hardware. Microsoft's USBSTOR documentation example uses 'SEAGATE' (upper case); case-insensitive matching covers both."
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0BC2",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '0bc2 Seagate RSS LLC', retrieved 2026-11-05"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0477",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '0477 Seagate Technology, Inc.', retrieved 2026-11-05"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1A2A",
+          "verification": "public_registry",
+          "source": "usb.ids public registry, '1a2a Seagate Branded Solutions', retrieved 2026-11-05"
+        }
+      ]
+    }
+  ],
+  "reserved_generic_vendors": [
+    "Generic",
+    "Generic-",
+    "General",
+    "USB",
+    "USB 2.0",
+    "USB 3.0",
+    "USB Disk",
+    "Mass",
+    "Flash",
+    "UFD",
+    "Disk",
+    "Storage",
+    "Multiple",
+    "JMicron",
+    "ASMT",
+    "ASMedia",
+    "Realtek",
+    "Alcor",
+    "SMI",
+    "Phison",
+    "VIA",
+    "Initio",
+    "Innostor",
+    "Netac"
+  ]
+}
