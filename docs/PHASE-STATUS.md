@@ -112,7 +112,7 @@ executed.
 | `c63d188` | Phase 10 step 1 — read-only inspection of Device Installation Restrictions |
 | `e17bd54` | Phase 10 step 2 — read-only assessment of already-installed storage devices |
 | `60a676e` | Phase 10 step 3 — read-only enforcement readiness in the Turkish UI |
-| (this commit) | Phase 10 step 4 — mock policy backend tests, Stage A–F acceptance documents, F-19 follow-up fix |
+| `10f4bad` | Phase 10 step 4 — mock policy backend tests, Stage A–F acceptance documents, F-19 follow-up fix |
 | `3aac8a2`, `7fd1a4b` | Phase 9A — security hardening and Windows acceptance readiness — see SECURITY-AUDIT-PHASE-9A.md |
 
 ## Environment
