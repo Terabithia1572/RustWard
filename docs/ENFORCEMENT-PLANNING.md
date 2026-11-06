@@ -73,7 +73,10 @@ precedence over it. It is reported as a foreign value.
 
 ## 4. Still unimplemented (explicit)
 
-1. Read-only capture of the Restrictions key on Windows (`RegGetValueW`) into a `PolicySnapshot`.
+1. ~~Read-only capture of the Restrictions key on Windows.~~ **Phase 10 step 1:** implemented in
+   `rustward-windows::policy_reader` (`KEY_READ` only; NOT VERIFIED ON WINDOWS) and interpreted by
+   `rustward-enforcement::policy_inspect`; CLI `rustward-inventory policy-capture` /
+   `policy-inspect`. See §5.
 2. Any registry write, policy refresh or device rescan.
 3. Confirming every planned value name against Microsoft documentation in the VM. All but `AllowDenyLayered` are still marked `confirmed_against_documentation = false`.
 4. Producing `AppliedPolicyReceipt` and `VerificationEvidence` (read/write denial probe).
@@ -81,3 +84,17 @@ precedence over it. It is reported as a foreign value.
 
 Sources: [Policy CSP – DeviceInstallation (Microsoft Learn)](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-deviceinstallation) ·
 [Named Pipe Security and Access Rights (Microsoft Learn)](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
+
+## 5. Read-only policy inspection (Phase 10 step 1)
+
+| Part | Implementation | Status |
+|---|---|---|
+| Capture | `rustward-windows::policy_reader::capture`: `RegOpenKeyExW(HKLM, …\DeviceInstall\Restrictions, KEY_READ \| KEY_WOW64_64KEY)`, `RegEnumValueW` / `RegEnumKeyExW` (values of the key and one level of subkeys, ≤ 4096 entries, ≤ 64 KiB per value), `RegCloseKey`. Read-only API allowlist enforced by test `policy_reader_is_read_only`. | Type-checked; NOT RUN on Windows |
+| OS facts | `RtlGetVersion` (major/minor/build), `GetProductInfo` (edition code). UBR via `RegGetValueW(…\Windows NT\CurrentVersion, "UBR")` — **no documented API**, so layering support on 19041–19045 is reported *unresolved* even when the UBR is high enough. | Type-checked |
+| Decoding | `rustward-windows::regdecode` (REG_DWORD, REG_SZ, REG_EXPAND_SZ verbatim, REG_MULTI_SZ; other types by type and size only) | Tested |
+| Interpretation | `policy_inspect::inspect`: the 8 CSP-documented names are *documented*; list-entry layout (numbered values in a subkey named after the policy) and `*Retroactive` flags are *unresolved*; everything else is *unrecognised* and shown raw; edition support (product codes checked against windows-sys constants), layering support, conflicts with the RustWard plan, plan-value presence (`not_applied` / `partial` / `policy_values_present` — never "protected") | Tested |
+| Evaluation model | `policy_eval::evaluate_install`: documented layered order and default prevent-precedence, hardware **or** compatible ID matching, `DenyUnspecified`; removable-devices layer not modelled | Tested; predictions NOT VERIFIED |
+| CLI | `rustward-inventory policy-capture --out FILE`, `policy-inspect (--policy-capture FILE \| --live) [--snapshot FILE] [--json]` | Tested with capture files |
+
+Sources: [Policy CSP – DeviceInstallation](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-deviceinstallation) ·
+[Manage Device Installation with Group Policy](https://learn.microsoft.com/en-us/windows/client-management/manage-device-installation-with-group-policy)

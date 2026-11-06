@@ -1,6 +1,6 @@
 [package]
 name = "rustward-windows"
-description = "Windows adapters for RustWard: read-only device inventory (SetupAPI), device-change notifications, Event Log writer and SCM service host. Nothing here changes device, driver, registry or policy state."
+description = "Windows adapters for RustWard: read-only device inventory (SetupAPI), read-only Device Installation policy inspection, device-change notifications, Event Log writer and SCM service host. Nothing here changes device, driver, registry or policy state."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,12 +13,18 @@ host-typecheck = []
 
 [dependencies]
 rustward-core.workspace = true
+# Platform-independent policy model filled by the read-only policy reader.
+rustward-enforcement.workspace = true
 thiserror.workspace = true
 # windows-sys is plain extern declarations and builds on every host.
 windows-sys = { workspace = true, features = [
     "Win32_Security",
     "Win32_System_EventLog",
     "Win32_System_Services",
+    # Read-only policy inspection (policy_reader.rs): KEY_READ only.
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Wdk_System_SystemServices",
 ] }
 
 [lints]

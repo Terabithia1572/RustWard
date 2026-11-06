@@ -21,6 +21,8 @@
 
 pub mod activation;
 pub mod device_install;
+pub mod policy_eval;
+pub mod policy_inspect;
 pub mod policy_state;
 
 use serde::{Deserialize, Serialize};
@@ -562,7 +564,9 @@ mod tests {
             include_str!("lib.rs"),
             include_str!("device_install.rs"),
             include_str!("activation.rs"),
-            include_str!("policy_state.rs")
+            include_str!("policy_state.rs"),
+            include_str!("policy_eval.rs"),
+            include_str!("policy_inspect.rs")
         );
         let forbidden = [
             ["Reg", "SetValueEx"].concat(),

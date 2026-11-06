@@ -22,6 +22,7 @@
 pub mod devchange;
 pub mod engine;
 pub mod eventlog_map;
+pub mod regdecode;
 pub mod svc_control;
 pub mod wide;
 
@@ -37,7 +38,29 @@ pub mod device_notify;
 pub mod event_log;
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]
+pub mod policy_reader;
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub mod service_host;
+
+/// Read-only capture of the Device Installation Restrictions policy (see
+/// [`policy_reader`]). Off Windows this returns an error; nothing is read.
+///
+/// # Errors
+/// Unsupported platform, or the key exists but cannot be read.
+pub fn capture_device_install_policy(
+    now_ms: i64,
+) -> Result<rustward_enforcement::policy_inspect::CapturedPolicy, String> {
+    #[cfg(windows)]
+    {
+        policy_reader::capture(now_ms)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = now_ms;
+        Err("policy inspection requires Windows".into())
+    }
+}
 
 use rustward_core::device::{
     DeviceRecord, DeviceSnapshot, SNAPSHOT_SCHEMA_VERSION, SnapshotSource,
@@ -259,6 +282,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The policy reader may use only read-only registry functions and
+    /// read-only access rights, and none of the state-changing APIs that the
+    /// rest of the crate forbids.
+    #[test]
+    fn policy_reader_is_read_only() {
+        let src = include_str!("policy_reader.rs");
+        let tokens: std::collections::HashSet<&str> = src
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+            .collect();
+        let allowed_reg = [
+            "RegOpenKeyExW",
+            "RegEnumKeyExW",
+            "RegEnumValueW",
+            "RegGetValueW",
+            "RegCloseKey",
+        ];
+        let allowed_key = ["KEY_READ", "KEY_WOW64_64KEY"];
+        for t in &tokens {
+            if t.starts_with("Reg") && t.len() > 3 && t.as_bytes()[3].is_ascii_uppercase() {
+                assert!(
+                    allowed_reg.contains(t),
+                    "registry API {t} not on the read-only allowlist"
+                );
+            }
+            if t.starts_with("KEY_") {
+                assert!(allowed_key.contains(t), "access right {t} not read-only");
+            }
+            for p in [
+                "SetupDi",
+                "CM_",
+                "CreateFile",
+                "DeviceIoControl",
+                "CreateService",
+                "DeleteService",
+                "ChangeServiceConfig",
+                "OpenSCManager",
+                "ControlService",
+            ] {
+                assert!(!t.starts_with(p), "unexpected API {t}");
+            }
+        }
+        for f in [
+            "RegSetValueExW",
+            "RegCreateKeyExW",
+            "RegDeleteValueW",
+            "RegDeleteKeyW",
+            "RegSaveKeyW",
+            "RegRestoreKeyW",
+            "RegLoadKeyW",
+            "KEY_WRITE",
+            "KEY_SET_VALUE",
+            "KEY_ALL_ACCESS",
+        ] {
+            assert!(!tokens.contains(f), "{f} must never appear");
+        }
+        assert!(src.contains("KEY_READ | KEY_WOW64_64KEY"));
     }
 
     #[test]

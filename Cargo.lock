@@ -333,6 +333,7 @@ name = "rustward-windows"
 version = "0.1.0"
 dependencies = [
  "rustward-core",
+ "rustward-enforcement",
  "thiserror",
  "windows-sys",
 ]

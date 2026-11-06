@@ -42,8 +42,18 @@ pub const LIST_SUBKEYS: [&str; 3] = ["AllowDeviceIDs", "AllowInstanceIDs", "Deny
 pub enum RegData {
     /// `REG_DWORD`.
     Dword(u32),
-    /// `REG_SZ`.
+    /// `REG_SZ` (also used for `REG_EXPAND_SZ` read verbatim, unexpanded).
     Sz(String),
+    /// `REG_MULTI_SZ`, as captured (never produced by a plan).
+    MultiSz(Vec<String>),
+    /// Any other registry type, captured only as type and size so an
+    /// inspection can report it without interpreting it.
+    Other {
+        /// Win32 `REG_*` type code.
+        reg_type: u32,
+        /// Data size in bytes.
+        bytes: usize,
+    },
 }
 
 /// Value location: key path relative to `HKLM` and value name. Compared
@@ -80,10 +90,55 @@ impl ValueRef {
 }
 
 /// Captured (or simulated) values of the Restrictions key and its subkeys.
+/// Serialised as a list of `{key, name, data}` entries (JSON object keys
+/// must be strings); deserialising normalises names like the registry.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicySnapshot {
     /// Values.
+    #[serde(with = "as_entries")]
     pub values: BTreeMap<ValueRef, RegData>,
+}
+
+mod as_entries {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{RegData, ValueRef};
+
+    #[derive(Serialize)]
+    struct EntryRef<'a> {
+        key: &'a str,
+        name: &'a str,
+        data: &'a RegData,
+    }
+
+    #[derive(Deserialize)]
+    struct Entry {
+        key: String,
+        name: String,
+        data: RegData,
+    }
+
+    pub fn serialize<S: Serializer>(
+        m: &BTreeMap<ValueRef, RegData>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.collect_seq(m.iter().map(|(k, data)| EntryRef {
+            key: &k.key,
+            name: &k.name,
+            data,
+        }))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<ValueRef, RegData>, D::Error> {
+        Ok(Vec::<Entry>::deserialize(d)?
+            .into_iter()
+            .map(|e| (ValueRef::new(&e.key, &e.name), e.data))
+            .collect())
+    }
 }
 
 impl PolicySnapshot {
@@ -94,7 +149,9 @@ impl PolicySnapshot {
         self
     }
 
-    fn dword(&self, name: &str) -> Option<u32> {
+    /// A `REG_DWORD` directly under the Restrictions key.
+    #[must_use]
+    pub fn dword(&self, name: &str) -> Option<u32> {
         match self.values.get(&ValueRef::in_restrictions(name)) {
             Some(RegData::Dword(v)) => Some(*v),
             _ => None,
@@ -572,6 +629,25 @@ mod tests {
                 "2",
                 RegData::Sz("HID\\VID_046D&PID_C52B".into()),
             )
+    }
+
+    #[test]
+    fn snapshots_round_trip_through_json_and_normalise_names() {
+        let s = existing()
+            .with(RESTRICTIONS_KEY, "Odd", RegData::MultiSz(vec!["a".into()]))
+            .with(
+                RESTRICTIONS_KEY,
+                "Bin",
+                RegData::Other {
+                    reg_type: 3,
+                    bytes: 4,
+                },
+            );
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<PolicySnapshot>(&json).unwrap(), s);
+        let lower = r#"{"values":[{"key":"software\\policies\\microsoft\\windows\\deviceinstall\\restrictions","name":"allowdenylayered","data":{"type":"dword","data":1}}]}"#;
+        let p: PolicySnapshot = serde_json::from_str(lower).unwrap();
+        assert_eq!(p.dword("AllowDenyLayered"), Some(1));
     }
 
     #[test]
