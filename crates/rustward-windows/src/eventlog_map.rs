@@ -51,6 +51,8 @@ pub const EVENT_IDS: &[(&str, u32)] = &[
     ("event_log_unavailable", 1006),
     ("device_notifications_unavailable", 1007),
     ("service_start_failed", 1008),
+    ("event_log_backfill_skipped", 1009),
+    ("ipc_shutdown_incomplete", 1010),
     ("device_detected", 2000),
     ("device_removed", 2001),
     ("device_reenumerated", 2002),
@@ -69,6 +71,7 @@ pub const EVENT_IDS: &[(&str, u32)] = &[
     ("restore_prepared", 5005),
     ("restore_failed", 5006),
     ("policy_restored", 5007),
+    ("audit_checkpoint", 5008),
 ];
 
 /// Event ID used for kinds not in [`EVENT_IDS`].
@@ -243,7 +246,7 @@ mod tests {
         let data = message_table_resource();
         assert_eq!(data.len() % 4, 0);
         let ids = message_table_ids();
-        assert!(ids.contains(&EVENT_ID_OTHER) && ids.contains(&1008));
+        assert!(ids.contains(&EVENT_ID_OTHER) && ids.contains(&1010) && ids.contains(&5008));
         for id in &ids {
             assert_eq!(
                 message_table_lookup(&data, *id).as_deref(),
@@ -251,14 +254,14 @@ mod tests {
                 "id {id}"
             );
         }
-        for missing in [0, 999, 1009, 4001, 5004, 8999, 9001] {
+        for missing in [0, 999, 1011, 4001, 5004, 5009, 8999, 9001] {
             assert_eq!(message_table_lookup(&data, missing), None, "{missing}");
         }
-        // Blocks are contiguous ranges: 1000-1008, 2000-2002, 2100-2101, ...
+        // Blocks are contiguous ranges: 1000-1010, 2000-2002, 2100-2101, ...
         let blocks = u32::from_le_bytes(data[0..4].try_into().unwrap());
         assert_eq!(blocks, 10);
         assert_eq!(u32::from_le_bytes(data[4..8].try_into().unwrap()), 1000);
-        assert_eq!(u32::from_le_bytes(data[8..12].try_into().unwrap()), 1008);
+        assert_eq!(u32::from_le_bytes(data[8..12].try_into().unwrap()), 1010);
         assert_eq!(
             u32::from_le_bytes(data[12..16].try_into().unwrap()),
             4 + 12 * blocks,

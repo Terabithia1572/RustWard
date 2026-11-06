@@ -260,6 +260,74 @@ pub enum ChainStatus {
         /// Event id.
         first_bad_id: i64,
     },
+    /// Every remaining entry verifies, but ids are missing between two
+    /// entries: events were removed and later events chained onto the
+    /// remaining head (e.g. the newest events were deleted and the service
+    /// then appended new ones). Ids are never reused and only retention
+    /// deletes, and only from the oldest end.
+    Missing {
+        /// Entries checked up to the gap.
+        entries: u64,
+        /// Last id before the gap.
+        after_id: i64,
+        /// First id after the gap.
+        next_id: i64,
+    },
+    /// Every remaining entry verifies, but the newest entries were removed:
+    /// SQLite's `AUTOINCREMENT` counter (`sqlite_sequence`) has issued ids
+    /// above the last remaining one. Retention never causes this (it deletes
+    /// the oldest entries and then appends `retention_applied`).
+    Truncated {
+        /// Entries checked.
+        entries: u64,
+        /// Newest remaining id (0 = none).
+        last_id: i64,
+        /// Highest id ever issued.
+        highest_issued: i64,
+    },
+}
+
+/// Summary of the audit chain at one moment, recorded as an
+/// `audit_checkpoint` event and mirrored to the Windows Event Log so that a
+/// later truncation or rewrite can be detected by comparing with the copy
+/// outside the database.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditCheckpoint {
+    /// Newest event before the checkpoint (0 = none).
+    pub head_id: i64,
+    /// Its hash (genesis/anchor when none).
+    pub head_hash: String,
+    /// Entries verified.
+    pub entries: u64,
+    /// Highest id ever issued before the checkpoint.
+    pub highest_issued: i64,
+    /// Chain status code (`intact`, `broken`, `truncated`).
+    pub chain: String,
+    /// Id of the checkpoint event itself.
+    pub checkpoint_id: i64,
+}
+
+/// Result of comparing the database with a checkpoint copied from outside
+/// it (Windows Event Log, a printed export).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum CheckpointCheck {
+    /// The event exists and its hash starts with the recorded prefix.
+    Matches,
+    /// The event exists but its hash differs: the chain was rewritten.
+    HashDiffers {
+        /// First 16 hex characters of the stored hash.
+        stored_prefix: String,
+    },
+    /// The event id is above every remaining id or inside the remaining
+    /// range but absent: events were removed.
+    EventMissing,
+    /// The event is older than the oldest remaining event (retention may
+    /// have removed it legitimately; not verifiable).
+    OlderThanRetention {
+        /// Oldest remaining event id.
+        oldest_id: i64,
+    },
 }
 
 /// Why a backup was created.

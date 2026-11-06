@@ -118,6 +118,24 @@ mod tests {
         }
     }
 
+    /// The desktop app loads nothing from the network: every CSP source is
+    /// local ('self', data: images, the Tauri IPC origin) or 'none'.
+    #[test]
+    fn desktop_csp_allows_no_remote_origin() {
+        let conf: serde_json::Value = serde_json::from_str(TAURI_CONF).unwrap_or_default();
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap_or_default();
+        assert!(csp.starts_with("default-src 'self'"), "{csp}");
+        for directive in csp.split(';').map(str::trim).filter(|d| !d.is_empty()) {
+            for source in directive.split_whitespace().skip(1) {
+                assert!(
+                    ["'self'", "'none'", "data:", "ipc:", "http://ipc.localhost"].contains(&source),
+                    "remote or unexpected CSP source {source:?} in {directive:?}"
+                );
+            }
+        }
+        assert!(conf["app"]["withGlobalTauri"] != serde_json::Value::Bool(true));
+    }
+
     #[test]
     fn product_versions_are_consistent() {
         let crate_version = env!("CARGO_PKG_VERSION");

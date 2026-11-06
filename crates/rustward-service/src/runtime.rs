@@ -65,6 +65,9 @@ pub struct TickOutcome {
     pub refreshed: bool,
     /// Retention executed in this tick.
     pub retention_ran: bool,
+    /// An `audit_checkpoint` was recorded in this tick (first tick and then
+    /// with the daily maintenance).
+    pub checkpoint_recorded: bool,
     /// Health after the tick.
     pub health: HealthState,
 }
@@ -75,6 +78,7 @@ pub struct ServiceRuntime {
     clock: Arc<dyn Clock>,
     stop: Arc<AtomicBool>,
     last_retention_ms: Option<i64>,
+    last_checkpoint_ms: Option<i64>,
     failures: u32,
     wake: Option<Box<dyn WakeSource>>,
     wake_refreshes: u64,
@@ -96,6 +100,7 @@ impl ServiceRuntime {
             clock,
             stop: Arc::new(AtomicBool::new(false)),
             last_retention_ms: None,
+            last_checkpoint_ms: None,
             failures: 0,
             wake: None,
             wake_refreshes: 0,
@@ -205,9 +210,21 @@ impl ServiceRuntime {
         if retention_ran {
             self.last_retention_ms = Some(now);
         }
+        // First tick and then daily: an audit checkpoint that is mirrored to
+        // the Event Log, so truncation/rewrite can be detected later (F-12).
+        let checkpoint_due = self
+            .last_checkpoint_ms
+            .is_none_or(|t| now.saturating_sub(t) >= RETENTION_INTERVAL_MS);
+        let checkpoint_recorded = checkpoint_due && self.app.record_audit_checkpoint().is_ok();
+        if checkpoint_recorded {
+            self.last_checkpoint_ms = Some(now);
+        }
+        // Deliver audit events the Event Log rejected earlier (F-15).
+        self.app.retry_event_mirror();
         TickOutcome {
             refreshed,
             retention_ran,
+            checkpoint_recorded,
             health: if self.failures >= DEGRADED_AFTER_FAILURES {
                 HealthState::Degraded
             } else {
@@ -345,6 +362,20 @@ mod tests {
         assert!(!rt.tick().retention_ran);
         clock.advance(RETENTION_INTERVAL_MS);
         assert!(rt.tick().retention_ran);
+    }
+
+    #[test]
+    fn audit_checkpoint_on_first_tick_then_daily() {
+        let (mut rt, clock) = runtime(Box::new(FixtureInventory::bundled().unwrap()));
+        assert!(rt.tick().checkpoint_recorded);
+        assert!(!rt.tick().checkpoint_recorded);
+        clock.advance(RETENTION_INTERVAL_MS);
+        assert!(rt.tick().checkpoint_recorded);
+        let n = kinds(&rt)
+            .iter()
+            .filter(|k| k.as_str() == "audit_checkpoint")
+            .count();
+        assert_eq!(n, 2);
     }
 
     #[test]

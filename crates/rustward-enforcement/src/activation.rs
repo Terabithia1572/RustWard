@@ -227,6 +227,12 @@ pub enum GateId {
     PostActivationVerificationReady,
     /// Rollback (remove written values) is prepared and tested in the VM.
     RollbackReady,
+    /// The captured existing Restrictions policy has no conflict with the
+    /// plan (`policy_state::compare`).
+    ExistingPolicyCompatible,
+    /// The plan still describes the machine: no hardware, OS-build or
+    /// policy change since the baseline (`policy_state::staleness`).
+    PlanCurrent,
 }
 
 impl GateId {
@@ -247,6 +253,8 @@ impl GateId {
             Self::ExplicitApproval => "explicit_approval",
             Self::PostActivationVerificationReady => "post_activation_verification_ready",
             Self::RollbackReady => "rollback_ready",
+            Self::ExistingPolicyCompatible => "existing_policy_compatible",
+            Self::PlanCurrent => "plan_current",
         }
     }
 }
@@ -287,6 +295,12 @@ pub struct ActivationRequest {
     pub verification_procedure_ready: bool,
     /// Rollback tested in the VM for this build.
     pub rollback_tested: bool,
+    /// Restrictions key as captured read-only on the workstation (`None` =
+    /// not captured; capture is not implemented in this build).
+    pub existing_policy: Option<crate::policy_state::PolicySnapshot>,
+    /// Result of `policy_state::staleness` against a fresh inventory
+    /// (`None` = not checked).
+    pub stale_reasons: Option<Vec<crate::policy_state::StaleReason>>,
 }
 
 /// Result of gate evaluation.
@@ -499,6 +513,39 @@ pub fn evaluate_gates(
             request.rollback_tested,
             "removal of every written value tested in the VM for this build",
         ),
+        match &request.existing_policy {
+            None => gate(
+                GateId::ExistingPolicyCompatible,
+                false,
+                "existing Restrictions policy not captured (read-only capture not implemented in this build)",
+            ),
+            Some(existing) => {
+                let cmp = crate::policy_state::compare(existing, plan);
+                gate(
+                    GateId::ExistingPolicyCompatible,
+                    cmp.is_clean(),
+                    format!(
+                        "{} conflict(s), {} value(s) to add, {} to change, {} foreign value(s) left untouched",
+                        cmp.conflicts.len(),
+                        cmp.to_add.len(),
+                        cmp.to_change.len(),
+                        cmp.foreign.len()
+                    ),
+                )
+            }
+        },
+        match &request.stale_reasons {
+            None => gate(
+                GateId::PlanCurrent,
+                false,
+                "plan not re-checked against a fresh inventory",
+            ),
+            Some(r) => gate(
+                GateId::PlanCurrent,
+                r.is_empty(),
+                format!("{} reason(s) the plan is stale", r.len()),
+            ),
+        },
     ];
     let all_gates_met = gates.iter().all(|g| g.status == PreconditionStatus::Met);
     ActivationReadiness {
@@ -587,7 +634,59 @@ mod tests {
             approval_fingerprint: Some(fp.into()),
             verification_procedure_ready: true,
             rollback_tested: true,
+            existing_policy: Some(crate::policy_state::PolicySnapshot::default()),
+            stale_reasons: Some(Vec::new()),
         }
+    }
+
+    #[test]
+    fn existing_policy_conflicts_and_stale_plans_keep_their_gates_shut() {
+        use crate::policy_state::{PolicySnapshot, RegData, StaleReason};
+        let env = full_env();
+        with_inputs(
+            &env,
+            |s| s.devices.retain(|d| !d.instance_id.contains("PSSD_T7")),
+            |i| {
+                let p = DeviceInstallRestrictionProvider;
+                let plan = p.plan(i);
+                let dry = p.dry_run(&plan, i);
+                let fp = plan_fingerprint(&plan);
+                let ok = evaluate_gates(&plan, &dry, &i, &everything(&fp, &plan.workstation_id));
+                assert_eq!(
+                    status(&ok, GateId::ExistingPolicyCompatible),
+                    PreconditionStatus::Met
+                );
+                assert_eq!(status(&ok, GateId::PlanCurrent), PreconditionStatus::Met);
+                assert_eq!(
+                    status(&ok, GateId::SystemDisksProtected),
+                    PreconditionStatus::Met
+                );
+
+                let mut req = everything(&fp, &plan.workstation_id);
+                req.existing_policy = Some(PolicySnapshot::default().with(
+                    crate::device_install::RESTRICTIONS_KEY,
+                    "DenyUnspecified",
+                    RegData::Dword(1),
+                ));
+                req.stale_reasons = Some(vec![StaleReason::PolicyVersionChanged {
+                    planned: 1,
+                    current: 2,
+                }]);
+                let r = evaluate_gates(&plan, &dry, &i, &req);
+                assert_eq!(
+                    status(&r, GateId::ExistingPolicyCompatible),
+                    PreconditionStatus::NotMet
+                );
+                assert_eq!(status(&r, GateId::PlanCurrent), PreconditionStatus::NotMet);
+                // Not captured / not checked is NotMet, never assumed fine.
+                let r = evaluate_gates(&plan, &dry, &i, &ActivationRequest::default());
+                assert_eq!(
+                    status(&r, GateId::ExistingPolicyCompatible),
+                    PreconditionStatus::NotMet
+                );
+                assert_eq!(status(&r, GateId::PlanCurrent), PreconditionStatus::NotMet);
+            },
+        );
     }
 
     fn status(r: &ActivationReadiness, id: GateId) -> PreconditionStatus {

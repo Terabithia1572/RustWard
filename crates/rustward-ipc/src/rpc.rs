@@ -1,5 +1,6 @@
 //! Client and server loops over any [`Transport`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::frame::{self, FrameError};
@@ -176,7 +177,15 @@ pub enum SessionEnd {
     /// The caller of a request could not be identified; the request was
     /// refused and the connection closed.
     IdentificationFailed(String),
+    /// The server is shutting down (checked between requests and while
+    /// waiting for the next one).
+    Shutdown,
 }
+
+/// How often a waiting connection checks for a shutdown request. Transports
+/// must return [`TransportError::Timeout`] only when no part of a frame was
+/// consumed, so waiting in slices never splits a frame.
+pub const STOP_POLL: Duration = Duration::from_millis(200);
 
 /// Serve one connection with a fixed identity (mock transports, in-process
 /// backends and tests).
@@ -202,12 +211,37 @@ pub fn serve_connection_identified<T: Transport>(
     handler: &dyn Handler,
     idle_timeout: Duration,
 ) -> SessionEnd {
+    let never = AtomicBool::new(false);
+    serve_connection_until(transport, identify, handler, idle_timeout, &never)
+}
+
+/// [`serve_connection_identified`] that also ends with
+/// [`SessionEnd::Shutdown`] once `stop` is set: between requests, and within
+/// [`STOP_POLL`] while waiting for the next request. A request that is
+/// already being processed is completed and answered first.
+pub fn serve_connection_until<T: Transport>(
+    transport: &mut T,
+    identify: &dyn Fn(&T) -> Result<ClientIdentity, TransportError>,
+    handler: &dyn Handler,
+    idle_timeout: Duration,
+    stop: &AtomicBool,
+) -> SessionEnd {
     loop {
-        let frame = match transport.recv(idle_timeout) {
-            Ok(f) => f,
-            Err(TransportError::Disconnected) => return SessionEnd::Disconnected,
-            Err(TransportError::Timeout) => return SessionEnd::IdleTimeout,
-            Err(e) => return SessionEnd::TransportError(e.to_string()),
+        let mut idle = Duration::ZERO;
+        let frame = loop {
+            if stop.load(Ordering::SeqCst) {
+                return SessionEnd::Shutdown;
+            }
+            let slice = STOP_POLL.min(idle_timeout.saturating_sub(idle));
+            if slice.is_zero() {
+                return SessionEnd::IdleTimeout;
+            }
+            match transport.recv(slice) {
+                Ok(f) => break f,
+                Err(TransportError::Timeout) => idle += slice,
+                Err(TransportError::Disconnected) => return SessionEnd::Disconnected,
+                Err(e) => return SessionEnd::TransportError(e.to_string()),
+            }
         };
         let env: RequestEnvelope = match frame::decode(&frame) {
             Ok(e) => e,

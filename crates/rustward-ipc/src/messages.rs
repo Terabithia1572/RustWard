@@ -679,4 +679,11 @@ pub struct EventLogView {
     pub delivered: u64,
     /// Entries that could not be written.
     pub failures: u64,
+    /// Committed audit events not yet written (delivered later, in order).
+    #[serde(default)]
+    pub pending: u64,
+    /// Events not copied because the backlog exceeded the back-fill limit
+    /// (recorded as `event_log_backfill_skipped`).
+    #[serde(default)]
+    pub skipped: u64,
 }

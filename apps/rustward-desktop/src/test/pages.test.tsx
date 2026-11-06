@@ -48,6 +48,18 @@ describe("Dashboard", () => {
   });
 });
 
+describe("Service unavailable (stopped or not installed)", () => {
+  it("never reads a missing service as protection: banner stays, error is explicit", async () => {
+    const down = {
+      call: () => Promise.reject({ code: "unavailable", message: "the RustWard service is not reachable" }),
+    };
+    render(<App api={new Api(down)} initialPage="dashboard" />);
+    expect(await screen.findByTestId("not-validated-banner")).toHaveTextContent(BANNER_TR);
+    expect((await screen.findAllByText("RustWard hizmetine ulaşılamıyor.")).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toMatch(/engellenmiştir|koruma etkin(?! değil)|doğrulandı/i);
+  });
+});
+
 describe("Devices", () => {
   it("explains a selected device", async () => {
     const { user } = setup("devices");

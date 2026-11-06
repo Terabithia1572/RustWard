@@ -1,7 +1,7 @@
 //! Versioned schema migrations. Migrations are append-only: never edit a
 //! released migration, add a new one.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::StorageError;
 
@@ -133,8 +133,15 @@ pub fn current_version(conn: &Connection) -> Result<u32, StorageError> {
 }
 
 /// Apply pending migrations. Refuses databases newer than this build.
+///
+/// All pending migrations run in one `IMMEDIATE` transaction and the current
+/// version is read **inside** it, so two processes opening a new database at
+/// the same time serialise (the second waits on the busy timeout, then sees
+/// the migrated schema) instead of both running the DDL (Phase 9B finding
+/// F-19, found by the real-backend UI integration tests).
 pub fn migrate(conn: &mut Connection, now_ms: i64) -> Result<u32, StorageError> {
-    let current = current_version(conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current = current_version(&tx)?;
     let latest = latest_version();
     if current > latest {
         return Err(StorageError::SchemaTooNew {
@@ -143,13 +150,12 @@ pub fn migrate(conn: &mut Connection, now_ms: i64) -> Result<u32, StorageError> 
         });
     }
     for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v > current) {
-        let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.execute(
             "INSERT INTO schema_migrations (version, applied_ms) VALUES (?1, ?2)",
             params![version, now_ms],
         )?;
-        tx.commit()?;
     }
+    tx.commit()?;
     Ok(latest)
 }

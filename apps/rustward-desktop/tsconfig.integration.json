@@ -1,0 +1,10 @@
+{
+  // Type-checks the real-backend integration tests, which use Node APIs
+  // (child_process). Kept separate so application code cannot use Node types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
+  },
+  "include": ["src", "vitest.integration.config.ts"],
+  "exclude": []
+}

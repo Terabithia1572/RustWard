@@ -90,3 +90,96 @@ impl Transport for MockEnd {
         Ok(frame)
     }
 }
+
+/// Server end of a mock connection together with the identity the test
+/// assigned to the caller.
+#[derive(Debug)]
+pub struct MockServerConn {
+    end: MockEnd,
+    identity: crate::ClientIdentity,
+}
+
+impl MockServerConn {
+    /// Identity of the connected caller.
+    #[must_use]
+    pub fn identity(&self) -> &crate::ClientIdentity {
+        &self.identity
+    }
+}
+
+impl Transport for MockServerConn {
+    fn send(&mut self, frame: &[u8]) -> Result<(), TransportError> {
+        self.end.send(frame)
+    }
+    fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>, TransportError> {
+        self.end.recv(timeout)
+    }
+}
+
+/// Client side of [`mock_listener`].
+#[derive(Debug, Clone)]
+pub struct MockConnector {
+    tx: Sender<MockServerConn>,
+}
+
+impl MockConnector {
+    /// Open a connection as `identity`; returns the client end.
+    pub fn connect(&self, identity: crate::ClientIdentity) -> Result<MockEnd, TransportError> {
+        let (client, server) = mock_pair();
+        self.tx
+            .send(MockServerConn {
+                end: server,
+                identity,
+            })
+            .map_err(|_| TransportError::Disconnected)?;
+        Ok(client)
+    }
+}
+
+/// In-memory listener: every [`MockConnector::connect`] is one accepted
+/// connection. Used to test the server pool without Windows.
+#[derive(Debug)]
+pub struct MockListener {
+    rx: std::sync::Mutex<Receiver<MockServerConn>>,
+    wake_tx: Sender<MockServerConn>,
+}
+
+/// Create a connected listener/connector pair.
+#[must_use]
+pub fn mock_listener() -> (MockConnector, MockListener) {
+    let (tx, rx) = channel();
+    (
+        MockConnector { tx: tx.clone() },
+        MockListener {
+            rx: std::sync::Mutex::new(rx),
+            wake_tx: tx,
+        },
+    )
+}
+
+impl MockListener {
+    /// Block until a connection arrives.
+    pub fn accept_blocking(&self) -> Result<MockServerConn, TransportError> {
+        let rx = self
+            .rx
+            .lock()
+            .map_err(|_| TransportError::Io("mock listener poisoned".into()))?;
+        rx.recv().map_err(|_| TransportError::Disconnected)
+    }
+
+    /// Unblock a pending accept with a connection whose client already left.
+    pub fn wake_blocking(&self) {
+        let (_client, server) = mock_pair();
+        let _ = self.wake_tx.send(MockServerConn {
+            end: server,
+            identity: crate::ClientIdentity {
+                account: "wake".into(),
+                sid: None,
+                is_administrator: false,
+                elevated: false,
+                source: crate::IdentitySource::Test,
+                channel_max_access: crate::AccessLevel::ReadOnly,
+            },
+        });
+    }
+}

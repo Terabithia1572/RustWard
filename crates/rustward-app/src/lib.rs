@@ -831,6 +831,20 @@ impl AppService {
         g.store.apply_retention().map_err(storage_err)
     }
 
+    /// Record an `audit_checkpoint` (chain head summary, mirrored to the
+    /// Event Log). Called by the service at start and daily.
+    pub fn record_audit_checkpoint(&self) -> Result<rustward_storage::AuditCheckpoint, IpcError> {
+        let mut g = self.lock()?;
+        g.store.record_audit_checkpoint().map_err(storage_err)
+    }
+
+    /// Retry Event Log delivery of pending events (no-op without a mirror).
+    pub fn retry_event_mirror(&self) {
+        if let Ok(mut g) = self.lock() {
+            g.store.retry_mirror();
+        }
+    }
+
     /// Configured refresh interval in seconds (default on error).
     #[must_use]
     pub fn refresh_interval_seconds(&self) -> u32 {
@@ -1287,6 +1301,26 @@ impl AppService {
             Ok(ChainStatus::Broken { first_bad_id }) => {
                 (format!("BROKEN at event {first_bad_id}"), false)
             }
+            Ok(ChainStatus::Missing {
+                after_id, next_id, ..
+            }) => (
+                format!(
+                    "EVENTS MISSING: ids {}..={} were removed",
+                    after_id + 1,
+                    next_id - 1
+                ),
+                false,
+            ),
+            Ok(ChainStatus::Truncated {
+                entries,
+                last_id,
+                highest_issued,
+            }) => (
+                format!(
+                    "TRUNCATED: newest events removed ({entries} entries remain, last #{last_id}, ids issued up to #{highest_issued})"
+                ),
+                false,
+            ),
             Err(e) => (format!("error: {e}"), false),
         };
         let (policy, validated) = match Self::validated(&g.store) {
@@ -1376,6 +1410,8 @@ impl AppService {
                     attached: m.attached,
                     delivered: m.delivered,
                     failures: m.failures,
+                    pending: m.pending,
+                    skipped: m.skipped,
                 }
             },
             unsupported_features: vec![

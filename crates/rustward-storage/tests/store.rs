@@ -8,8 +8,9 @@ use std::sync::Arc;
 use rusqlite::params;
 use rustward_core::policy_edit::{PolicyEdit, PolicyState, apply_edit};
 use rustward_storage::{
-    AppSettings, BackupKind, BackupRejection, ChainStatus, DeviceRow, EventFilter, EventObserver,
-    ManualClock, NewEvent, SecurityEvent, Severity, StorageError, Store,
+    AppSettings, BackupKind, BackupRejection, ChainStatus, CheckpointCheck, DeviceRow, EventFilter,
+    EventObserver, MIRROR_MAX_BACKFILL, ManualClock, NewEvent, SecurityEvent, Severity,
+    StorageError, Store,
 };
 
 const CATALOG: &str = include_str!("../../../config/manufacturer-catalog.json");
@@ -415,19 +416,36 @@ fn newer_schema_is_refused() {
 struct Recorder {
     seen: std::sync::Mutex<Vec<(i64, String)>>,
     fail_kind: Option<&'static str>,
+    /// Simulates an Event Log outage: every write fails while set.
+    down: std::sync::atomic::AtomicBool,
 }
 
 impl EventObserver for Recorder {
     fn on_event(&self, event: &SecurityEvent) -> Result<(), String> {
+        if self.down.load(std::sync::atomic::Ordering::SeqCst)
+            || self.fail_kind == Some(event.kind.as_str())
+        {
+            return Err("sink unavailable".into());
+        }
         self.seen
             .lock()
             .unwrap()
             .push((event.id, event.kind.clone()));
-        if self.fail_kind == Some(event.kind.as_str()) {
-            Err("sink unavailable".into())
-        } else {
-            Ok(())
-        }
+        Ok(())
+    }
+}
+
+impl Recorder {
+    fn kinds(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, k)| k.clone())
+            .collect()
+    }
+    fn ids(&self) -> Vec<i64> {
+        self.seen.lock().unwrap().iter().map(|(i, _)| *i).collect()
     }
 }
 
@@ -436,10 +454,16 @@ fn observer_receives_every_committed_event_once_in_order() {
     let c = clock();
     let mut s = Store::open_in_memory(c.clone()).unwrap();
     s.initialize_policy(&state(), "t").unwrap();
-    // History before attaching is not replayed.
+    // Events written before the observer was attached (start-up) are
+    // back-filled on attach (F-15), then delivery continues in order.
     let rec = Arc::new(Recorder::default());
     s.set_event_observer(rec.clone()).unwrap();
     assert!(s.mirror_status().attached);
+    assert_eq!(
+        rec.kinds(),
+        ["policy_initialized"],
+        "start-up event back-filled"
+    );
 
     s.append_event(&event("device_arrived", Severity::Info, true))
         .unwrap();
@@ -461,7 +485,7 @@ fn observer_receives_every_committed_event_once_in_order() {
 
     let seen = rec.seen.lock().unwrap().clone();
     let kinds: Vec<_> = seen.iter().map(|(_, k)| k.as_str()).collect();
-    assert_eq!(kinds[0], "device_arrived");
+    assert_eq!(kinds[..2], ["policy_initialized", "device_arrived"]);
     assert!(kinds.contains(&"settings_changed"));
     assert_eq!(kinds.last(), Some(&"retention_applied"));
     assert!(
@@ -475,17 +499,16 @@ fn observer_receives_every_committed_event_once_in_order() {
     assert_eq!(ids, sorted, "each event once, ascending");
     assert_eq!(s.mirror_status().delivered as usize, seen.len());
     assert_eq!(s.mirror_status().failures, 0);
+    assert_eq!(s.mirror_status().pending, 0);
 }
 
 #[test]
-fn observer_failures_never_block_or_roll_back_writes() {
+fn observer_failures_never_block_or_roll_back_writes_and_keep_order() {
     let mut s = Store::open_in_memory(clock()).unwrap();
     s.initialize_policy(&state(), "t").unwrap();
-    let rec = Arc::new(Recorder {
-        fail_kind: Some("device_arrived"),
-        ..Recorder::default()
-    });
+    let rec = Arc::new(Recorder::default());
     s.set_event_observer(rec.clone()).unwrap();
+    rec.down.store(true, std::sync::atomic::Ordering::SeqCst);
     s.append_event(&event("device_arrived", Severity::Warning, true))
         .unwrap();
     s.append_event(&event("device_removed", Severity::Info, true))
@@ -498,11 +521,215 @@ fn observer_failures_never_block_or_roll_back_writes() {
         .unwrap();
     assert_eq!(stored.len(), 1, "event is stored despite the sink failure");
     let st = s.mirror_status();
-    assert_eq!((st.delivered, st.failures), (1, 1));
+    assert_eq!(st.delivered, 1, "only the back-filled start-up event");
+    assert_eq!(st.failures, 2, "one failed attempt per commit, then stop");
+    assert_eq!(st.pending, 2, "nothing is skipped while the sink is down");
     assert!(matches!(
         s.verify_chain().unwrap(),
         ChainStatus::Intact { .. }
     ));
+
+    // Event Log back: the next retry delivers the backlog in order.
+    rec.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    s.retry_mirror();
+    assert_eq!(
+        rec.kinds(),
+        ["policy_initialized", "device_arrived", "device_removed"]
+    );
+    assert_eq!(s.mirror_status().pending, 0);
+}
+
+#[test]
+fn mirror_cursor_survives_restart_and_backfills_events_written_while_detached() {
+    let dir = TempDir::new("mirror-cursor");
+    let path = dir.0.join("m.db");
+    let c = clock();
+    let first = Arc::new(Recorder::default());
+    {
+        let mut s = Store::open(&path, c.clone()).unwrap();
+        s.initialize_policy(&state(), "t").unwrap();
+        s.set_event_observer(first.clone()).unwrap();
+        s.append_event(&event("device_arrived", Severity::Info, true))
+            .unwrap();
+    }
+    // Service restarts; events are written before the mirror is attached
+    // (start-up) - previously these never reached the Event Log.
+    let second = Arc::new(Recorder::default());
+    {
+        let mut s = Store::open(&path, c.clone()).unwrap();
+        assert_eq!(
+            s.mirror_status().cursor,
+            first.ids().last().copied().unwrap()
+        );
+        s.append_event(&event("service_started", Severity::Info, false))
+            .unwrap();
+        s.append_event(&event("backend_started", Severity::Info, false))
+            .unwrap();
+        s.set_event_observer(second.clone()).unwrap();
+        assert_eq!(second.kinds(), ["service_started", "backend_started"]);
+        assert_eq!(s.mirror_status().pending, 0);
+    }
+    // Nothing delivered twice across the restart.
+    let mut all = first.ids();
+    all.extend(second.ids());
+    let mut dedup = all.clone();
+    dedup.dedup();
+    assert_eq!(all, dedup);
+}
+
+#[test]
+fn mirror_backlog_is_bounded_and_the_gap_is_recorded() {
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    let total = MIRROR_MAX_BACKFILL + 25;
+    for _ in 1..total {
+        s.append_event(&event("device_arrived", Severity::Info, true))
+            .unwrap();
+    }
+    let rec = Arc::new(Recorder::default());
+    s.set_event_observer(rec.clone()).unwrap();
+    let st = s.mirror_status();
+    assert_eq!(st.skipped, 25);
+    assert_eq!(st.pending, 0);
+    let kinds = rec.kinds();
+    assert_eq!(
+        kinds.last().map(String::as_str),
+        Some("event_log_backfill_skipped")
+    );
+    // The newest MIRROR_MAX_BACKFILL events plus the gap record.
+    assert_eq!(kinds.len() as i64, MIRROR_MAX_BACKFILL + 1);
+    let gap = s
+        .list_events(&EventFilter {
+            kind: Some("event_log_backfill_skipped".into()),
+            ..EventFilter::default()
+        })
+        .unwrap();
+    assert_eq!(gap.len(), 1);
+    assert_eq!(gap[0].details["skipped"], 25);
+    assert_eq!(gap[0].details["first_skipped_id"], 1);
+}
+
+#[test]
+fn removing_the_newest_events_is_detected_as_truncation() {
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    for _ in 0..4 {
+        s.append_event(&event("device_arrived", Severity::Info, true))
+            .unwrap();
+    }
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { entries: 5 }
+    ));
+    // Attacker with file access: drop the guard, delete the newest two.
+    s.connection_for_tests()
+        .execute_batch(
+            "DROP TRIGGER security_events_retention_only_delete;
+             DELETE FROM security_events WHERE id > 3;",
+        )
+        .unwrap();
+    assert_eq!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Truncated {
+            entries: 3,
+            last_id: 3,
+            highest_issued: 5
+        }
+    );
+    // New events chained onto the remaining head: the id gap reveals it.
+    s.append_event(&event("device_removed", Severity::Info, true))
+        .unwrap();
+    assert_eq!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Missing {
+            entries: 3,
+            after_id: 3,
+            next_id: 6
+        }
+    );
+    // Deleting everything is detected too.
+    s.connection_for_tests()
+        .execute_batch("DELETE FROM security_events;")
+        .unwrap();
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Truncated {
+            last_id: 0,
+            highest_issued: 6,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn retention_is_not_mistaken_for_truncation() {
+    let c = clock();
+    let mut s = Store::open_in_memory(c.clone()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    s.append_event(&event("device_arrived", Severity::Info, true))
+        .unwrap();
+    let mut settings = s.settings().unwrap();
+    settings.audit_retention_days = 30;
+    s.save_settings(&settings, "t").unwrap();
+    c.advance(40 * DAY);
+    assert!(s.apply_retention().unwrap() > 0);
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { .. }
+    ));
+}
+
+#[test]
+fn audit_checkpoint_records_the_head_and_reflects_chain_damage() {
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    s.append_event(&event("device_arrived", Severity::Info, true))
+        .unwrap();
+    let head = s
+        .list_events(&EventFilter::default())
+        .unwrap()
+        .into_iter()
+        .max_by_key(|e| e.id)
+        .unwrap();
+    let cp = s.record_audit_checkpoint().unwrap();
+    assert_eq!(cp.chain, "intact");
+    assert_eq!(
+        (cp.head_id, cp.head_hash.as_str()),
+        (head.id, head.hash.as_str())
+    );
+    assert_eq!(cp.entries, 2);
+    assert_eq!(cp.highest_issued, head.id);
+    assert_eq!(cp.checkpoint_id, head.id + 1);
+    let stored = s
+        .list_events(&EventFilter {
+            kind: Some("audit_checkpoint".into()),
+            ..EventFilter::default()
+        })
+        .unwrap();
+    assert_eq!(stored[0].severity, Severity::Info);
+    assert_eq!(stored[0].details["head_hash"], head.hash);
+    // The checkpoint is itself part of the verified chain.
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { entries: 3 }
+    ));
+
+    // After truncation the next checkpoint says so, as a warning.
+    s.connection_for_tests()
+        .execute_batch(
+            "DROP TRIGGER security_events_retention_only_delete;
+             DELETE FROM security_events WHERE kind = 'audit_checkpoint';",
+        )
+        .unwrap();
+    let cp2 = s.record_audit_checkpoint().unwrap();
+    assert_eq!(cp2.chain, "truncated");
+    let latest = s
+        .list_events(&EventFilter {
+            kind: Some("audit_checkpoint".into()),
+            ..EventFilter::default()
+        })
+        .unwrap();
+    assert_eq!(latest[0].severity, Severity::Warning);
 }
 
 // ------------------------------------------------------------ backup/restore
@@ -879,4 +1106,116 @@ fn v1_database_upgrades_to_v2_keeping_data_and_gaining_guards() {
             .is_err(),
         "guards are active after the upgrade"
     );
+}
+
+#[test]
+fn external_checkpoints_reveal_rewrites_truncation_and_resequencing() {
+    let dir = TempDir::new("checkpoint");
+    let db = dir.0.join("rustward.db");
+    let mut s = Store::open(&db, clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    for _ in 0..3 {
+        s.append_event(&event("device_arrived", Severity::Info, true))
+            .unwrap();
+    }
+    let cp = s.record_audit_checkpoint().unwrap();
+    let prefix: String = cp.head_hash.chars().take(16).collect();
+    assert_eq!(
+        s.check_checkpoint(cp.head_id, &prefix).unwrap(),
+        CheckpointCheck::Matches
+    );
+    // The value as Event Viewer shows it ("…" suffix) is accepted.
+    assert_eq!(
+        s.check_checkpoint(cp.head_id, &format!("{prefix}…"))
+            .unwrap(),
+        CheckpointCheck::Matches
+    );
+    // Read-only check of the file (as run while the service holds it open).
+    assert_eq!(
+        rustward_storage::check_checkpoint_file(&db, cp.head_id, &prefix).unwrap(),
+        CheckpointCheck::Matches
+    );
+
+    // Malformed input is refused, not treated as a mismatch.
+    for bad in ["", "abc", "zzzzzzzzzzzzzzzz", "0123456789abcde"] {
+        assert!(matches!(
+            s.check_checkpoint(cp.head_id, bad),
+            Err(StorageError::Invalid(_))
+        ));
+    }
+    assert!(s.check_checkpoint(0, &prefix).is_err());
+
+    // Attacker with file access rewrites history consistently: deletes the
+    // newest events, resets the AUTOINCREMENT counter and recomputes nothing
+    // else. The internal chain verifies again, but the external checkpoint
+    // does not.
+    s.connection_for_tests()
+        .execute_batch(&format!(
+            "DROP TRIGGER security_events_retention_only_delete;
+             DELETE FROM security_events WHERE id >= {};
+             UPDATE sqlite_sequence SET seq = {} WHERE name = 'security_events';",
+            cp.head_id,
+            cp.head_id - 1
+        ))
+        .unwrap();
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { .. }
+    ));
+    assert_eq!(
+        s.check_checkpoint(cp.head_id, &prefix).unwrap(),
+        CheckpointCheck::EventMissing
+    );
+    // Then appends a forged event with the same id: hash differs.
+    s.append_event(&event("device_removed", Severity::Info, true))
+        .unwrap();
+    assert!(matches!(
+        s.check_checkpoint(cp.head_id, &prefix).unwrap(),
+        CheckpointCheck::HashDiffers { .. }
+    ));
+    // Events older than the oldest remaining one cannot be judged.
+    s.connection_for_tests()
+        .execute_batch("DELETE FROM security_events WHERE id <= 2;")
+        .unwrap();
+    assert_eq!(
+        s.check_checkpoint(1, &prefix).unwrap(),
+        CheckpointCheck::OlderThanRetention { oldest_id: 3 }
+    );
+}
+
+#[test]
+fn concurrent_first_opens_of_a_new_database_serialise_cleanly() {
+    // F-19: two processes (service + a second instance, or service + tool)
+    // creating the database at the same time used to race on the DDL.
+    for round in 0..5 {
+        let dir = TempDir::new(&format!("race{round}"));
+        let db = dir.0.join("rustward.db");
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let (db, barrier) = (db.clone(), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut s = Store::open(&db, clock())?;
+                    s.initialize_policy(&state(), "t")
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for r in &results {
+            assert!(r.is_ok(), "round {round}: {r:?}");
+        }
+        let created = results.iter().filter(|r| matches!(r, Ok(true))).count();
+        assert_eq!(created, 1, "exactly one opener initialises the policy");
+        let s = Store::open(&db, clock()).unwrap();
+        let versions: i64 = s
+            .connection_for_tests()
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(versions, 2, "each migration recorded once");
+        assert!(matches!(
+            s.verify_chain().unwrap(),
+            ChainStatus::Intact { entries: 1 }
+        ));
+    }
 }

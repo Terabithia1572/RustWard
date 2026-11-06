@@ -18,6 +18,8 @@
 pub mod frame;
 pub mod messages;
 pub mod rpc;
+pub mod server;
+pub mod service_sid;
 pub mod transport;
 pub mod validate;
 
@@ -32,16 +34,23 @@ pub use messages::{AccessLevel, Request, ResponseBody};
 /// Protocol version. Bump on any incompatible change.
 pub const PROTOCOL_VERSION: u16 = 1;
 
+/// SCM name of the RustWard service. Clients require the pipe server
+/// process to be this service's process.
+pub const SERVICE_NAME: &str = "RustWardService";
+
 /// Read-only pipe (any authenticated local user).
 pub const PIPE_NAME_STATUS: &str = r"\\.\pipe\RustWard.Status.v1";
 /// Administrative pipe (SYSTEM + Administrators only).
 pub const PIPE_NAME_ADMIN: &str = r"\\.\pipe\RustWard.Admin.v1";
 
 /// SDDL for the read-only pipe: owner LocalSystem (clients verify it),
-/// SYSTEM and Administrators full access, Authenticated Users read/write
-/// (needed to send requests; the server still accepts only read-only
-/// requests on this pipe).
-pub const SDDL_STATUS: &str = "O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)";
+/// SYSTEM and Administrators full access, Authenticated Users
+/// `FILE_GENERIC_READ | FILE_WRITE_DATA` (`0x12008b`) - enough to send
+/// requests and read replies, but **not** `FILE_CREATE_PIPE_INSTANCE`
+/// (= `FILE_APPEND_DATA`, included in `GENERIC_WRITE`), so a standard user
+/// cannot create server instances of this pipe (Phase 9B finding F-18).
+/// The server still accepts only read-only requests on this pipe.
+pub const SDDL_STATUS: &str = "O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12008b;;;AU)";
 /// SDDL for the admin pipe: owner LocalSystem, SYSTEM and Administrators
 /// only. Standard users cannot open it at all.
 pub const SDDL_ADMIN: &str = "O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)";
@@ -223,11 +232,31 @@ mod tests {
             "only SYSTEM and Administrators may open the admin pipe"
         );
         let status = aces(SDDL_STATUS);
-        assert!(status.contains(&("GRGW".into(), "AU".into())));
-        assert!(
-            !status.iter().any(|(r, s)| s == "AU" && r.contains("GA")),
-            "authenticated users never get full control"
-        );
+        let au: Vec<&String> = status
+            .iter()
+            .filter(|(_, s)| s == "AU")
+            .map(|(r, _)| r)
+            .collect();
+        assert_eq!(au.len(), 1);
+        // No generic rights for users: GENERIC_WRITE/GENERIC_ALL include
+        // FILE_CREATE_PIPE_INSTANCE.
+        assert!(!au[0].contains('G'), "{}", au[0]);
+        let mask = u32::from_str_radix(au[0].trim_start_matches("0x"), 16).unwrap();
+        const FILE_GENERIC_READ: u32 = 0x0012_0089;
+        const FILE_WRITE_DATA: u32 = 0x0000_0002;
+        const FILE_CREATE_PIPE_INSTANCE: u32 = 0x0000_0004;
+        const WRITE_DAC: u32 = 0x0004_0000;
+        const WRITE_OWNER: u32 = 0x0008_0000;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+        assert_eq!(mask, FILE_GENERIC_READ | FILE_WRITE_DATA);
+        for forbidden in [
+            FILE_CREATE_PIPE_INSTANCE,
+            WRITE_DAC,
+            WRITE_OWNER,
+            FILE_WRITE_ATTRIBUTES,
+        ] {
+            assert_eq!(mask & forbidden, 0, "{forbidden:#x}");
+        }
     }
 
     #[test]

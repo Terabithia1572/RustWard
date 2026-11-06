@@ -2,9 +2,18 @@
 //! and type-checked only; native tests are deferred to the VM phase.
 //!
 //! Security design:
-//! - The server creates every instance with `FILE_FLAG_FIRST_PIPE_INSTANCE`
-//!   (one instance at a time), so it fails instead of sharing a name that
-//!   another process pre-created (pipe squatting).
+//! - Multiple instances (Phase 9B, F-13): [`PipeListener`] always keeps one
+//!   listening instance. The first instance of the pipe is created with
+//!   `FILE_FLAG_FIRST_PIPE_INSTANCE`, so the server fails instead of joining
+//!   a pipe another process pre-created (squatting); further instances are
+//!   created only right after one of ours connected, while our pipe object
+//!   provably exists. If the listening instance cannot be replaced, the next
+//!   accept starts over with `FILE_FLAG_FIRST_PIPE_INSTANCE`.
+//! - The DACL never grants `FILE_CREATE_PIPE_INSTANCE` to non-administrators
+//!   (it equals `FILE_APPEND_DATA` and is part of `FILE_GENERIC_WRITE`):
+//!   the status pipe grants Authenticated Users `FILE_GENERIC_READ |
+//!   FILE_WRITE_DATA` only, and clients open with exactly those rights
+//!   (Phase 9B finding F-18).
 //! - `PIPE_REJECT_REMOTE_CLIENTS`; DACL from SDDL ([`crate::SDDL_ADMIN`] /
 //!   [`crate::SDDL_STATUS`]).
 //! - The client identity comes from the client's Windows token
@@ -26,6 +35,10 @@
 //!   not sufficient: a standard user can run code in session 0 through a
 //!   scheduled task ("run whether user is logged on or not") and squat the
 //!   pipe name while the service is stopped (Phase 9A finding F-03).
+//!   Additionally (Phase 9B) the server process id
+//!   (`GetNamedPipeServerProcessId`) must equal the process id the Service
+//!   Control Manager reports for the RustWard service, which also rejects an
+//!   instance created by another process on our own pipe.
 //! - Reads never block indefinitely: data availability is polled with
 //!   `PeekNamedPipe` against a deadline.
 
@@ -34,27 +47,33 @@ use std::ptr;
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, GENERIC_READ, GetLastError, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
+    LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-    SE_KERNEL_OBJECT,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, IsWellKnownSid,
-    LookupAccountSidW, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
-    SECURITY_ATTRIBUTES, SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation,
-    TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, LookupAccountSidW,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
+    SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser,
+    WinBuiltinAdministratorsSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_WRITE_DATA, FlushFileBuffers, OPEN_EXISTING,
     PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerSessionId,
-    ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-    PIPE_WAIT, PeekNamedPipe, WaitNamedPipeW,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
+    GetNamedPipeServerSessionId, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, PeekNamedPipe,
+    WaitNamedPipeW,
+};
+use windows_sys::Win32::System::Services::{
+    CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_HANDLE,
+    SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_STATUS_PROCESS,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -64,6 +83,12 @@ use crate::{AccessLevel, ClientIdentity, IdentitySource};
 
 const PIPE_BUFFER: u32 = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// Once the first byte of a frame has arrived, the rest must follow within
+/// this time (otherwise the frame is incomplete and the connection closed).
+const FRAME_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Rights a client needs: read, write data. Never `GENERIC_WRITE`, which
+/// includes `FILE_CREATE_PIPE_INSTANCE`.
+const CLIENT_ACCESS: u32 = GENERIC_READ | FILE_WRITE_DATA;
 /// Large enough for any SID (SECURITY_MAX_SID_SIZE is 68).
 const SID_BUFFER_BYTES: usize = 128;
 
@@ -83,6 +108,13 @@ fn os_err(api: &str) -> TransportError {
 /// Owned kernel handle, closed on drop.
 #[derive(Debug)]
 struct OwnedHandle(HANDLE);
+
+// SAFETY: a kernel handle is a process-wide value, not tied to the thread
+// that created it; `OwnedHandle` owns it exclusively, so moving it to another
+// thread (a pooled connection worker) cannot cause a double close. It is not
+// `Sync`: shared access goes through `Mutex` (PipeListener) or `&mut`
+// (Transport).
+unsafe impl Send for OwnedHandle {}
 
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
@@ -110,6 +142,80 @@ impl Drop for LocalSecurityDescriptor {
             }
         }
     }
+}
+
+/// String form (`S-1-…`) of a SID.
+///
+/// # Safety
+/// `sid` must point to a valid SID for the duration of the call.
+unsafe fn sid_to_string(sid: PSID) -> Option<String> {
+    let mut out: windows_sys::core::PWSTR = ptr::null_mut();
+    // SAFETY: `sid` is valid per the caller; `out` receives a LocalAlloc'd
+    // NUL-terminated string that is freed below.
+    if unsafe { ConvertSidToStringSidW(sid, &mut out) } == 0 || out.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    // SAFETY: `out` is NUL-terminated.
+    while unsafe { *out.add(len) } != 0 {
+        len += 1;
+    }
+    // SAFETY: `len` UTF-16 units are readable at `out`.
+    let text = String::from_utf16(unsafe { std::slice::from_raw_parts(out, len) }).ok();
+    // SAFETY: allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe {
+        LocalFree(out.cast::<c_void>() as HLOCAL);
+    }
+    text
+}
+
+/// Service Control Manager handle, closed on drop.
+struct ScHandle(SC_HANDLE);
+
+impl Drop for ScHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: the handle came from OpenSCManagerW/OpenServiceW and is
+            // closed exactly once.
+            unsafe {
+                CloseServiceHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Process id of a running service, from the SCM (`None` if not running).
+fn service_process_id(service: &str) -> Result<Option<u32>, TransportError> {
+    // SAFETY: null machine and database names select the local active
+    // database; SC_MANAGER_CONNECT is granted to authenticated users.
+    let scm = ScHandle(unsafe { OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT) });
+    if scm.0.is_null() {
+        return Err(os_err("OpenSCManagerW"));
+    }
+    let name = wide(service);
+    // SAFETY: `scm` is a live SCM handle; `name` is NUL-terminated UTF-16.
+    let svc = ScHandle(unsafe { OpenServiceW(scm.0, name.as_ptr(), SERVICE_QUERY_STATUS) });
+    if svc.0.is_null() {
+        return Err(os_err("OpenServiceW"));
+    }
+    // SAFETY: SERVICE_STATUS_PROCESS is plain data; all-zero is valid.
+    let mut status: SERVICE_STATUS_PROCESS = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(size_of::<SERVICE_STATUS_PROCESS>()).unwrap_or(36);
+    let mut needed = 0u32;
+    // SAFETY: `status` is a writable SERVICE_STATUS_PROCESS of `size` bytes.
+    let ok = unsafe {
+        QueryServiceStatusEx(
+            svc.0,
+            SC_STATUS_PROCESS_INFO,
+            (&raw mut status).cast::<u8>(),
+            size,
+            &mut needed,
+        )
+    };
+    if ok == 0 {
+        return Err(os_err("QueryServiceStatusEx"));
+    }
+    Ok((status.dwProcessId != 0).then_some(status.dwProcessId))
 }
 
 /// Reverts impersonation on drop. If reverting fails the thread would keep
@@ -267,12 +373,23 @@ fn client_identity(
     })
 }
 
-/// Pipe server for one pipe name.
-#[derive(Debug)]
+/// Pipe server for one pipe name. Keeps one listening instance at all
+/// times while serving (see the module documentation).
 pub struct PipeListener {
     name: Vec<u16>,
     sddl: String,
     max_access: AccessLevel,
+    /// Next listening instance, created right after the previous one
+    /// connected.
+    next: std::sync::Mutex<Option<OwnedHandle>>,
+}
+
+impl std::fmt::Debug for PipeListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PipeListener")
+            .field("max_access", &self.max_access)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PipeListener {
@@ -283,27 +400,30 @@ impl PipeListener {
             name: wide(name),
             sddl: sddl.to_owned(),
             max_access,
+            next: std::sync::Mutex::new(None),
         }
     }
 
-    /// Create a pipe instance and wait for one client. The caller is
-    /// identified per request with [`PipeConnection::client_identity`] after
-    /// its frame has been read (see `rpc::serve_connection_identified`).
-    pub fn accept(&self) -> Result<PipeConnection, TransportError> {
+    fn create_instance(&self, first: bool) -> Result<OwnedHandle, TransportError> {
         let sd = security_descriptor(&self.sddl)?;
         let sa = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(24),
             lpSecurityDescriptor: sd.0,
             bInheritHandle: 0,
         };
+        let open_mode = if first {
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+        } else {
+            PIPE_ACCESS_DUPLEX
+        };
         // SAFETY: `self.name` is NUL-terminated UTF-16; `sa` and the security
         // descriptor it points to outlive the call.
         let h = unsafe {
             CreateNamedPipeW(
                 self.name.as_ptr(),
-                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                open_mode,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                1,
+                PIPE_UNLIMITED_INSTANCES,
                 PIPE_BUFFER,
                 PIPE_BUFFER,
                 0,
@@ -311,20 +431,80 @@ impl PipeListener {
             )
         };
         if h == INVALID_HANDLE_VALUE {
-            return Err(os_err("CreateNamedPipeW (possible pipe-name squatting)"));
+            let e = last_error();
+            return Err(TransportError::Io(if first && e == ERROR_ACCESS_DENIED {
+                "CreateNamedPipeW: the pipe name already exists (possible pipe-name squatting)"
+                    .into()
+            } else {
+                format!("CreateNamedPipeW failed with Win32 error {e}")
+            }));
         }
-        let handle = OwnedHandle(h);
+        Ok(OwnedHandle(h))
+    }
+
+    /// Wait for one client on the listening instance, then create the next
+    /// listening instance before returning the connection.
+    pub fn accept(&self) -> Result<PipeConnection, TransportError> {
+        let pending = self
+            .next
+            .lock()
+            .map_err(|_| TransportError::Io("pipe listener poisoned".into()))?
+            .take();
+        let handle = match pending {
+            Some(h) => h,
+            None => self.create_instance(true)?,
+        };
         // SAFETY: `handle` is a valid pipe handle; synchronous connect.
         if unsafe { ConnectNamedPipe(handle.0, ptr::null_mut()) } == 0
             && last_error() != ERROR_PIPE_CONNECTED
         {
             return Err(os_err("ConnectNamedPipe"));
         }
+        // `handle` is connected, so our pipe object exists: a further
+        // instance joins it (never another process's pipe).
+        // If this fails, the next accept starts over with
+        // FILE_FLAG_FIRST_PIPE_INSTANCE, which fails (and is audited as an
+        // accept error) while our connected instances exist: fail closed.
+        if let (Ok(next), Ok(mut slot)) = (self.create_instance(false), self.next.lock()) {
+            *slot = Some(next);
+        }
         Ok(PipeConnection {
             handle,
             server_side: true,
             max_access: self.max_access,
         })
+    }
+
+    /// Unblock a pending [`Self::accept`] by connecting to our own pipe and
+    /// closing at once (used at shutdown).
+    pub fn wake(&self) {
+        // SAFETY: `self.name` is NUL-terminated UTF-16; the returned handle
+        // is closed immediately by OwnedHandle.
+        let h = unsafe {
+            CreateFileW(
+                self.name.as_ptr(),
+                CLIENT_ACCESS,
+                0,
+                ptr::null(),
+                OPEN_EXISTING,
+                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                ptr::null_mut(),
+            )
+        };
+        drop(OwnedHandle(h));
+    }
+}
+
+impl crate::server::Listener for PipeListener {
+    type Conn = PipeConnection;
+    fn accept(&self) -> Result<PipeConnection, TransportError> {
+        PipeListener::accept(self)
+    }
+    fn wake(&self) {
+        PipeListener::wake(self);
+    }
+    fn identify(&self, conn: &PipeConnection) -> Result<ClientIdentity, TransportError> {
+        conn.client_identity()
     }
 }
 
@@ -360,7 +540,7 @@ impl PipeConnection {
             let h = unsafe {
                 CreateFileW(
                     name_w.as_ptr(),
-                    GENERIC_READ | GENERIC_WRITE,
+                    CLIENT_ACCESS,
                     0,
                     ptr::null(),
                     OPEN_EXISTING,
@@ -390,6 +570,7 @@ impl PipeConnection {
 
     fn verify_server(&self) -> Result<(), TransportError> {
         self.verify_server_owner()?;
+        self.verify_server_process()?;
         let mut session = u32::MAX;
         // SAFETY: valid client pipe handle and out-pointer.
         if unsafe { GetNamedPipeServerSessionId(self.handle.0, &mut session) } == 0 {
@@ -401,6 +582,27 @@ impl PipeConnection {
             Err(TransportError::PeerRejected(format!(
                 "pipe server runs in session {session}, expected the service session 0"
             )))
+        }
+    }
+
+    /// The process serving this pipe instance must be the RustWard service
+    /// process according to the SCM.
+    fn verify_server_process(&self) -> Result<(), TransportError> {
+        let mut server_pid = 0u32;
+        // SAFETY: valid client pipe handle and out-pointer.
+        if unsafe { GetNamedPipeServerProcessId(self.handle.0, &mut server_pid) } == 0 {
+            return Err(os_err("GetNamedPipeServerProcessId"));
+        }
+        match service_process_id(crate::SERVICE_NAME)? {
+            Some(pid) if pid == server_pid => Ok(()),
+            Some(pid) => Err(TransportError::PeerRejected(format!(
+                "pipe served by process {server_pid}, but {} runs as process {pid}",
+                crate::SERVICE_NAME
+            ))),
+            None => Err(TransportError::PeerRejected(format!(
+                "{} is not running; refusing a pipe served by process {server_pid}",
+                crate::SERVICE_NAME
+            ))),
         }
     }
 
@@ -430,16 +632,20 @@ impl PipeConnection {
             )));
         }
         let sd = LocalSecurityDescriptor(sd);
-        // SAFETY: `owner` points into `sd`, which is alive here.
-        let is_system =
-            !owner.is_null() && unsafe { IsWellKnownSid(owner, WinLocalSystemSid) } != 0;
-        drop(sd);
-        if is_system {
-            Ok(())
+        let owner_sid = if owner.is_null() {
+            None
         } else {
-            Err(TransportError::PeerRejected(
-                "pipe is not owned by LocalSystem; refusing to talk to a possible impostor".into(),
-            ))
+            // SAFETY: `owner` points into `sd`, which is alive until the
+            // `drop(sd)` below.
+            unsafe { sid_to_string(owner) }
+        };
+        drop(sd);
+        match owner_sid {
+            Some(sid) if crate::service_sid::is_trusted_pipe_owner(&sid) => Ok(()),
+            other => Err(TransportError::PeerRejected(format!(
+                "pipe owner {} is neither LocalSystem nor the RustWard service; refusing to talk to a possible impostor",
+                other.as_deref().unwrap_or("unknown")
+            ))),
         }
     }
 
@@ -542,13 +748,28 @@ impl Transport for PipeConnection {
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>, TransportError> {
-        let deadline = Instant::now() + timeout;
+        // Wait for the first byte without consuming anything, so a Timeout
+        // never splits a frame (contract of `rpc::serve_connection_until`).
+        let wait_until = Instant::now() + timeout;
+        while self.available()? == 0 {
+            if Instant::now() >= wait_until {
+                return Err(TransportError::Timeout);
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        let deadline = Instant::now() + FRAME_COMPLETION_TIMEOUT;
+        let incomplete = |e: TransportError| match e {
+            TransportError::Timeout => TransportError::Io("incomplete frame".into()),
+            other => other,
+        };
         let mut header = [0u8; 4];
-        self.read_exact_until(&mut header, deadline)?;
+        self.read_exact_until(&mut header, deadline)
+            .map_err(incomplete)?;
         let len = payload_len(header).map_err(|_| TransportError::FrameTooLarge)?;
         let mut frame = vec![0u8; 4 + len];
         frame[..4].copy_from_slice(&header);
-        self.read_exact_until(&mut frame[4..], deadline)?;
+        self.read_exact_until(&mut frame[4..], deadline)
+            .map_err(incomplete)?;
         Ok(frame)
     }
 }

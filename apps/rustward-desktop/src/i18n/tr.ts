@@ -253,6 +253,8 @@ export const tr = {
   "notify.region": "Bildirimler",
   "diag.eventLogFailures": "Yazılamayan kayıt",
   "diag.eventLogDelivered": "Yazılan kayıt",
+  "diag.eventLogPending": "Yazılmayı bekleyen (sıra korunur)",
+  "diag.eventLogSkipped": "Kopyalanmayan (birikme sınırı; RustWard'da duruyor)",
   "diag.eventLogOff": "Bağlı değil (yalnızca Windows hizmetinde)",
   "diag.eventLogOn": "Bağlı",
   "diag.eventLogAttached": "Aktarım",

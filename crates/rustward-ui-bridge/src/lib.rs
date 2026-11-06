@@ -38,9 +38,24 @@ mod dev {
         next_id: std::sync::atomic::AtomicU64,
     }
 
+    /// Who the development backend pretends the caller is. The service
+    /// determines this from the Windows token; here tests choose it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum DevCaller {
+        /// Elevated member of Administrators (the default for developers).
+        ElevatedAdministrator,
+        /// Standard user on the read-only channel.
+        StandardUser,
+    }
+
     impl DevBackend {
         /// Open (or create) the development database in `dir`.
         pub fn open(dir: &std::path::Path) -> Result<Self, String> {
+            Self::open_as(dir, DevCaller::ElevatedAdministrator)
+        }
+
+        /// Open as a chosen caller (integration tests).
+        pub fn open_as(dir: &std::path::Path, caller: DevCaller) -> Result<Self, String> {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             let clock: Arc<dyn Clock> = Arc::new(SystemClock);
             let store = Store::open(&dir.join("rustward-dev.db"), Arc::clone(&clock))
@@ -67,16 +82,22 @@ mod dev {
             let account = std::env::var("USERNAME")
                 .or_else(|_| std::env::var("USER"))
                 .unwrap_or_else(|_| "developer".into());
+            let admin = caller == DevCaller::ElevatedAdministrator;
             Ok(Self {
                 app: Arc::new(app),
                 identity: ClientIdentity {
                     account,
                     sid: None,
-                    // Development only: the local developer acts as administrator.
-                    is_administrator: true,
-                    elevated: true,
+                    // Development only: the local developer acts as
+                    // administrator unless a test asks for a standard user.
+                    is_administrator: admin,
+                    elevated: admin,
                     source: IdentitySource::DevBackend,
-                    channel_max_access: AccessLevel::Administrator,
+                    channel_max_access: if admin {
+                        AccessLevel::Administrator
+                    } else {
+                        AccessLevel::ReadOnly
+                    },
                 },
                 next_id: std::sync::atomic::AtomicU64::new(1),
             })
@@ -100,6 +121,9 @@ mod dev {
         }
     }
 }
+
+#[cfg(all(debug_assertions, feature = "dev-backend"))]
+pub use dev::DevCaller;
 
 /// The selected backend.
 #[derive(Debug)]
@@ -139,6 +163,15 @@ impl Bridge {
     #[cfg(all(debug_assertions, feature = "dev-backend"))]
     pub fn dev_at(dir: &std::path::Path) -> Result<Self, String> {
         dev::DevBackend::open(dir).map(Self::Dev)
+    }
+
+    /// Development backend for a chosen caller (integration tests).
+    ///
+    /// # Errors
+    /// When the development database cannot be opened.
+    #[cfg(all(debug_assertions, feature = "dev-backend"))]
+    pub fn dev_at_as(dir: &std::path::Path, caller: DevCaller) -> Result<Self, String> {
+        dev::DevBackend::open_as(dir, caller).map(Self::Dev)
     }
 
     /// Backend name shown in diagnostics.

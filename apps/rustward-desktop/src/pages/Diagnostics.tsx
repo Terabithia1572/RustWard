@@ -145,6 +145,12 @@ export function DiagnosticsPage() {
                 <Row label={t("diag.eventLogFailures")}>
                   <Badge tone={(d.event_log?.failures ?? 0) > 0 ? "warning" : "neutral"}>{d.event_log?.failures ?? 0}</Badge>
                 </Row>
+                <Row label={t("diag.eventLogPending")}>
+                  <Badge tone={(d.event_log?.pending ?? 0) > 0 ? "warning" : "neutral"}>{d.event_log?.pending ?? 0}</Badge>
+                </Row>
+                <Row label={t("diag.eventLogSkipped")}>
+                  <Badge tone={(d.event_log?.skipped ?? 0) > 0 ? "warning" : "neutral"}>{d.event_log?.skipped ?? 0}</Badge>
+                </Row>
               </dl>
             </Card>
             <Card title={t("diag.policy")}>

@@ -26,6 +26,10 @@ if [ -d apps/rustward-desktop/node_modules ]; then
   run "tsc typecheck"   bash -c "cd apps/rustward-desktop && npx tsc -b --noEmit"
   run "vitest"          bash -c "cd apps/rustward-desktop && npx vitest run"
   run "vite build"      bash -c "cd apps/rustward-desktop && npx vite build"
+  run "offline assets (no runtime network)" node scripts/check-offline-assets.mjs
+  run "build real-backend harness" cargo build -p rustward-ui-bridge --features dev-backend --example stdio_backend --locked
+  run "tsc typecheck (integration tests)" bash -c "cd apps/rustward-desktop && npx tsc -p tsconfig.integration.json --noEmit"
+  run "vitest integration (real backend + SQLite)" bash -c "cd apps/rustward-desktop && RUSTWARD_STDIO_BACKEND=\$PWD/../../target/debug/examples/stdio_backend npx vitest run --config vitest.integration.config.ts"
 else
   skip "frontend checks" "run npm ci in apps/rustward-desktop first"
 fi

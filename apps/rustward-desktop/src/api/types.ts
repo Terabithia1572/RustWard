@@ -277,7 +277,7 @@ export interface DiagnosticsView {
     enforcement_gaps: string[];
   };
   /** Windows Event Log mirroring (absent from older services). */
-  event_log?: { attached: boolean; delivered: number; failures: number };
+  event_log?: { attached: boolean; delivered: number; failures: number; pending?: number; skipped?: number };
   unsupported_features: string[];
   pending_native_tests: string[];
   app_version: string;

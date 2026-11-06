@@ -27,19 +27,85 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
 use rustward_core::policy_edit::{ChangeRecord, EditOutcome, PolicyState};
 use sha2::{Digest, Sha256};
 
 pub use model::{
-    AppSettings, BackupKind, BackupRecord, BackupRejection, ChainStatus, DeviceRow, EventFilter,
-    Language, NewEvent, PolicyChangeRow, RestoreCandidate, SecurityEvent, Severity, Theme,
+    AppSettings, AuditCheckpoint, BackupKind, BackupRecord, BackupRejection, ChainStatus,
+    CheckpointCheck, DeviceRow, EventFilter, Language, NewEvent, PolicyChangeRow, RestoreCandidate,
+    SecurityEvent, Severity, Theme,
 };
+
+/// [`Store::check_checkpoint`] on a database file opened **read-only** (safe
+/// while the service is running; WAL readers do not block the writer).
+///
+/// # Errors
+/// See [`Store::check_checkpoint`]; also if the file cannot be opened.
+pub fn check_checkpoint_file(
+    path: &std::path::Path,
+    head_id: i64,
+    hash_prefix: &str,
+) -> Result<CheckpointCheck, StorageError> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    check_checkpoint_conn(&conn, head_id, hash_prefix)
+}
+
+fn check_checkpoint_conn(
+    conn: &Connection,
+    head_id: i64,
+    hash_prefix: &str,
+) -> Result<CheckpointCheck, StorageError> {
+    let prefix = hash_prefix
+        .trim()
+        .trim_end_matches('…')
+        .to_ascii_lowercase();
+    if prefix.len() < 16 || prefix.len() > 64 || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(StorageError::Invalid(
+            "checkpoint hash must be 16 to 64 hexadecimal characters".into(),
+        ));
+    }
+    if head_id <= 0 {
+        return Err(StorageError::Invalid(
+            "checkpoint head id must be positive".into(),
+        ));
+    }
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT hash FROM security_events WHERE id = ?1",
+            params![head_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(hash) = stored {
+        return Ok(if hash.starts_with(&prefix) {
+            CheckpointCheck::Matches
+        } else {
+            CheckpointCheck::HashDiffers {
+                stored_prefix: hash.chars().take(16).collect(),
+            }
+        });
+    }
+    let oldest: Option<i64> =
+        conn.query_row("SELECT MIN(id) FROM security_events", [], |r| r.get(0))?;
+    Ok(match oldest {
+        Some(oldest_id) if head_id < oldest_id => CheckpointCheck::OlderThanRetention { oldest_id },
+        _ => CheckpointCheck::EventMissing,
+    })
+}
 
 /// Genesis value of the event hash chain.
 pub const CHAIN_GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const SETTINGS_KEY: &str = "app_settings";
 const CHAIN_ANCHOR_KEY: &str = "event_chain_anchor";
+/// Settings key of the persisted Event Log mirror cursor (last event id
+/// delivered to the observer).
+const MIRROR_CURSOR_KEY: &str = "event_log_mirror_cursor";
+/// At most this many not-yet-mirrored events are delivered after a restart
+/// or an outage; older ones are skipped and the gap is recorded.
+pub const MIRROR_MAX_BACKFILL: i64 = 1000;
+/// Events delivered per mirror pass.
+const MIRROR_BATCH: i64 = 500;
 /// Maximum message length stored for an event.
 pub const MAX_MESSAGE_LEN: usize = 1000;
 
@@ -232,8 +298,14 @@ pub struct MirrorStatus {
     pub attached: bool,
     /// Events delivered successfully.
     pub delivered: u64,
-    /// Events the observer rejected.
+    /// Delivery attempts the observer rejected.
     pub failures: u64,
+    /// Last event id delivered (persisted across restarts).
+    pub cursor: i64,
+    /// Events committed but not yet delivered.
+    pub pending: u64,
+    /// Events skipped because more than [`MIRROR_MAX_BACKFILL`] were pending.
+    pub skipped: u64,
 }
 
 /// The RustWard database.
@@ -278,7 +350,7 @@ impl Store {
             last_mirrored_id: 0,
             mirror: MirrorStatus::default(),
         };
-        store.last_mirrored_id = store.max_event_id()?;
+        store.last_mirrored_id = store.mirror_cursor()?.unwrap_or(0);
         Ok(store)
     }
 
@@ -290,50 +362,155 @@ impl Store {
         )?)
     }
 
-    /// Attach an observer. Only events committed after this call are
-    /// delivered (history is not replayed).
+    fn mirror_cursor(&self) -> Result<Option<i64>, StorageError> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![MIRROR_CURSOR_KEY],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v.and_then(|v| v.parse().ok()))
+    }
+
+    fn save_mirror_cursor(&self, id: i64) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value, updated_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ms = excluded.updated_ms",
+            params![MIRROR_CURSOR_KEY, id.to_string(), self.clock.now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// If more than [`MIRROR_MAX_BACKFILL`] events are pending, move the
+    /// cursor forward and record the skipped range as an event (which is
+    /// itself mirrored), so the gap is visible in the Event Log.
+    fn bound_mirror_backlog(&mut self) -> Result<(), StorageError> {
+        let max = self.max_event_id()?;
+        if max - self.last_mirrored_id <= MIRROR_MAX_BACKFILL {
+            return Ok(());
+        }
+        let first_skipped = self.last_mirrored_id + 1;
+        let last_skipped = max - MIRROR_MAX_BACKFILL;
+        let skipped = u64::try_from(last_skipped - first_skipped + 1).unwrap_or(0);
+        self.last_mirrored_id = last_skipped;
+        self.mirror.skipped = self.mirror.skipped.saturating_add(skipped);
+        self.save_mirror_cursor(last_skipped)?;
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Warning,
+                kind: "event_log_backfill_skipped".into(),
+                device_key: None,
+                message: format!(
+                    "{skipped} audit events (ids {first_skipped}..={last_skipped}) were not copied to the Windows Event Log; they remain in the RustWard database"
+                ),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "first_skipped_id": first_skipped,
+                    "last_skipped_id": last_skipped,
+                    "skipped": skipped,
+                }),
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Attach an observer. Delivery resumes after the persisted cursor, so
+    /// events written before the observer was attached (start-up) or while
+    /// it was failing (Event Log outage) are delivered now, at most the
+    /// newest [`MIRROR_MAX_BACKFILL`]; a skipped older range is recorded as
+    /// an `event_log_backfill_skipped` event. Delivery is at-least-once: an
+    /// event may be delivered twice if the process stops between delivery
+    /// and saving the cursor (the audit id in the message identifies it).
     pub fn set_event_observer(
         &mut self,
         observer: Arc<dyn EventObserver>,
     ) -> Result<(), StorageError> {
-        self.last_mirrored_id = self.max_event_id()?;
+        self.last_mirrored_id = self.mirror_cursor()?.unwrap_or(0);
+        self.bound_mirror_backlog()?;
         self.observer = Some(observer);
         self.mirror.attached = true;
+        self.mirror_new_events();
         Ok(())
     }
 
     /// Mirror counters.
     #[must_use]
     pub fn mirror_status(&self) -> MirrorStatus {
-        self.mirror
+        let mut m = self.mirror;
+        m.cursor = self.last_mirrored_id;
+        m.pending = self.max_event_id().map_or(0, |max| {
+            u64::try_from(max - self.last_mirrored_id).unwrap_or(0)
+        });
+        m
     }
 
-    /// Deliver events committed since the last delivery. Called after every
-    /// committing write; never fails the write.
+    /// Retry delivery of pending events (e.g. after an Event Log outage).
+    /// Called periodically by the service; never fails.
+    pub fn retry_mirror(&mut self) {
+        if self.observer.is_some() {
+            if self.bound_mirror_backlog().is_err() {
+                self.mirror.failures = self.mirror.failures.saturating_add(1);
+            }
+            self.mirror_new_events();
+        }
+    }
+
+    /// Deliver events committed since the last delivery, in id order. Stops
+    /// at the first rejected event so order is kept and nothing is lost; the
+    /// next commit or [`Self::retry_mirror`] tries again. Never fails the
+    /// write that triggered it.
     fn mirror_new_events(&mut self) {
         let Some(observer) = self.observer.clone() else {
             return;
         };
-        let Ok(events) = self.events_after(self.last_mirrored_id) else {
-            self.mirror.failures = self.mirror.failures.saturating_add(1);
-            return;
-        };
-        for e in events {
-            self.last_mirrored_id = self.last_mirrored_id.max(e.id);
-            match observer.on_event(&e) {
-                Ok(()) => self.mirror.delivered = self.mirror.delivered.saturating_add(1),
-                Err(_) => self.mirror.failures = self.mirror.failures.saturating_add(1),
+        let start = self.last_mirrored_id;
+        // The backlog is bounded by `bound_mirror_backlog`, so this loop ends
+        // after at most a few batches.
+        'batches: loop {
+            let Ok(events) = self.events_after(self.last_mirrored_id, MIRROR_BATCH) else {
+                self.mirror.failures = self.mirror.failures.saturating_add(1);
+                break;
+            };
+            if events.is_empty() {
+                break;
             }
+            for e in events {
+                match observer.on_event(&e) {
+                    Ok(()) => {
+                        self.last_mirrored_id = e.id;
+                        self.mirror.delivered = self.mirror.delivered.saturating_add(1);
+                    }
+                    Err(_) => {
+                        self.mirror.failures = self.mirror.failures.saturating_add(1);
+                        break 'batches;
+                    }
+                }
+            }
+        }
+        if self.last_mirrored_id != start && self.save_mirror_cursor(self.last_mirrored_id).is_err()
+        {
+            self.mirror.failures = self.mirror.failures.saturating_add(1);
         }
     }
 
-    fn events_after(&self, id: i64) -> Result<Vec<SecurityEvent>, StorageError> {
+    fn events_after(&self, id: i64, limit: i64) -> Result<Vec<SecurityEvent>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, utc_ms, severity, kind, device_key, message, simulated, enforcement_state,
                     policy_version, details_json, prev_hash, hash FROM security_events
-             WHERE id > ?1 ORDER BY id ASC LIMIT 10000",
+             WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![id], event_from_row)?;
+        let rows = stmt.query_map(params![id, limit], event_from_row)?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -386,7 +563,9 @@ impl Store {
         settings.validate().map_err(StorageError::Invalid)?;
         let now = self.clock.now_ms();
         let json = serde_json::to_string(settings)?;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO settings (key, value, updated_ms) VALUES (?1, ?2, ?3)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ms = excluded.updated_ms",
@@ -486,7 +665,9 @@ impl Store {
             .validate()
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
         let now = self.clock.now_ms();
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing: i64 = tx.query_row("SELECT COUNT(*) FROM policy_states", [], |r| r.get(0))?;
         if existing > 0 {
             return Ok(false);
@@ -524,7 +705,9 @@ impl Store {
     ) -> Result<(), StorageError> {
         let now = self.clock.now_ms();
         let change: &ChangeRecord = &outcome.change;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let active: Option<i64> = tx
             .query_row(
                 "SELECT version FROM policy_states WHERE active = 1",
@@ -641,7 +824,9 @@ impl Store {
     /// Mark every present device not in `present_keys` as absent.
     /// Returns the number of rows changed.
     pub fn mark_absent_except(&mut self, present_keys: &[String]) -> Result<usize, StorageError> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS keep_keys (k TEXT PRIMARY KEY); DELETE FROM keep_keys;")?;
         for k in present_keys {
             tx.execute(
@@ -760,7 +945,9 @@ impl Store {
     /// Append a security event to the hash chain.
     pub fn append_event(&mut self, e: &NewEvent) -> Result<i64, StorageError> {
         let now = self.clock.now_ms();
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = Self::append_event_tx(&tx, now, e)?;
         tx.commit()?;
         self.mirror_new_events();
@@ -839,6 +1026,7 @@ impl Store {
         )?;
         let mut rows = stmt.query([])?;
         let mut n = 0u64;
+        let mut last_id = 0i64;
         while let Some(r) = rows.next()? {
             let id: i64 = r.get(0)?;
             let sev: String = r.get(2)?;
@@ -863,14 +1051,115 @@ impl Store {
                     .and_then(|v| u64::try_from(v).ok()),
                 details,
             };
+            if last_id != 0 && id != last_id + 1 {
+                return Ok(ChainStatus::Missing {
+                    entries: n,
+                    after_id: last_id,
+                    next_id: id,
+                });
+            }
             let expected = event_hash(&prev, r.get(1)?, &e)?;
             if stored_prev != prev || stored_hash != expected {
                 return Ok(ChainStatus::Broken { first_bad_id: id });
             }
             prev = stored_hash;
             n += 1;
+            last_id = id;
+        }
+        let highest_issued = self.highest_issued_event_id()?;
+        if highest_issued > last_id {
+            return Ok(ChainStatus::Truncated {
+                entries: n,
+                last_id,
+                highest_issued,
+            });
         }
         Ok(ChainStatus::Intact { entries: n })
+    }
+
+    /// Highest event id SQLite has ever issued (`sqlite_sequence`); larger
+    /// than the newest remaining id only if newest events were deleted.
+    fn highest_issued_event_id(&self) -> Result<i64, StorageError> {
+        let seq: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'security_events'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(seq.unwrap_or(0))
+    }
+
+    /// Compare the database with a checkpoint taken from outside it
+    /// (`head #<id> <hash prefix>` in an `audit_checkpoint` Event Log entry).
+    ///
+    /// # Errors
+    /// A prefix shorter than 16 or containing non-hex characters, or a
+    /// database error.
+    pub fn check_checkpoint(
+        &self,
+        head_id: i64,
+        hash_prefix: &str,
+    ) -> Result<CheckpointCheck, StorageError> {
+        check_checkpoint_conn(&self.conn, head_id, hash_prefix)
+    }
+
+    /// Record an `audit_checkpoint` event describing the chain head (newest
+    /// event before the checkpoint, its hash, the number of verified entries
+    /// and the highest issued id). The event is part of the chain and is
+    /// mirrored to the Windows Event Log; comparing a later database with
+    /// these out-of-database copies reveals truncation or rewriting that the
+    /// chain alone cannot (AUDIT-INTEGRITY.md §6). Severity is `warning` when
+    /// the chain is not intact.
+    pub fn record_audit_checkpoint(&mut self) -> Result<AuditCheckpoint, StorageError> {
+        let status = self.verify_chain()?;
+        let (chain, entries, severity) = match &status {
+            ChainStatus::Intact { entries } => ("intact", *entries, Severity::Info),
+            ChainStatus::Broken { .. } => ("broken", 0, Severity::Warning),
+            ChainStatus::Missing { entries, .. } => ("missing", *entries, Severity::Warning),
+            ChainStatus::Truncated { entries, .. } => ("truncated", *entries, Severity::Warning),
+        };
+        let head: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, hash FROM security_events ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (head_id, head_hash) = match head {
+            Some(h) => h,
+            None => (0, Self::last_hash(&self.conn)?),
+        };
+        let highest_issued = self.highest_issued_event_id()?;
+        let short: String = head_hash.chars().take(16).collect();
+        let checkpoint_id = self.append_event(&NewEvent {
+            severity,
+            kind: "audit_checkpoint".into(),
+            device_key: None,
+            message: format!(
+                "audit checkpoint: chain {chain}, {entries} entries, head #{head_id} {short}…, highest issued id {highest_issued}"
+            ),
+            simulated: false,
+            enforcement_state: "n/a".into(),
+            policy_version: None,
+            details: serde_json::json!({
+                "head_id": head_id,
+                "head_hash": head_hash,
+                "entries": entries,
+                "highest_issued": highest_issued,
+                "chain": chain,
+            }),
+        })?;
+        Ok(AuditCheckpoint {
+            head_id,
+            head_hash,
+            entries,
+            highest_issued,
+            chain: chain.into(),
+            checkpoint_id,
+        })
     }
 
     /// Delete events older than the configured retention, moving the chain
@@ -880,7 +1169,9 @@ impl Store {
         let days = self.settings()?.audit_retention_days;
         let now = self.clock.now_ms();
         let cutoff = now - i64::from(days) * 86_400_000;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let last_purged: Option<(i64, String)> = tx
             .query_row(
                 "SELECT id, hash FROM security_events WHERE utc_ms < ?1 ORDER BY id DESC LIMIT 1",
@@ -984,7 +1275,9 @@ impl Store {
                 kind,
                 actor: actor.to_owned(),
             };
-            let tx = self.conn.transaction()?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute(
                 "INSERT INTO backups (file_name, sha256, bytes, created_ms, policy_version, kind, actor)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1174,7 +1467,9 @@ impl Store {
         actor: &str,
     ) -> Result<u64, StorageError> {
         let now = self.clock.now_ms();
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let active: Option<i64> = tx
             .query_row(
                 "SELECT version FROM policy_states WHERE active = 1",

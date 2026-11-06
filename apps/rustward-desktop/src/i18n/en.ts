@@ -255,6 +255,8 @@ export const en: Record<TKey, string> = {
   "notify.region": "Notifications",
   "diag.eventLogFailures": "Entries not written",
   "diag.eventLogDelivered": "Entries written",
+  "diag.eventLogPending": "Waiting to be written (kept in order)",
+  "diag.eventLogSkipped": "Not copied (backlog limit; kept in RustWard)",
   "diag.eventLogOff": "Not attached (Windows service only)",
   "diag.eventLogOn": "Attached",
   "diag.eventLogAttached": "Mirroring",

@@ -33,6 +33,8 @@ windows-sys = { version = "0.61.2", features = [
 # Bundled SQLite: no system library needed on the offline workstations.
 rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
 sha2 = "0.11.1"
+# Only for the documented NT SERVICE SID derivation (not a security hash use).
+sha1 = "0.11.0"
 rustward-core = { path = "crates/rustward-core" }
 rustward-storage = { path = "crates/rustward-storage" }
 rustward-ipc = { path = "crates/rustward-ipc" }

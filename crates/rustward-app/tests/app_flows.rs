@@ -1056,3 +1056,78 @@ fn event_observer_mirrors_events_and_is_reported_in_diagnostics() {
     assert_eq!(d.event_log.delivered as usize, mirrored.len());
     assert_eq!(d.event_log.failures, 0);
 }
+
+#[test]
+fn event_log_outage_is_reported_as_pending_and_recovers_in_order() {
+    use rustward_storage::{EventObserver, SecurityEvent};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Default)]
+    struct Sink {
+        seen: std::sync::Mutex<Vec<i64>>,
+        down: AtomicBool,
+    }
+    impl EventObserver for Sink {
+        fn on_event(&self, e: &SecurityEvent) -> Result<(), String> {
+            if self.down.load(Ordering::SeqCst) {
+                return Err("RPC server unavailable".into());
+            }
+            self.seen.lock().unwrap().push(e.id);
+            Ok(())
+        }
+    }
+    let s = mem_service();
+    let sink = Arc::new(Sink::default());
+    s.set_event_observer(sink.clone()).unwrap();
+    sink.down.store(true, Ordering::SeqCst);
+    call(&s, Request::LoadSyntheticInventory);
+    let ResponseBody::Diagnostics(d) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    assert!(
+        d.event_log.pending > 0,
+        "outage is visible, nothing dropped"
+    );
+    sink.down.store(false, Ordering::SeqCst);
+    s.retry_event_mirror();
+    let ResponseBody::Diagnostics(d) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    assert_eq!(d.event_log.pending, 0);
+    let ids = sink.seen.lock().unwrap().clone();
+    assert!(ids.windows(2).all(|w| w[0] < w[1]), "in order, once");
+}
+
+#[test]
+fn truncated_audit_chain_is_reported_and_checkpointed() {
+    let dir = TempDir::new("truncated");
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = file_service(&dir, clock.clone());
+    call(&s, Request::LoadSyntheticInventory);
+    let cp = s.record_audit_checkpoint().unwrap();
+    assert_eq!(cp.chain, "intact");
+    drop(s);
+    {
+        let store = Store::open(&dir.0.join("rustward.db"), clock.clone()).unwrap();
+        store
+            .connection_for_tests()
+            .execute_batch(
+                "DROP TRIGGER security_events_retention_only_delete;
+                 DELETE FROM security_events WHERE id >= (SELECT MAX(id) - 2 FROM security_events);",
+            )
+            .unwrap();
+    }
+    let s = file_service(&dir, clock);
+    let ResponseBody::Diagnostics(d) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    // Restarting appended new events onto the remaining head, so the chain
+    // hashes verify; the id gap still reveals the removal.
+    assert!(!d.database.chain_ok);
+    assert!(
+        d.database.chain_status.starts_with("EVENTS MISSING"),
+        "{}",
+        d.database.chain_status
+    );
+    let cp = s.record_audit_checkpoint().unwrap();
+    assert_eq!(cp.chain, "missing");
+}

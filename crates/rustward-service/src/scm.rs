@@ -76,9 +76,12 @@ fn run_service_inner(ctx: ServiceContext) -> Result<(), String> {
         runtime = runtime.with_wake_source(Box::new(rx));
     }
 
-    let _pipes = crate::ipc_server::spawn_pipe_servers(&app, &ctx.stop);
+    let pipes = crate::ipc_server::spawn_pipe_servers(&app);
     ctx.report_running();
     runtime.run(None, None);
+    // Join the pipe threads (in-flight requests are answered first); an
+    // incomplete shutdown is audited as `ipc_shutdown_incomplete`.
+    let _ = pipes.shutdown(&app);
     drop(subscription);
     Ok(())
 }
