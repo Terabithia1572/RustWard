@@ -300,7 +300,18 @@ fn security_descriptor(sddl: &str) -> Result<LocalSecurityDescriptor, TransportE
 }
 
 /// Query `DOMAIN\user` of a token. Best effort.
-fn token_account(token: HANDLE) -> Option<String> {
+/// Account (`DOMAIN\name`) and SID string of a token's user. Must run in
+/// the service's own context: `LookupAccountSidW` fails while impersonating
+/// a client at `SecurityIdentification` level (found in the first VM test,
+/// where every caller was recorded as "unknown").
+fn token_user(token: HANDLE) -> (Option<String>, Option<String>) {
+    match token_user_sid_and_name(token) {
+        Some((sid, name)) => (name, Some(sid)),
+        None => (None, None),
+    }
+}
+
+fn token_user_sid_and_name(token: HANDLE) -> Option<(String, Option<String>)> {
     let mut needed: u32 = 0;
     // SAFETY: size query with a null buffer of length 0 is documented.
     unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed) };
@@ -326,6 +337,8 @@ fn token_account(token: HANDLE) -> Option<String> {
     }
     // SAFETY: on success the buffer starts with a TOKEN_USER structure.
     let sid: PSID = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    // SAFETY: `sid` points into `buf`, which outlives the call.
+    let sid_string = unsafe { sid_to_string(sid) }?;
     let mut name = vec![0u16; 256];
     let mut domain = vec![0u16; 256];
     let mut name_len = 256u32;
@@ -345,12 +358,12 @@ fn token_account(token: HANDLE) -> Option<String> {
         )
     };
     if ok == 0 {
-        return None;
+        return Some((sid_string, None));
     }
     let n = String::from_utf16_lossy(&name[..usize::try_from(name_len).ok()?.min(name.len())]);
     let d =
         String::from_utf16_lossy(&domain[..usize::try_from(domain_len).ok()?.min(domain.len())]);
-    Some(format!("{d}\\{n}"))
+    Some((sid_string, Some(format!("{d}\\{n}"))))
 }
 
 /// Establish the identity of the client connected to `pipe`.
@@ -362,7 +375,7 @@ fn client_identity(
     if unsafe { ImpersonateNamedPipeClient(pipe) } == 0 {
         return Err(os_err("ImpersonateNamedPipeClient"));
     }
-    let _revert = RevertOnDrop;
+    let revert = RevertOnDrop;
     let mut raw: HANDLE = ptr::null_mut();
     // SAFETY: GetCurrentThread returns a pseudo-handle; `raw` is a valid
     // out-pointer. OpenAsSelf = TRUE uses the process context for the check.
@@ -410,9 +423,13 @@ fn client_identity(
         return Err(os_err("CheckTokenMembership"));
     }
 
+    // Back to the service's own (SYSTEM) context before calling into LSA;
+    // the token handle stays valid after reverting.
+    drop(revert);
+    let (account, sid) = token_user(token.0);
     Ok(ClientIdentity {
-        account: token_account(token.0).unwrap_or_else(|| "unknown".into()),
-        sid: None,
+        account: account.unwrap_or_else(|| "unknown".into()),
+        sid,
         is_administrator: is_member != 0,
         elevated: elevation.TokenIsElevated != 0,
         source: IdentitySource::NamedPipeToken,

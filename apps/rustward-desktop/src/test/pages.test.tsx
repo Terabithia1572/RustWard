@@ -103,6 +103,20 @@ describe("Service connection bar", () => {
     expect(await screen.findAllByText("RustWard hizmeti kurulu ancak durdurulmuş.")).not.toHaveLength(0);
   });
 
+  it("shows an unelevated administrator refusal as an authorization problem, not a missing service", async () => {
+    const api = new Api({
+      call: (req: { type: string }) =>
+        req.type === "refresh_inventory"
+          ? Promise.reject({ code: "unavailable", message: "[admin_required] the RustWard service is running, but this account is not an elevated administrator" })
+          : fakeBackend().backend.call(req as never),
+    } as never);
+    render(<App api={api} initialPage="devices" />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /Envanteri yenile/ }));
+    expect(await screen.findByText("Bu işlem için yükseltilmiş yönetici yetkisi gerekir.")).toBeInTheDocument();
+    expect(screen.getByText("Hizmet çalışıyor; bu işlem için uygulamayı yönetici olarak (yükseltilmiş) başlatın.")).toBeInTheDocument();
+  });
+
   it("reports a rejected service identity as a security refusal", async () => {
     render(<App api={new Api(down("service identity could not be verified: pipe served by process 42"))} initialPage="dashboard" />);
     expect(await screen.findAllByText("Hizmetin kimliği doğrulanamadı; bağlantı güvenlik nedeniyle reddedildi.")).not.toHaveLength(0);

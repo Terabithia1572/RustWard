@@ -241,7 +241,11 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
     <div role="alert" className="flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="font-medium">{key ? t(key) : t("error.title")}</div>
+        {/* A running service that refuses an unelevated caller is an authorization
+            problem, not an unreachable service (seen in the first VM test). */}
+        <div className="font-medium">
+          {reason?.key === "reason.admin_required" ? t("error.unauthorized") : key ? t(key) : t("error.title")}
+        </div>
         {reason && <div className="font-medium">{t(reason.key)}</div>}
         <div className="opacity-90 [overflow-wrap:anywhere]">{reason ? reason.detail : e.message}</div>
       </div>
