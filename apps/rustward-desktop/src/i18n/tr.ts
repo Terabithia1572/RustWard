@@ -54,7 +54,7 @@ export const tr = {
   "error.timeout": "Zaman aşımı",
   "error.generic": "Hata",
 
-  "dashboard.title": "Genel Bakış",
+  "dashboard.title": "Dashboard",
   "dashboard.protection": "Koruma durumu",
   "dashboard.service": "Hizmet durumu",
   "dashboard.allowed": "İzinli üretici",
@@ -68,7 +68,7 @@ export const tr = {
   "dashboard.healthy": "Çalışıyor",
   "dashboard.degraded": "Kısmen çalışıyor",
 
-  "devices.title": "Aygıtlar",
+  "devices.title": "Cihazlar",
   "devices.includeAbsent": "Önceden algılananları göster",
   "devices.filter.all": "Tümü",
   "devices.filter.storage": "Depolama",
@@ -109,7 +109,7 @@ export const tr = {
   "category.peripheral": "Çevre birimi",
   "category.other": "Diğer",
 
-  "manufacturers.title": "İzinli Üreticiler",
+  "manufacturers.title": "İzinli Markalar",
   "manufacturers.add": "Üretici ekle",
   "manufacturers.allowed": "İzinli",
   "manufacturers.enabled": "Kural etkin",
@@ -159,7 +159,7 @@ export const tr = {
   "blocked.notEnforced": "Uygulanmadı — yalnızca simüle karar",
   "blocked.empty": "Simüle edilmiş ret yok.",
 
-  "audit.title": "Denetim Kayıtları",
+  "audit.title": "Olay Kayıtları",
   "audit.severity": "Önem",
   "audit.severity.info": "Bilgi",
   "audit.severity.warning": "Uyarı",

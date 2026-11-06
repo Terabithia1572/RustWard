@@ -119,6 +119,29 @@ if (-not [Environment]::Is64BitOperatingSystem) { Exit-Build 11 '64 bit Windows 
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 Write-Info ("Windows: {0} {1}, derleme {2}.{3}" -f $cv.ProductName, $cv.DisplayVersion, $cv.CurrentBuild, $cv.UBR)
 
+# Programs started from Explorer may not see PATH changes made by the Rust or
+# Node.js installers until the user signs out. Look in the standard install
+# locations and add them to PATH for THIS build process only (nothing is
+# installed and the user/system PATH is not changed).
+function Add-BuildPath([string[]]$Candidates, [string]$Exe) {
+    if (Get-Command $Exe -ErrorAction SilentlyContinue) { return }
+    foreach ($dir in $Candidates) {
+        if ($dir -and (Test-Path (Join-Path $dir "$Exe.exe"))) {
+            $env:PATH = "$dir;$env:PATH"
+            Write-Info "PATH'e yalnızca bu derleme için eklendi: $dir"
+            return
+        }
+    }
+}
+$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
+Add-BuildPath @((Join-Path $cargoHome 'bin')) 'cargo'
+Add-BuildPath @(
+    (Join-Path $env:ProgramFiles 'nodejs'),
+    (Join-Path ${env:ProgramFiles(x86)} 'nodejs'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\nodejs'),
+    $env:NVM_SYMLINK
+) 'node'
+
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue) -or -not (Get-Command rustc -ErrorAction SilentlyContinue)) {
     Exit-Build 20 'Rust (cargo/rustc) bulunamadı.' 'https://rustup.rs adresinden rustup-init.exe ile Rust kurun, sonra yeni bir komut penceresi açın.'
 }

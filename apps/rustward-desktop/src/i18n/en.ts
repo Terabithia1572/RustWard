@@ -112,7 +112,7 @@ export const en: Record<TKey, string> = {
   "category.peripheral": "Peripheral",
   "category.other": "Other",
 
-  "manufacturers.title": "Allowed Manufacturers",
+  "manufacturers.title": "Allowed Brands",
   "manufacturers.add": "Add manufacturer",
   "manufacturers.allowed": "Allowed",
   "manufacturers.enabled": "Rule enabled",
@@ -162,7 +162,7 @@ export const en: Record<TKey, string> = {
   "blocked.notEnforced": "Not enforced — simulated decision only",
   "blocked.empty": "No simulated denials.",
 
-  "audit.title": "Audit Logs",
+  "audit.title": "Event Logs",
   "audit.severity": "Severity",
   "audit.severity.info": "Info",
   "audit.severity.warning": "Warning",
