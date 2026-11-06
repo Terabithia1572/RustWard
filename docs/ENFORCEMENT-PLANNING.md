@@ -98,3 +98,36 @@ Sources: [Policy CSP – DeviceInstallation (Microsoft Learn)](https://learn.mic
 
 Sources: [Policy CSP – DeviceInstallation](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-deviceinstallation) ·
 [Manage Device Installation with Group Policy](https://learn.microsoft.com/en-us/windows/client-management/manage-device-installation-with-group-policy)
+
+## 6. Already-installed storage devices (Phase 10 step 2)
+
+`rustward-enforcement::installed_assessment::assess` (CLI `rustward-inventory assess-installed`)
+assesses every **disk-class** device in an inventory, including non-present devices. Keyboards,
+mice, printers and hubs are never assessed. For each device it reports:
+
+- the simulated RustWard verdict;
+- the modelled outcome of a *new* installation under the planned policy (merged with the captured
+  existing policy);
+- whether it **would remain accessible after activation**. This is the case for any denied
+  device whose installation already exists, because installation restrictions are not retroactive
+  and RustWard never plans a retroactive class rule.
+
+| Finding | Meaning | Action |
+|---|---|---|
+| `denied_but_installed` | Denied, but the existing installation keeps working | **Manual** remediation steps (backup → Device Manager "Uninstall device" by an administrator → re-assess). RustWard does none of this. |
+| `denied_not_installed` | Denied, no installation (problem code 28); a new installation would be prevented (model) | none |
+| `allowed` | Allowed brand (including UASP and previously unseen models through vendor-level IDs) | none |
+| `internal_disk_protected` / `internal_disk_unprotected` | Internal disk with / without an effective allow rule (an existing `DenyInstanceIDs` entry outranks it) | never remediated; unprotected blocks activation |
+| `attachment_unknown` | Parent chain broken | manual review only |
+| `allowed_but_plan_prevents` / `denied_but_plan_allows` | Plan and policy disagree | fix the plan |
+
+Installation state: problem code 28 means *not installed*. A recorded driver service means
+*installed*. Anything else is *unknown* and is treated as installed, which is the fail-safe
+assumption that the device stays accessible.
+
+Requirements this mechanism **cannot** fulfil (also listed in every report):
+
+- blocking devices that are already installed, without a retroactive rule;
+- authenticating a vendor string: a device reporting the SanDisk vendor string is allowed (the
+  fixture's spoof case shows this);
+- covering CD/DVD, MTP and other non-DiskDrive classes.

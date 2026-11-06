@@ -15,7 +15,9 @@ use rustward_core::device::DeviceSnapshot;
 use rustward_core::plan::compile_plan;
 use rustward_core::policy::{PolicyError, ValidatedPolicy};
 use rustward_core::report::{build_report, render_markdown};
+use rustward_enforcement::installed_assessment::{AssessmentInputs, InstalledAssessment, assess};
 use rustward_enforcement::policy_inspect::{CapturedPolicy, PolicyInspection, inspect};
+use rustward_enforcement::policy_state::PolicySnapshot;
 use rustward_enforcement::{
     DeviceInstallRestrictionProvider, EnforcementProvider, EnvironmentFacts, PlanInputs,
     SimulationOnlyProvider,
@@ -36,6 +38,9 @@ Usage:
                               [--catalog FILE] [--policy FILE]
   rustward-inventory plan     (--snapshot FILE | --live) [--catalog FILE] [--policy FILE]
   rustward-inventory policy-capture --out FILE
+  rustward-inventory assess-installed (--snapshot FILE | --live --include-non-present)
+                              [--policy-capture FILE] [--sanitize] [--json] [--out-dir DIR]
+                              [--catalog FILE] [--policy FILE]
   rustward-inventory policy-inspect (--policy-capture FILE | --live) [--snapshot FILE] [--json]
                               [--catalog FILE] [--policy FILE]
 
@@ -43,7 +48,9 @@ All commands are read-only. Live commands require Windows.
 'policy-capture' reads HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions
 (KEY_READ only) and OS version facts into FILE. 'policy-inspect' interprets a capture: documented,
 unresolved and unrecognised values, OS compatibility and, with a device snapshot, conflicts with the
-RustWard plan. Nothing is ever written.
+RustWard plan. 'assess-installed' lists storage devices whose existing installation would stay
+usable under installation-only restrictions and writes a reviewable, MANUAL remediation report;
+it never uninstalls, removes or disables anything. Nothing is ever written to the system.
 'report' writes diagnostic-raw.{md,json} (keep local) and diagnostic-sanitized.{md,json}
 (serials pseudonymized, computer name removed) into DIR.
 Without --catalog/--policy the built-in Phase 1 catalog and the PC-01 example policy are used.";
@@ -230,6 +237,138 @@ fn policy_inspect(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
+fn assess_installed(a: &Args) -> Result<(), String> {
+    let (catalog, policy) = load_rules(a)?;
+    let (snap, _) = snapshot_from_args(a)?;
+    let existing = match &a.policy_capture {
+        Some(p) => {
+            serde_json::from_str::<CapturedPolicy>(&read(p)?)
+                .map_err(|e| format!("{p}: {e}"))?
+                .values
+        }
+        None => PolicySnapshot::default(),
+    };
+    let env = EnvironmentFacts::default();
+    let plan = DeviceInstallRestrictionProvider.plan(PlanInputs {
+        policy: &policy,
+        catalog: &catalog,
+        snapshot: &snap,
+        env: &env,
+    });
+    let report = assess(&AssessmentInputs {
+        snapshot: &snap,
+        policy: &policy,
+        catalog: &catalog,
+        plan: &plan,
+        existing: &existing,
+        sanitize: a.sanitize,
+    });
+    let md = render_assessment(&report);
+    let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    if let Some(dir) = &a.out_dir {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        let stem = if a.sanitize {
+            "installed-assessment-sanitized"
+        } else {
+            "installed-assessment-raw"
+        };
+        write(&dir.join(format!("{stem}.md")), &md)?;
+        write(&dir.join(format!("{stem}.json")), &json)?;
+        eprintln!("wrote {stem}.md/.json to {}", dir.display());
+    } else if a.json {
+        println!("{json}");
+    } else {
+        println!("{BANNER}");
+        print!("{md}");
+    }
+    Ok(())
+}
+
+/// Reviewable Markdown report (Turkish first, English second).
+fn render_assessment(r: &InstalledAssessment) -> String {
+    use std::fmt::Write as _;
+    let mut o = String::new();
+    let s = &r.summary;
+    let _ = writeln!(
+        o,
+        "# Kurulu depolama aygıtları değerlendirmesi / Installed storage assessment\n"
+    );
+    let _ = writeln!(
+        o,
+        "**Salt okunur. RustWard hiçbir aygıtı kaldırmaz, devre dışı bırakmaz veya çıkarmaz; aşağıdaki adımlar yöneticinin elle yapacağı önerilerdir.**"
+    );
+    let _ = writeln!(
+        o,
+        "Read-only. RustWard never uninstalls, disables or ejects a device; the steps below are manual suggestions for an administrator.\n"
+    );
+    let _ = writeln!(
+        o,
+        "| Değerlendirilen | Reddedilen ama kurulu (erişilebilir kalır) | Reddedilen, kurulu değil | İzinli | Dahili disk korumalı | Dahili disk korumasız | İnceleme | Plan uyuşmazlığı |"
+    );
+    let _ = writeln!(o, "|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let _ = writeln!(
+        o,
+        "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+        s.assessed,
+        s.denied_but_installed,
+        s.denied_not_installed,
+        s.allowed,
+        s.internal_protected,
+        s.internal_unprotected,
+        s.needs_review,
+        s.plan_disagreements
+    );
+    let _ = writeln!(
+        o,
+        "| Aygıt / Device | Bağlantı | Bağlı | Kurulum | Simüle karar | Yeni kurulum (model) | Etkinleştirme sonrası erişilebilir | Bulgu |"
+    );
+    let _ = writeln!(o, "|---|---|---|---|---|---|---|---|");
+    for d in &r.devices {
+        let outcome = match &d.planned_new_install {
+            rustward_enforcement::policy_eval::InstallOutcome::Allowed { .. } => "izin / allowed",
+            rustward_enforcement::policy_eval::InstallOutcome::Prevented { .. } => {
+                "engellenir / prevented"
+            }
+            rustward_enforcement::policy_eval::InstallOutcome::NotRestricted => {
+                "kısıtlama yok / not restricted"
+            }
+        };
+        let _ = writeln!(
+            o,
+            "| {} `{}` | {} | {} | {:?} | SİMÜLE {} | {} | {} | {:?} |",
+            d.name.replace('|', "/"),
+            d.instance_id.replace('|', "/"),
+            d.attachment,
+            d.present.map_or("?", |p| if p { "evet" } else { "hayır" }),
+            d.install_state,
+            d.simulated_verdict.to_uppercase(),
+            outcome,
+            if d.remains_accessible_after_activation {
+                "EVET / YES"
+            } else {
+                "hayır / no"
+            },
+            d.finding
+        );
+    }
+    if let Some(d) = r.devices.iter().find(|d| !d.remediation.is_empty()) {
+        let _ = writeln!(
+            o,
+            "\n## Elle düzeltme adımları (her “Reddedilen ama kurulu” aygıt için) / Manual remediation\n"
+        );
+        for (n, step) in d.remediation.iter().enumerate() {
+            let _ = writeln!(o, "{}. {}\n   _{}_", n + 1, step.tr, step.en);
+        }
+    }
+    let _ = writeln!(o, "\n## Sınırlamalar / Limitations\n");
+    for l in &r.limitations {
+        let _ = writeln!(o, "- {}\n  _{}_", l.tr, l.en);
+    }
+    o
+}
+
 /// Human-readable inspection summary.
 fn render_inspection(i: &PolicyInspection) -> String {
     use std::fmt::Write as _;
@@ -357,6 +496,7 @@ fn run(a: &Args) -> Result<(), String> {
             Ok(())
         }
         "policy-inspect" => policy_inspect(a),
+        "assess-installed" => assess_installed(a),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(())
@@ -489,6 +629,33 @@ mod tests {
         // Both sources at once is refused.
         let both = Args { live: true, ..a };
         assert!(load_capture(&both).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assess_installed_writes_a_reviewable_manual_report() {
+        let dir = std::env::temp_dir().join(format!("rw-inv-assess-{}", std::process::id()));
+        let a = Args {
+            command: "assess-installed".into(),
+            snapshot: Some(format!(
+                "{}/../../tests/fixtures/synthetic-lab-snapshot.json",
+                env!("CARGO_MANIFEST_DIR")
+            )),
+            sanitize: true,
+            out_dir: Some(dir.display().to_string()),
+            ..Args::default()
+        };
+        assess_installed(&a).unwrap();
+        let md = std::fs::read_to_string(dir.join("installed-assessment-sanitized.md")).unwrap();
+        assert!(md.contains("RustWard hiçbir aygıtı kaldırmaz"));
+        assert!(md.contains("Aygıt Yöneticisi"));
+        assert!(md.contains("SİMÜLE DENY"));
+        assert!(!md.contains("4C5300012306151"), "serials pseudonymised");
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("installed-assessment-sanitized.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["manual_only"], true);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -21,6 +21,7 @@
 
 pub mod activation;
 pub mod device_install;
+pub mod installed_assessment;
 pub mod policy_eval;
 pub mod policy_inspect;
 pub mod policy_state;
@@ -566,7 +567,8 @@ mod tests {
             include_str!("activation.rs"),
             include_str!("policy_state.rs"),
             include_str!("policy_eval.rs"),
-            include_str!("policy_inspect.rs")
+            include_str!("policy_inspect.rs"),
+            include_str!("installed_assessment.rs")
         );
         let forbidden = [
             ["Reg", "SetValueEx"].concat(),
