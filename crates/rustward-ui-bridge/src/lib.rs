@@ -263,12 +263,20 @@ const _: () = {
 mod tests {
     use super::*;
 
+    // Runs on every target. Before Phase 11, no test in this module was
+    // compiled for a Windows debug build without `dev-backend`, so
+    // `use super::*` was unused and `clippy -D warnings` failed there
+    // (found by the Phase 11 Windows-target check).
+    #[test]
+    fn service_backend_name_is_stable() {
+        assert_eq!(Bridge::Service.name(), "windows_service");
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn service_backend_is_unavailable_off_windows() {
         let e = Bridge::Service.call(Request::GetDashboard).unwrap_err();
         assert_eq!(e.code, rustward_ipc::ErrorCode::Unavailable);
-        assert_eq!(Bridge::Service.name(), "windows_service");
     }
 
     #[cfg(all(debug_assertions, feature = "dev-backend"))]

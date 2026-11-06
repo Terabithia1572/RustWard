@@ -4,3 +4,4 @@
 *.cmd text eol=crlf
 *.png binary
 *.ico binary
+*.psm1 text eol=crlf

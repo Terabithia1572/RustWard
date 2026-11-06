@@ -122,6 +122,7 @@ impl ServiceRuntime {
     }
 
     /// Refreshes triggered by wake-ups so far.
+    #[cfg(test)]
     #[must_use]
     pub fn wake_refreshes(&self) -> u64 {
         self.wake_refreshes
@@ -163,13 +164,15 @@ impl ServiceRuntime {
         false
     }
 
-    /// Handle used by the SCM control handler / Ctrl+C to request a stop.
+    /// Handle to request a stop (tests).
+    #[cfg(test)] // only tests use it; the SCM host passes its flag via `with_stop_handle`
     #[must_use]
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
     }
 
     /// The application service.
+    #[cfg(test)]
     #[must_use]
     pub fn app(&self) -> Arc<AppService> {
         Arc::clone(&self.app)

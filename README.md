@@ -80,6 +80,7 @@ report a generic controller vendor. TÜBİTAK SIR II identifiers are still unkno
 | [ENFORCEMENT-PLANNING](docs/ENFORCEMENT-PLANNING.md) | Stages, existing-policy comparison, merge, rollback, staleness; read-only policy inspection, installed-device assessment, mock policy backend (Phase 10); what is unimplemented |
 | [WINDOWS-ACCEPTANCE-CHECKLIST](docs/WINDOWS-ACCEPTANCE-CHECKLIST.md) | Tickable Stage A–F checklist (Phase 10: A compile, B device inspection, C service/IPC, D MSI/recovery, E read-only policy inspection; F not executed) |
 | [AUDIT-INTEGRITY](docs/AUDIT-INTEGRITY.md) | Non-destructive restore, backup verification, tamper-resistance limits |
+| [PHASE-11-NATIVE-VALIDATION](docs/PHASE-11-NATIVE-VALIDATION.md) | Phase 11: what was (and was not) validated, Windows-target check, defects fixed, packaging review, boot-disk safety, scripts for the owner |
 | [WINDOWS-VM-ACCEPTANCE](docs/WINDOWS-VM-ACCEPTANCE.md) | Stages A–F on a disposable Windows 10 Pro VM; Hyper-V USB limits |
 | [RELEASE-READINESS](docs/RELEASE-READINESS.md) | Target config, installer design, hashes, dependencies, readiness classification |
 | [DEPENDENCY-INVENTORY](docs/DEPENDENCY-INVENTORY.md) | Generated crate/npm inventory (Windows target) |

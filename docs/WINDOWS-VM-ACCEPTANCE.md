@@ -22,6 +22,8 @@ code writes the Restrictions key).
 | E | Read-only policy inspection | none: `reg export` before and after must be identical | CP-E |
 | F | Controlled enforcement | **not executed**; separately authorized; impossible in this build | — |
 
+Phase 11 adds one script per stage (see the checklist header and PHASE-11-NATIVE-VALIDATION.md §7). They refuse to run unless `-DisposableVm` (on a detected VM) or `-PhysicalTestMachine` is given and confirmed. The only script that changes the machine, `Invoke-AcceptanceMsi.ps1`, runs only on a detected VM, after the computer name is typed and the MSI hash is checked.
+
 ## 0. Preparation (once)
 
 | Step | Detail |

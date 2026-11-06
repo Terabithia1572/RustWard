@@ -49,7 +49,27 @@ else
   skip "cargo deny" "cargo install cargo-deny --locked"
 fi
 
-skip "Windows build / MSI bundling"      "requires Windows 10 Pro x64 acceptance VM"
+PWSH=${RUSTWARD_PWSH:-$(command -v pwsh || true)}
+if [ -n "$PWSH" ]; then
+  run "PowerShell scripts parse (not executed)" "$PWSH" -NoProfile -Command '
+    $bad = 0
+    Get-ChildItem -Path scripts -Recurse -Include *.ps1,*.psm1 | ForEach-Object {
+      $t = $null; $e = $null
+      $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$t, [ref]$e)
+      if ($e.Count) { $bad++; "$($_.Name): $($e[0].Message) (line $($e[0].Extent.StartLineNumber))" }
+    }
+    exit $bad'
+else
+  skip "PowerShell scripts parse" "set RUSTWARD_PWSH or install pwsh"
+fi
+
+if [ "${RUSTWARD_WINDOWS_TARGET_CHECK:-0}" = "1" ]; then
+  run "Windows-target compile + link + import scan (Linux, NOT native)" ./scripts/windows-target-check.sh
+else
+  skip "Windows-target cross check" "RUSTWARD_WINDOWS_TARGET_CHECK=1; needs mingw-w64 + rust-src (slow)"
+fi
+
+skip "native Windows build / MSI bundling" "requires Windows 10 Pro x64 (scripts/run-native-validation.ps1)"
 skip "named-pipe + service runtime tests" "requires Windows"
 skip "native SetupAPI inventory"          "requires Windows"
 skip "physical USB tests"                 "requires hardware on the acceptance VM"

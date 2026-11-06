@@ -24,6 +24,18 @@ The Phase 10 stage layout replaces the Phase 9B one:
 | old E8 (`reg export`) | E |
 | MSI items (old B4, C14, C15) | D |
 
+**Phase 11 scripts** (prepared, syntax-checked, **never executed**; PHASE-11-NATIVE-VALIDATION.md §7):
+
+| Script | Covers |
+|---|---|
+| `scripts\run-native-validation.ps1` | A1–A9 (A10 with `-TauriBuild`), A11, B1–B2 |
+| `scripts\windows\Invoke-StageB-DeviceInspection.ps1` | B1–B8 (B9: rerun offline) |
+| `scripts\windows\Invoke-AcceptanceMsi.ps1` | D1, D4, D6, D7 (**changes the VM**, typed confirmation) |
+| `scripts\windows\Invoke-StageC-ServiceInspection.ps1` | C1–C4, C7, C15, C19–C21, C24 (read-only) |
+| `scripts\windows\Invoke-StageE-PolicyInspection.ps1` | E1, E2, E4, E7, E10 (decides E10 itself) |
+
+Before Phase 11, A2 would have **failed** on native Windows (D-11-1, D-11-2: Windows-only `clippy -D warnings` errors). Both are fixed; the Linux Windows-target check is clean.
+
 Build under test: commit ____ · MSI SHA-256 ____ · VM checkpoint ____ · Windows build.UBR ____ · Edition ____ · Date ____ · Tester ____
 
 ## Stage A: native compilation
@@ -66,7 +78,7 @@ Requires the acceptance MSI (`-WithService`), checkpoint CP-C.
 |---|---|---|---|---|
 | C1 | `sc.exe qc RustWardService` | auto start, LocalSystem, `"…\rustward-service.exe" service` | | |
 | C2 | `sc.exe qfailure RustWardService` | restart ×3 after 5 s, reset after 1 day | | |
-| C3 | `Get-Acl $env:ProgramData\RustWard` | protected; SYSTEM and Administrators only | | |
+| C3 | `Get-Acl $env:ProgramData\RustWard` | protected; SYSTEM and Administrators only (**R-11-3**: confirms `MsiLockPermissionsEx` applied despite the template's InstallerVersion 450) | | |
 | C4 | Service RUNNING within 30 s; `rustward.db` created | yes | | |
 | C5 | Stop/start ×3 | STOPPED within the 15 s wait hint; no `ipc_shutdown_incomplete` event | | |
 | C6 | `taskkill /F` the service | SCM restarts it after about 5 s | | |

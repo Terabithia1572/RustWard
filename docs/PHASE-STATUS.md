@@ -74,6 +74,20 @@ executed.
 | 4 | Acceptance | WINDOWS-ACCEPTANCE-CHECKLIST.md and WINDOWS-VM-ACCEPTANCE.md restructured to Stages A–F (A compile, B device inspection, C service/IPC, D MSI/recovery, E policy inspection, F not executed) | Documented; no stage executed |
 | — | Unresolved | List-entry layout and `*Retroactive` names (not in the Policy CSP mapping table); UBR has no documented API | Reported as unresolved, never guessed |
 
+## Phase 11 — native Windows build and integration validation
+
+**No native Windows validation was executed:** no Windows execution environment or disposable VM was available. Details: PHASE-11-NATIVE-VALIDATION.md.
+
+| Item | Result |
+|---|---|
+| Native MSVC build, Windows tests, MSI build | NOT RUN |
+| Desktop on WebView2, service/SCM, pipes, Event Log, policy inspection, MSI install (Stages B–E) | BLOCKED (no VM) |
+| Windows-target compile + link + import scan on Linux (`scripts/windows-target-check.sh`) | PASS — **not a native build** |
+| Defects D-11-1, D-11-2 (would have failed Stage A2) | Fixed |
+| Stage A–E scripts (`scripts/windows/`), PowerShell 7.4 parse, PSScriptAnalyzer, `acceptance_scripts.rs` guard | Prepared; never executed on Windows |
+| New risks R-11-1 (boot disk re-enumeration, L-34), R-11-3 (MSI ACL table, L-35) | Open |
+| Stage F | Not ready; not attempted |
+
 ## Feature gaps (known, not hidden)
 
 | Gap | Status |

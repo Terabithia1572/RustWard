@@ -1,6 +1,19 @@
 # Test Results
 
-Last run: **2026-11-06**, **Phase 10** (read-only policy inspection, installed-device assessment, readiness UI, mock policy backend). After Phase 10: **270 workspace + 2 release-mode + 4 src-tauri = 276 Rust; 43 Vitest + 16 Vitest integration (real backend) = 59 — PASS, 0 failed, 0 ignored.** All 17 Linux-feasible checks of `scripts/verify-all.sh` PASS (final run after the Step 4 commit's changes). The 5 tests in `rustward-windows/tests/native_windows.rs` compile only on Windows: **NOT RUN** (type-checked on Linux by temporarily enabling the file under `host-typecheck`).
+Last run: **2026-11-06**, **Phase 11** (native Windows build preparation). **No native Windows test was executed** (no Windows execution environment or disposable VM was available; PHASE-11-NATIVE-VALIDATION.md).
+
+After Phase 11 (Linux): **276 workspace + 3 release-mode + 4 src-tauri = 283 Rust; 43 Vitest + 16 Vitest integration — PASS, 0 failed, 0 ignored.** `scripts/verify-all.sh` with `RUSTWARD_PWSH` and `RUSTWARD_WINDOWS_TARGET_CHECK=1`: **19 PASS**, 0 FAIL, 4 NOT RUN (native Windows, pipes/service runtime, native SetupAPI, physical USB).
+
+| Phase 11 check | Result |
+|---|---|
+| `crates/rustward-service/tests/acceptance_scripts.rs` (5): no script changes Windows configuration; only the MSI script runs msiexec, behind the VM guard, typed confirmation and hash check; stage scripts guarded and marked never executed; Stage E exports before and after | PASS (Linux, static) |
+| `rustward-ui-bridge` `service_backend_name_is_stable` (+1, also in release mode) | PASS |
+| PowerShell 7.4.22 parser on all 8 scripts; PSScriptAnalyzer 1.25.0 (0 errors, 0 warnings; informational only) | PASS (not executed) |
+| `scripts/windows-target-check.sh`: clippy `x86_64-pc-windows-gnu` (default, all features, release), link of all test binaries and both executables, Tauri shell clippy (`RUSTWARD_WINDOWS_CHECK_TAURI=1`), import-table scan | PASS — **compiled on Linux, not a native build, nothing executed** |
+| Defects found by it: D-11-1, D-11-2 (Windows-only `clippy -D warnings` failures) | Fixed |
+| `native_windows.rs` (5), named pipes, SCM, Event Log, WebView2, MSI | **NOT RUN** |
+
+Phase 10 run (kept for history): **Phase 10** (read-only policy inspection, installed-device assessment, readiness UI, mock policy backend). After Phase 10: **270 workspace + 2 release-mode + 4 src-tauri = 276 Rust; 43 Vitest + 16 Vitest integration (real backend) = 59 — PASS, 0 failed, 0 ignored.** All 17 Linux-feasible checks of `scripts/verify-all.sh` PASS (final run after the Step 4 commit's changes). The 5 tests in `rustward-windows/tests/native_windows.rs` compile only on Windows: **NOT RUN** (type-checked on Linux by temporarily enabling the file under `host-typecheck`).
 
 Phase 10 regressions found and fixed during Step 4 (both intermittent, both now repeated 30× / 6× without a failure):
 
