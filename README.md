@@ -27,6 +27,20 @@ workstations.
 Details and classification: [`docs/PHASE-STATUS.md`](docs/PHASE-STATUS.md).
 Test evidence: [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md).
 
+## Windows build (desktop application)
+
+Double-click `BUILD-RUSTWARD.cmd` (no administrator rights; installs nothing). It checks Rust (MSVC),
+Visual Studio C++ tools, the Windows SDK, Node.js and WebView2, builds with Tauri and writes:
+
+| File | What it is |
+|---|---|
+| `dist\RustWard.exe` (+ `START-RUSTWARD.cmd`) | The real application. It talks to the RustWard Windows service; without the service it says so. |
+| `dist\RustWard-Onizleme.exe` (+ `START-RUSTWARD-ONIZLEME.cmd`) | Preview: same UI with the in-process development backend (temporary SQLite database, read-only device inventory, labelled synthetic data). |
+| `dist\installer\*.msi` | UI-only MSI (no service). Built, never installed by the script. |
+
+Logs go to `build-logs\`. First built and launched natively on 2026-11-06 (Windows 11 Pro 23H2, MSVC 14.51).
+**A running application does not mean USB enforcement works: USB protection is not activated.**
+
 ## Development
 
 ```bash
