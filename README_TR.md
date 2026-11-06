@@ -16,10 +16,10 @@ erişim denetimi.
 | Politika motoru | `crates/rustward-core` | Test edildi |
 | SQLite depolama, zincirli denetim kaydı | `crates/rustward-storage` | Test edildi |
 | Uygulama hizmeti (tüm istekler) | `crates/rustward-app` | Test edildi |
-| Windows hizmeti | `crates/rustward-service` | Konsol modu test edildi; SCM derlenmedi/doğrulanmadı |
+| Windows hizmeti | `crates/rustward-service` | Konsol modu ve çalışma döngüsü test edildi; SCM barındırıcısı, Olay Günlüğü aktarımı ve aygıt değişikliği bildirimleri yalnızca tür denetiminden geçti (hiç çalıştırılmadı) |
 | Kuru çalıştırma uygulama sağlayıcıları | `crates/rustward-enforcement` | Model olarak test edildi; **engelleme yok** |
 | Yerel IPC (sahte taşıyıcı + adlandırılmış kanallar) | `crates/rustward-ipc` | Protokol test edildi; kanallar yalnızca tür denetiminden geçti |
-| Salt okunur SetupAPI envanteri | `crates/rustward-windows`, `crates/rustward-inventory` | Mantık test edildi; yerel çalıştırma YAPILMADI |
+| Windows bağdaştırıcıları (salt okunur SetupAPI envanteri, aygıt değişikliği bildirimleri, Olay Günlüğü, SCM barındırıcısı) | `crates/rustward-windows`, `crates/rustward-inventory` | Mantık test edildi; yerel çalıştırma YAPILMADI |
 | Masaüstü uygulaması (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | Arayüz test edildi; Tauri kabuğu yalnızca Linux'ta test edildi |
 | Uygulama için arka uç seçimi | `crates/rustward-ui-bridge` | Test edildi |
 | Çevrimdışı paketleme hazırlığı | `scripts/`, `packaging/` | Bağımlılık arşivleme Linux'ta test edildi; MSI YAPILMADI |

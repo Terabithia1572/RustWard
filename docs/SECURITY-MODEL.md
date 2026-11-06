@@ -20,7 +20,7 @@
   Clients connect with `SECURITY_IDENTIFICATION`.
 - Versioned envelopes; length-prefixed JSON frames ≤ 4 MiB; reads bounded with `PeekNamedPipe`;
   every field validated server-side (`rustward-ipc::validate`).
-- No generic "execute", "write file" or "set registry" request exists; the 21 request types
+- No generic "execute", "write file" or "set registry" request exists; the 24 request types
   are fixed by a golden contract test.
 - Authorization never depends on the UI. A frontend password prompt would not be a boundary
   and is not used; the Windows token of the caller decides.
@@ -39,12 +39,22 @@
 
 - Policy, catalog and SQLite DB under `%ProgramData%\RustWard` with ACL `SYSTEM:F, Administrators:F`, users no access.
 - Audit records: no PINs, no file names or contents, no document data.
-- Hash-chained audit entries + Windows Event Log; described as tamper-*evident*.
+- Hash-chained audit entries, mirrored to the Windows Event Log by the service after each
+  commit (Event Log failures never block or roll back the database write); described as
+  tamper-*evident*.
+- Refused privileged requests are audited (`authorization_failed`, request, account,
+  admin/elevation flags), at most 20 per minute with a suppressed-count summary.
+- Backups are audited (`backup_created`). A restore first saves the current database as a
+  pre-restore backup and records `audit_history_replaced` with the previous newest event id
+  and chain head, so a restore cannot silently erase audit records.
+- Restore accepts only `rustward-backup-<digits>.db` / `rustward-pre-restore-<digits>.db`
+  file names inside the service's backup directory — no paths.
 
 ## Guarantees checked by automated tests
 
-- `rustward-windows` imports only five read-only Win32 functions; a unit test fails if
-  any other `SetupDi*`, `CM_*`, `Reg*`, `DeviceIoControl` or class-installer API appears.
+- `rustward-windows`'s inventory backend imports only five read-only Win32 functions, and a
+  crate-wide test fails if any module references device-changing, driver, registry,
+  service-configuration, `DeviceIoControl` or `CreateFile` APIs.
 - `rustward-core`, `rustward-enforcement` and `rustward-inventory` forbid `unsafe`.
 - No component can report `EnforcedVerified` without `VerificationEvidence`, which has no
   public constructor.

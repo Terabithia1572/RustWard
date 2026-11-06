@@ -52,16 +52,16 @@ enforcement boundary; no enforcement is active in this build.
 | Crate | Responsibility | Unsafe | Platform | Tested |
 |---|---|---|---|---|
 | `rustward-core` | ID parsing/encoding, snapshot model, catalog + policy validation, classification, default-deny evaluation, policy editing (`PolicyEdit`, version `+local.N`), explanations TR/EN, plan preview, snapshot diff | `forbid` | any | 68 tests |
-| `rustward-windows` | Read-only SetupAPI enumeration via `DeviceSource`; RAII handles; API allowlist test | only in `setupapi.rs`, documented | Windows (type-checked elsewhere) | 16 tests (logic); native NOT RUN |
+| `rustward-windows` | Read-only SetupAPI enumeration via `DeviceSource`; `CM_Register_Notification` device-change subscription (telemetry); Event Log writer; SCM service host; platform-neutral logic in `engine`, `svc_control`, `devchange`, `eventlog_map`; crate-wide test forbids device/driver/registry/service-configuration APIs | only in `setupapi.rs`, `device_notify.rs`, `event_log.rs`, `service_host.rs`; every block has a SAFETY comment | Windows (type-checked elsewhere with `host-typecheck`) | 27 tests (logic); native NOT RUN |
 | `rustward-enforcement` | Provider trait, capability report, state machine, dry-run plan for layered Device Installation Restrictions, notification selection | `forbid` | any | 10 tests |
-| `rustward-storage` | SQLite store: migrations, settings, policy states + change history (optimistic version), devices, hash-chained events, retention, backup/restore | `forbid` | any | 14 tests |
-| `rustward-ipc` | Envelopes, `Request`/`ResponseBody` (21 request types), access levels, validation, framing, RPC client/server, mock transport, named pipes | documented, only in `pipe.rs` | pipes: Windows | 18 tests + golden contract |
-| `rustward-app` | `AppService`: implements every request; inventory sources (live, fixture, empty); simulation; export (formula-safe CSV); retention | `forbid` | any | 12 tests |
-| `rustward-service` | Console / service modes, runtime loop, pipe servers, SCM wrapper, paths, install plan text | `forbid` | SCM: Windows | 7 tests; SCM NOT RUN |
+| `rustward-storage` | SQLite store: migrations, settings, policy states + change history (optimistic version), devices, hash-chained events, retention, backup/restore, post-commit `EventObserver` | `forbid` | any | 17 tests |
+| `rustward-ipc` | Envelopes, `Request`/`ResponseBody` (24 request types), access levels, validation (incl. backup file names that cannot escape the backup directory), framing, RPC client/server with an authorization-failure hook, mock transport, named pipes | documented, only in `pipe.rs` | pipes: Windows | 23 tests + golden contract |
+| `rustward-app` | `AppService`: implements every request; inventory sources (live, fixture, empty); simulation; export (formula-safe CSV); retention; backups/restore; rate-limited authorization audit; Event Log observer attachment | `forbid` | any | 19 tests |
+| `rustward-service` | Console / service modes, runtime loop with device-change wake-up, pipe servers, SCM entry (via `rustward-windows::service_host`), Event Log mirror adapter, paths, install plan text | `forbid` | SCM: Windows | 12 tests; SCM NOT RUN |
 | `rustward-ui-bridge` | Backend selection for the desktop app | `forbid` | any | 2 + 2 (release) tests |
 | `rustward-inventory` | Read-only CLI: `scan`, `capture`, `evaluate`, `report`, `plan` | `forbid` | any | 4 tests |
 | `apps/rustward-desktop/src-tauri` | Tauri shell, single command `ipc_call` (outside the workspace: needs webview system libs) | none | Windows target | 4 mock-runtime tests (Linux) |
-| `apps/rustward-desktop` (TS) | UI pages, i18n, typed API client mirroring `rustward-ipc` | — | WebView2 | 30 Vitest tests |
+| `apps/rustward-desktop` (TS) | UI pages, i18n, typed API client mirroring `rustward-ipc`, in-app denial notices | — | WebView2 | 38 Vitest tests |
 
 ## IPC contract
 
@@ -90,6 +90,6 @@ enforcement boundary; no enforcement is active in this build.
 ## Dependencies (runtime, resolved in `Cargo.lock`)
 
 serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21, windows-sys 0.61.2,
-rusqlite 0.41.1 (bundled SQLite), sha2 0.11.1, windows-service 0.8.1 (Windows only),
+rusqlite 0.41.1 (bundled SQLite), sha2 0.11.1,
 tauri 2.12.5 / tauri-build 2.7.4 (shell). Frontend: react 19.1, @tauri-apps/api 2.12.4,
 lucide-react 0.577.0; build/test: vite 7.3, vitest 3.2, typescript 5.9, tailwindcss 4.1.

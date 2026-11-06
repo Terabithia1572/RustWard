@@ -98,9 +98,14 @@ prints the `sc.exe`/`icacls` commands; it executes nothing.
   `config/policy.example.json` — workstation ID **`PC-01`**, SanDisk and TÜBİTAK allowed,
   mode `dry_run`. TÜBİTAK has no verified identifier yet, so its devices are still denied
   in simulation. Administrators change the allowlist in the UI.
-- **Open task before acceptance:** the workstation ID cannot yet be set per machine (no UI
-  or installer property); all five workstations would report `PC-01`. Decide whether the
-  initial allowlist should be empty or the example brands.
+- **Workstation ID:** after installation an administrator renames each machine in
+  Settings → Workstation ID (a versioned, audited policy edit). An installer property is
+  still open. Decide whether the initial allowlist should be empty or the example brands.
+- **Event Log source (installer task, not implemented):** the service writes to the
+  Application log under the source `RustWard`. The MSI should register it
+  (`HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\RustWard`, with a message
+  file) — RustWard never writes this key itself. Without it, entries are still written but
+  Event Viewer shows a "description not found" prefix.
 - A database with a newer schema is refused (fail closed); a tampered policy row is reported
   as corrupt and the service keeps running with diagnostics.
 

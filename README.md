@@ -16,10 +16,10 @@ workstations.
 | Policy engine | `crates/rustward-core` | Tested |
 | SQLite storage, hash-chained audit | `crates/rustward-storage` | Tested |
 | Application service (all requests) | `crates/rustward-app` | Tested |
-| Windows service | `crates/rustward-service` | Console mode tested; SCM not compiled/verified |
+| Windows service | `crates/rustward-service` | Console mode + runtime tested; SCM host, Event Log mirror and device-change wake-up type-checked only (never run) |
 | Dry-run enforcement providers | `crates/rustward-enforcement` | Tested as a model; **no enforcement** |
 | Local IPC (mock + named pipes) | `crates/rustward-ipc` | Protocol tested; pipes type-checked only |
-| Read-only SetupAPI inventory | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
+| Windows adapters (read-only SetupAPI inventory, device-change notifications, Event Log, SCM host) | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
 | Desktop app (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | UI tested; Tauri shell tested on Linux only |
 | Backend selection for the app | `crates/rustward-ui-bridge` | Tested |
 | Offline packaging preparation | `scripts/`, `packaging/` | Vendoring tested on Linux; MSI NOT RUN |
