@@ -90,6 +90,7 @@ Last updated: 2026-11-06.
 | `a77c9d8` | Milestone F — Tauri desktop app |
 | `e3f9bde` | Milestone H — offline packaging preparation, documentation |
 | `c43a4c1`, `4909958` | Service host on windows-sys, device-change wake-up, Event Log mirror, authorization/backup auditing, workstation ID, restore; UI for these; documentation |
+| `73537a2`, `296efc7` | Phase 9B — final implementation hardening before Windows validation (SECURITY-AUDIT-PHASE-9B.md) |
 | `3aac8a2`, `7fd1a4b` | Phase 9A — security hardening and Windows acceptance readiness — see SECURITY-AUDIT-PHASE-9A.md |
 
 ## Environment
