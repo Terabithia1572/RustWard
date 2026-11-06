@@ -37,11 +37,21 @@ export function startRealBackend(
   const pending: Array<{ resolve: (v: ResponseBody) => void; reject: (e: unknown) => void }> = [];
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+  let closed = false;
   const rl = createInterface({ input: child.stdout });
   rl.on("line", (line) => {
+    // After close() the process is killed, possibly mid-write: readline then
+    // flushes a truncated last line. Nothing is waiting for it.
+    if (closed) return;
     const p = pending.shift();
     if (!p) return;
-    const msg = JSON.parse(line) as { ok?: ResponseBody; err?: { code: string; message: string } };
+    let msg: { ok?: ResponseBody; err?: { code: string; message: string } };
+    try {
+      msg = JSON.parse(line) as typeof msg;
+    } catch {
+      p.reject(new ApiError("client", `unparseable backend reply: ${line.slice(0, 120)}`));
+      return;
+    }
     if (msg.ok) p.resolve(msg.ok);
     // Shape of the Tauri rejection value (IpcError), as in production.
     else p.reject(msg.err ?? { code: "internal", message: "empty reply" });
@@ -49,7 +59,6 @@ export function startRealBackend(
   child.on("exit", (code) => {
     while (pending.length) pending.shift()!.reject(new ApiError("client", `backend exited (${code}): ${stderr}`));
   });
-  let closed = false;
   const call = (request: Request) =>
     new Promise<ResponseBody>((resolve, reject) => {
       // A page may still poll after the test finished: answer like a stopped

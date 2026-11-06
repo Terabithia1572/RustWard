@@ -1,16 +1,26 @@
-# Windows VM Acceptance Workflow
+# Windows VM Acceptance Workflow: Stages A–F (Phase 10)
 
-Status: **procedure only. No stage has been executed.** The tickable list with the Phase 9B
-additions (C16–C19, D6–D8, E7–E8) is [WINDOWS-ACCEPTANCE-CHECKLIST.md](WINDOWS-ACCEPTANCE-CHECKLIST.md). Every result is recorded as
-PASS / FAIL / NOT RUN in an evidence folder; nothing here may be reported as passed without
-that evidence.
+Status: **procedure only. No stage has been executed.** The tickable list is
+[WINDOWS-ACCEPTANCE-CHECKLIST.md](WINDOWS-ACCEPTANCE-CHECKLIST.md); it carries the expected result for every item. This
+document gives the order, the checkpoints and the evidence rules. Every result is recorded as
+PASS / FAIL / NOT RUN in an evidence folder; nothing may be reported as passed without that evidence.
 
 Scope: a **disposable** Windows 10 Pro x64 22H2 virtual machine (Hyper-V, VMware or
 VirtualBox), never the developer workstation and never one of the five production
-workstations. Stages A–E are **non-destructive**: they install RustWard (C onwards), but
+workstations. Stages A–E are **non-destructive**: they install RustWard (from Stage C), but
 they change no device, driver, registry policy or Group Policy. **Stage F is separate.**
 It requires its own written authorization and a recoverable test environment. It never runs
-as part of A–E, and in this build it cannot run at all (`ACTIVATION_ENABLED = false`).
+as part of A–E, and in this build it cannot run at all (`ACTIVATION_ENABLED = false`; no
+code writes the Restrictions key).
+
+| Stage | Name | System changes | Checkpoint |
+|---|---|---|---|
+| A | Native compilation | none (build outputs only) | CP0-clean + build tools |
+| B | Read-only system and device inspection | none | CP0-clean |
+| C | Windows Service and IPC | installs RustWard (service, event source, `%ProgramData%\RustWard`) | CP-C |
+| D | MSI installation and recovery | install / repair / uninstall / reinstall of RustWard only | CP-D |
+| E | Read-only policy inspection | none: `reg export` before and after must be identical | CP-E |
+| F | Controlled enforcement | **not executed**; separately authorized; impossible in this build | — |
 
 ## 0. Preparation (once)
 
@@ -22,94 +32,88 @@ as part of A–E, and in this build it cannot run at all (`ACTIVATION_ENABLED = 
 | Build tools (only if building in the VM) | Rust (MSVC toolchain, `x86_64-pc-windows-msvc`), Visual Studio Build Tools with the **Windows 10/11 SDK** (`rc.exe` is needed to embed the Event Log message table), Node 22 LTS, WiX 3.14 in `%LOCALAPPDATA%\tauri\WixTools314`. Alternatively build on a separate connected build machine and copy `release-out\` (OFFLINE-DEPLOYMENT.md §3). |
 | Evidence | `C:\rw-evidence\<stage>\<yyyymmdd-hhmm>\`: console transcripts (`Start-Transcript`), screenshots, `SHA256SUMS.txt` check, exported Event Log (`wevtutil epl Application app.evtx`). Raw inventories contain serial numbers: keep them inside the VM / on approved media. |
 
-## Stage A — Native build and static validation
+## Stage A — Native compilation
 
-Goal: the code compiles and its tests pass with the MSVC toolchain. Nothing is installed.
+Goal: the code compiles natively with the MSVC toolchain and every test passes, including the
+Windows-only tests in `crates/rustward-windows/tests/native_windows.rs` (read-only device
+enumeration, handle-leak check, internal-disk classification and, since Phase 10,
+`device_install_policy_capture_is_read_only_and_repeatable`). Nothing is installed.
+Items A1–A11. `scripts\run-native-validation.ps1` runs A1–A9 and writes `evidence\native\<stamp>\summary.txt`.
 
-| # | Command (repository root, unelevated PowerShell) | Expect |
-|---|---|---|
-| A1 | `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-native-validation.ps1` | `evidence\native\<stamp>\summary.txt`, all steps exit 0 |
-| A2 | `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings` | clean (on Windows this compiles the real pipe, SCM and SetupAPI code, not just the type-check build) |
-| A3 | `cargo test --workspace --locked` | same counts as TEST-RESULTS.md (Windows adds `tests/native_windows.rs`) |
-| A4 | `cargo build --release --locked -p rustward-service -p rustward-inventory` | builds; `build.rs` embeds the message table (fails loudly if `rc.exe` is missing) |
-| A5 | Resource check: `dumpbin /headers target\release\rustward-service.exe` (VS Developer prompt) or any PE resource viewer | `.rsrc` section present; resource type MESSAGETABLE (11), ID 1 |
-| A6 | `cd apps\rustward-desktop; npm ci; npm run typecheck; npm test; npx vite build` | PASS |
-| A7 | `cd src-tauri; cargo clippy --all-targets --locked -- -D warnings; cargo test --locked` | PASS on WebView2 build |
-| A8 | `.\scripts\build-release.ps1 -WithService` (connected build machine) | `release-out\` with MSI, exes, `BUILD-INFO.txt`, `DEPENDENCY-INVENTORY.md`, `SHA256SUMS.txt` |
-| A9 | `cargo deny check` (both lockfiles) | `advisories ok, bans ok, licenses ok, sources ok` |
+Exit: A1–A11 PASS. Record the commit (`BUILD-INFO.txt`) and the MSI hash.
 
-Exit: A1–A9 PASS. Record the commit (`BUILD-INFO.txt`) and the MSI hash.
+## Stage B — Read-only system and device inspection
 
-## Stage B — Application start, SQLite, UI and IPC (no service yet)
+Goal: the inventory and classification match real hardware. No enforcement, no ejection, no
+mounting change, nothing installed (the tools run from `release-out\`).
 
-Goal: the desktop app and the IPC stack work on Windows. Use the console backend so the SCM
-is not involved yet.
+1. Unelevated: `rustward-inventory capture --include-non-present`, then `report` (B1, B2).
+2. Plug each test device in turn (approved brand, unapproved brand, UASP drive, encrypted
+   drive, keyboard, mouse, printer) and record IDs, parent chain and classification (B3–B7).
+3. `rustward-service console --synthetic`, then live (B8). Console mode opens no pipes.
+4. Repeat B1/B8 with the network disconnected (B9).
 
-| # | Step | Expect |
-|---|---|---|
-| B1 | As `rwadmin`, elevated: `rustward-service.exe console --db C:\rw-test\b.db --synthetic --iterations 3` | 3 iterations; DB created with migrations v1–v2 |
-| B2 | Same with a live inventory (omit `--synthetic`) | iterations complete; `inventory_warnings` only, no failure |
-| B3 | Console mode does **not** open the named pipes (only the SCM entry point does), so pipe and authorization tests are in Stage C | — |
-| B4 | Install the MSI **without** the service fragment (plain `tauri build` MSI) on checkpoint CP0, start RustWard as `rwuser` | UI loads in WebView2; banner "Koruma henüz gerçek Windows ortamında doğrulanmadı."; backend shown as unavailable (no service) — never as protected |
-| B5 | DevTools are not available in the release build; CSP violations are absent (no console) | — |
-| B6 | Uninstall the MSI | program files removed |
+Raw inventories contain serial numbers: keep them inside the VM / on approved media; only the
+sanitized report leaves it.
 
-## Stage C — Windows Service registration and lifecycle
+## Stage C — Windows Service and IPC
 
-Checkpoint **CP-C** first. Install the acceptance MSI (`-WithService`) as `rwadmin`.
+Checkpoint **CP-C** first. Install the acceptance MSI (`-WithService`) as `rwadmin`. Items:
 
-| # | Step | Expect |
-|---|---|---|
-| C1 | `sc.exe qc RustWardService` | `SERVICE_AUTO_START`, `LocalSystem`, binary path `"…\rustward-service.exe" service` |
-| C2 | `sc.exe qfailure RustWardService` | restart ×3, 5 s, reset 86400 s |
-| C3 | `Get-Acl $env:ProgramData\RustWard \| Format-List` | protected, SYSTEM + Administrators full control, no Users |
-| C4 | `sc.exe query RustWardService` | `RUNNING` within 30 s; `rustward.db` exists |
-| C5 | `Stop-Service RustWardService`; `Start-Service` ×3 | clean stops (`STOPPED` within the wait hint), no orphaned processes (`Get-Process rustward-service`) |
-| C6 | `taskkill /F /IM rustward-service.exe` | SCM restarts it after ~5 s (`sc.exe queryex`) |
-| C7 | Pipe ACLs: `[System.IO.Directory]::GetFiles('\\.\pipe\') \| sls RustWard`; `Get-Acl \\.\pipe\RustWard.Admin.v1` (PowerShell 7) or AccessChk `accesschk -p RustWard` | Admin pipe: SYSTEM, Administrators only; owner SYSTEM. Status pipe: + Authenticated Users read/write |
-| C8 | As `rwuser`: UI reads dashboard, devices, events | works (status pipe) |
-| C9 | As `rwuser`: try to add/remove a manufacturer, change workstation ID, create/restore a backup | refused "elevated administrator required"; one `authorization_failed` event each (≤ 20/min) |
-| C10 | As `rwadmin` **unelevated**: same | refused (not elevated) |
-| C11 | As `rwadmin` elevated ("Run as administrator"): add a test brand, then remove it; rename workstation; create backup; prepare + apply restore of that backup | succeed; policy versions increase; `policy_restored` with restore id; pre-restore backup listed |
-| C12 | Impostor test: stop the service; as `rwuser` create a scheduled task (run whether logged on or not) that runs a pipe server named `RustWard.Status.v1`; start the UI | client refuses: pipe owner is not LocalSystem / the RustWard service, or the serving process is not the SCM's RustWardService process (F-03, Phase 9B). Delete the task afterwards. |
-| C13 | Kill the UI mid-request (Task Manager) during a policy edit; reopen | change applied at most once; a retry with the old version gets `conflict` |
-| C14 | Uninstall the MSI | service stopped and deleted; `%ProgramData%\RustWard` **kept**; Event Log source key removed (`Test-Path HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\RustWard` → False) |
-| C15 | Reinstall over the kept data | existing DB opened, chain status OK, history intact |
-| C16 | F-16: virtual-account variant on a separate checkpoint (`ServiceInstall Account="NT SERVICE\RustWardService"`, data-dir ACL from `service_sid::data_dir_sddl(VirtualAccount)`, pipe SDDL from `admin_pipe_sddl/status_pipe_sddl(VirtualAccount)`) | record whether inventory, notifications, Event Log and pipes work; decide |
-| C17 | F-18: while the service runs, `rwuser` calls `CreateNamedPipeW("\\.\pipe\RustWard.Status.v1", PIPE_ACCESS_DUPLEX, …)` (small PowerShell/C# snippet) | fails with ERROR_ACCESS_DENIED (5) |
-| C18 | F-13: open 8 idle connections to the status pipe as `rwuser` | the UI still works via the admin pipe; the 9th status connection is closed at once; slots free after 15 s idle |
-| C19 | F-14: stop the service while an idle client is connected | STOPPED within about 3 s; no `ipc_shutdown_incomplete` (1010) |
+- C1–C6: SCM registration, recovery actions, data-directory ACL, start/stop and crash restart.
+- C7–C13: pipe ACLs, the user/admin/elevation authorization matrix, the impostor-server test (C12) and at-most-once edits (C13). C8 includes the read-only **Uygulama Hazırlığı** page (`GetEnforcementReadiness`, a read-only request served on the status pipe).
+- C14–C18: Phase 9B findings F-19, F-16, F-18, F-13 and F-14.
+- C19–C27: Event Log registration, formatted messages, the event ID set, the start failure (1008), device notifications, checkpoint verification against a tampered copy, and queued delivery while the Event Log service is stopped.
 
-## Stage D — Event Log and device notifications
+C12 procedure: stop the service; as `rwuser` create a scheduled task that runs a pipe server
+named `RustWard.Status.v1`; start the UI. The client must refuse, because the pipe owner is not
+LocalSystem / the RustWard service, or the serving process is not the SCM's RustWardService
+process. Delete the task afterwards.
 
-| # | Step | Expect |
-|---|---|---|
-| D1 | `Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\RustWard` | `EventMessageFile` = path of `rustward-service.exe`, `TypesSupported` = 7 |
-| D2 | Event Viewer → Application → source RustWard | Entries display the RustWard text **without** "The description for Event ID … cannot be found" |
-| D3 | IDs present after Stage C actions | 1000 service_started, 1001 service_stopping, 1004 backend_started, 3001 policy_changed, 4000 authorization_failed, 5001 backup_created, 5005 restore_prepared, 5007 policy_restored, 2000/2001 device events |
-| D4 | Rename `%ProgramData%\RustWard\rustward.db` to an unreadable copy (deny SYSTEM read on a copy, or put a newer-schema file) and start the service | service fails to start; Event Log **1008 service_start_failed** (Error) with the reason; restore the file afterwards |
-| D5 | Plug/unplug a virtual or redirected device that creates a PnP node (Stage E covers storage) | next inventory refresh happens within seconds (`CM_Register_Notification` wake-up), not after the full interval |
-| D6 | Copy head id and hash prefix from an `audit_checkpoint` (5008) entry; run `rustward-service verify-checkpoint --head-id <id> --hash <prefix>` | `MATCH`, exit 0 (read-only) |
-| D7 | On a **copy** of the database: delete the newest events (attacker simulation), run D6 against `--db <copy>` | `MISSING`/`MISMATCH`, exit 3; Diagnostics on the copy reports TRUNCATED or EVENTS MISSING |
-| D8 | Stop the Windows Event Log service briefly (test VM only), generate events, start it again | Diagnostics shows *pending*; entries are delivered in order after recovery; > 1000 pending → Event 1009 |
-| D9 | `wevtutil epl Application C:\rw-evidence\D\app.evtx` | evidence saved |
+C15 (F-16 virtual account) runs on a **separate** checkpoint: `ServiceInstall
+Account="NT SERVICE\RustWardService"`, data-dir ACL from `service_sid::data_dir_sddl(VirtualAccount)`,
+pipe SDDL from `admin_pipe_sddl/status_pipe_sddl(VirtualAccount)`. Also check that the virtual
+account can read the Restrictions key (policy capture through the readiness page).
 
-Full ID list: `rustward-windows/src/eventlog_map.rs` (`EVENT_IDS`, 9000 = other).
+Full event ID list: `rustward-windows/src/eventlog_map.rs` (`EVENT_IDS`, 9000 = other).
 
-## Stage E — Read-only real USB inventory
+## Stage D — MSI installation and recovery
 
-No enforcement, no ejection, no mounting changes.
+Checkpoint **CP-D**. Items D1–D10: hash check of `release-out\`, the UI-only MSI on a clean
+image (the banner "Koruma henüz gerçek Windows ortamında doğrulanmadı." must be visible and the
+service shown as unavailable, never protected), the logged install, backup/two-step restore,
+repair, uninstall (data kept, event source removed), reinstall over kept data, a reinstall
+after restoring CP0, and the "Corrupted RustWard DB/config" recovery row of RECOVERY-PLAN.md.
+An installer is only reported as working after D4–D8 PASS on native Windows.
 
-| # | Step | Expect |
-|---|---|---|
-| E1 | `rustward-inventory capture --include-non-present --out C:\rw-evidence\E\raw-inventory.json` | succeeds unelevated |
-| E2 | `rustward-inventory report --snapshot … --out-dir C:\rw-evidence\E\report` | sanitized report (serials redacted) |
-| E3 | For each test device: hardware IDs (`USBSTOR\Disk<vendor>…`, `SCSI\Disk…` for UASP), VID/PID, parent chain, classification | matches BRAND-IDENTIFICATION.md; record vendor strings |
-| E4 | UI → Devices → Explain | simulated verdict only, labelled "SİMÜLE" |
-| E5 | Encrypted drive: unlock prompt (vendor app / hardware PIN) appears normally | RustWard does not interfere |
-| E6 | Keyboard, mouse, printer | classified as peripherals, never in scope |
-| E7 | UASP drive | `SCSI\Disk…` namespace, USB parent chain resolved |
-| E8 | `reg export "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall" C:\rw-evidence\E\deviceinstall.reg` | evidence for the future read-only `PolicySnapshot` capture; nothing changed |
+## Stage E — Read-only policy inspection
+
+Checkpoint **CP-E** (RustWard installed from Stage D). **Do not create, change or delete any
+value under `HKLM\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall`** on this checkpoint,
+not even to test the reader. Pre-existing values must come from the image as delivered, so
+that the capture is compared with a real administrator configuration.
+
+1. `reg export … deviceinstall-before.reg /y` (E1).
+2. `rustward-inventory policy-capture --out …\policy-capture.json`, unelevated then elevated
+   (E2). The reader opens the key with `RegOpenKeyExW(KEY_READ | KEY_WOW64_64KEY)` only, reads
+   one level of subkeys, and records OS facts from `RtlGetVersion`, `GetProductInfo` and the
+   `UBR` value (undocumented; reported as such).
+3. Compare value by value with the `.reg` export (E3).
+4. `policy-inspect` with the Stage B inventory (E4). Every value is labelled *documented*
+   (Policy CSP mapping table), *unresolved* or *unrecognised*. Layering support is
+   `Supported` for Windows 11 (build ≥ 22000). On Windows 10 19041–19045 it is `NotSupported`
+   when UBR < 1151, and otherwise `Unresolved` with "confirm with winver", because the UBR comes
+   from an undocumented value. Record the `winver` output next to it. Older builds are `NotSupported`.
+5. **E5/E6 — the two unresolved items.** The list-entry layout (a subkey named after the
+   policy holding numbered `REG_SZ` values) and the `*Retroactive` value names are not in the
+   Policy CSP mapping table. Record what the delivered image shows; if the image has no list
+   policies, record "not observed". They stay **unresolved** until confirmed from official
+   documentation or a real export. Do not create values to find out.
+6. `assess-installed --live --include-non-present --policy-capture … --sanitize` (E7). The
+   report is **manual-only**: RustWard never uninstalls a device or removes a PnP instance.
+7. Readiness page as elevated `rwadmin` (E8): the activation button is permanently disabled.
+8. Native test E9; then `reg export … deviceinstall-after.reg` and `fc /b` with the "before"
+   export (E10). Any difference fails Stage E.
 
 ### Hyper-V limitation (important)
 
@@ -123,13 +127,13 @@ Hyper-V has **no generic USB pass-through** ([Microsoft](https://learn.microsoft
   VID/PID, `USBSTOR` IDs and the USB parent chain are gone. Removable flash drives often
   cannot be taken offline at all.
 
-So **Stage E on Hyper-V can only verify inventory of non-USB devices**. Real USB storage
+So **Stage B on Hyper-V can only verify inventory of non-USB devices** (Stage E, policy inspection, works on any hypervisor). Real USB storage
 needs either a hypervisor with USB pass-through (VMware Workstation / VirtualBox: the guest
 sees the real VID/PID and INQUIRY strings, but through an emulated xHCI host controller)
 or, for acceptance, **physical hardware** identical to the five workstations. Enforcement
 results (Stage F) are accepted **only on physical hardware**.
 
-## Stage F — Controlled USB access enforcement (separate authorization)
+## Stage F — Controlled enforcement (separately authorized, NOT executed)
 
 **Not runnable in this build.** Activation is refused by `activation::request_activation`
 because `ACTIVATION_ENABLED = false`, and several gates are hard-wired NotMet. Stage F needs
@@ -142,7 +146,7 @@ Gates evaluated by `rustward-enforcement::activation::evaluate_gates` (all must 
 | Gate | Met when |
 |---|---|
 | `build_permits_activation` | a reviewed build with an activation path exists (not this one) |
-| `windows_compatibility_verified` | edition, build ≥ 19041.1151 (layered evaluation), `vm_validation` precondition met, Stage A–E acceptance record id |
+| `windows_compatibility_verified` | edition, build ≥ 19041.1151 (layered evaluation), `vm_validation` precondition met, Stage A–E acceptance record id (including E5/E6 resolved) |
 | `administrator_authorized` | service-side token check: elevated Administrators |
 | `test_environment_confirmed` | operator typed `I CONFIRM THIS IS A DISPOSABLE TEST MACHINE <workstation-id>` |
 | `baseline_saved` | baseline inventory (incl. non-present) captured and a registered backup named |
@@ -170,6 +174,7 @@ accepted blocking mechanism.
 
 ## Exit criteria for "ready for physical-hardware acceptance"
 
-Stages A–E PASS with evidence, the C12 impostor test refused, D2 shows formatted
-descriptions, and every finding in SECURITY-AUDIT-PHASE-9A.md marked "verify on Windows" has
-a result.
+Stages A–E PASS with evidence; C12 impostor test refused; C20 shows formatted descriptions; E10
+exports identical; every finding in SECURITY-AUDIT-PHASE-9A.md and SECURITY-AUDIT-PHASE-9B.md
+marked "verify on Windows" has a result. This is a readiness statement for further testing,
+**not** a statement that RustWard is production-ready or that it blocks anything.

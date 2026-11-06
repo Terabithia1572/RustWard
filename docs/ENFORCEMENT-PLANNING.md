@@ -68,7 +68,7 @@ precedence over it. It is reported as a foreign value.
 | **Class-level hazards** | DiskDrive prevent also affects VHD/VHDX mounts, Storage Spaces, iSCSI and any new internal disk. CD-ROM, WPD/MTP phones and card readers with other classes are **enforcement gaps** reported by the dry run. | The scope decision for CD/DVD and MTP is open (L-08). |
 | **Changes to installed hardware** | Replacing or adding an internal disk: suspend → install → recapture baseline → re-plan → re-approve (`plan_current` gate). | Procedure only; nothing automated. |
 | **Windows feature updates** | Before the update: `suspend_ops`. After the update: verify the system disk, keyboard and mouse; `staleness` reports `OsBuildChanged`; re-plan; resume (rollback of the suspend). | Needs VM validation with a real feature update (Stage F). |
-| **Recovery and rollback** | `rollback_ops` restores the captured state exactly, including the administrator's pre-existing values. Offline recovery: WinRE → load the offline SOFTWARE hive → remove `DenyDeviceClasses` (RECOVERY-PLAN.md). | Writing and refreshing policy is not implemented, so rollback has only been tested on the in-memory model. |
+| **Recovery and rollback** | `rollback_ops` restores the captured state exactly, including the administrator's pre-existing values. Offline recovery: WinRE → load the offline SOFTWARE hive → remove `DenyDeviceClasses` (RECOVERY-PLAN.md). | Writing and refreshing policy is not implemented, so rollback has only been tested on the in-memory model (§7). |
 | **Coexistence with Group Policy** | `merge_plan` keeps the administrator's own entries. Foreign values are never touched. Conflicts block activation. | Standalone workstations have no domain GPO. Local Group Policy edits made after activation are not monitored. |
 
 ## 4. Still unimplemented (explicit)
@@ -80,7 +80,7 @@ precedence over it. It is reported as a foreign value.
 2. Any registry write, policy refresh or device rescan.
 3. Confirming every planned value name against Microsoft documentation in the VM. All but `AllowDenyLayered` are still marked `confirmed_against_documentation = false`.
 4. Producing `AppliedPolicyReceipt` and `VerificationEvidence` (read/write denial probe).
-5. A UI for the activation workflow: the gates exist in the library only.
+5. ~~A UI for the activation workflow.~~ **Phase 10 step 3:** a **read-only** readiness page shows the gates, conflicts, planned changes and recovery model; its activation button is permanently disabled. No activation workflow exists.
 
 Sources: [Policy CSP – DeviceInstallation (Microsoft Learn)](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-deviceinstallation) ·
 [Named Pipe Security and Access Rights (Microsoft Learn)](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)
@@ -131,3 +131,25 @@ Requirements this mechanism **cannot** fulfil (also listed in every report):
 - authenticating a vendor string: a device reporting the SanDisk vendor string is allowed (the
   fixture's spoof case shows this);
 - covering CD/DVD, MTP and other non-DiskDrive classes.
+
+## 7. Mock Windows policy backend (Phase 10 step 4)
+
+`crates/rustward-enforcement/tests/mock_policy_backend.rs` holds `MockRegistry`, an
+**in-memory, test-only** stand-in for the Restrictions key. It applies `RegOp`s one at a time
+and can be told to stop after *n* operations (simulating a crash, power loss or access error
+during a write). No production code uses it, and nothing in RustWard writes the real registry.
+
+| Test | What it shows |
+|---|---|
+| `interrupted_application_is_detected_as_partial_and_rolled_back_exactly` | For 4 realistic baselines and every stop point: the read-back is `Partial`, and `rollback_ops` computed from the partial state restores the baseline exactly |
+| `an_interrupted_rollback_can_be_resumed_to_the_exact_baseline` | A rollback that itself stops can be recomputed and finished |
+| `apply_then_rollback_never_touches_unrelated_values` | Values outside the plan (including an unrecognised binary value) are byte-for-byte unchanged |
+| `a_plan_approved_before_the_policy_changed_is_stale` | A policy change after approval changes the fingerprint; confirmation and approval no longer match; activation stays refused |
+| `authorization_failures_keep_the_administrator_gate_shut` | Non-admin / unelevated callers never meet `administrator_authorized` |
+| `policy_values_present_is_never_verified_protection` | All values present still means "planned enforcement", not protection |
+| `a_verification_failure_is_reported_not_hidden` | A silently dropped value or a later overwrite shows as `Partial` (missing / different) |
+| `installed_assessment_against_mock_policy_is_read_only_and_storage_only` | The assessment performs zero operations, assesses storage only, never remediates internal disks, and marks installed denied devices as still accessible |
+
+What this does **not** show: real registry ACLs, WOW64 redirection, Group Policy refresh
+overwriting values, or whether Windows honours the values. Only a real read/write denial test
+(Stage F, separately authorized) can establish `VerifiedProtected`.

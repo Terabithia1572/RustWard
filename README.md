@@ -17,9 +17,9 @@ workstations.
 | SQLite storage, hash-chained audit | `crates/rustward-storage` | Tested |
 | Application service (all requests) | `crates/rustward-app` | Tested |
 | Windows service | `crates/rustward-service` | Console mode + runtime tested; SCM host, Event Log mirror and device-change wake-up type-checked only (never run) |
-| Dry-run enforcement providers + activation gates | `crates/rustward-enforcement` | Tested as a model; activation always refused; **no enforcement** |
+| Dry-run enforcement providers, activation gates, policy inspection + installed-device assessment | `crates/rustward-enforcement` | Tested as a model; activation always refused; **no enforcement**, no registry writes |
 | Local IPC (mock + named pipes) | `crates/rustward-ipc` | Protocol tested; pipes type-checked only |
-| Windows adapters (read-only SetupAPI inventory, device-change notifications, Event Log, SCM host) | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
+| Windows adapters (read-only SetupAPI inventory, read-only Device Installation policy reader, device-change notifications, Event Log, SCM host) | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
 | Desktop app (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | UI tested; Tauri shell tested on Linux only |
 | Backend selection for the app | `crates/rustward-ui-bridge` | Tested |
 | Offline packaging preparation | `scripts/`, `packaging/` | Vendoring tested on Linux; MSI NOT RUN |
@@ -77,8 +77,8 @@ report a generic controller vendor. TÜBİTAK SIR II identifiers are still unkno
 | [TEST-PLAN](docs/TEST-PLAN.md) / [RECOVERY-PLAN](docs/RECOVERY-PLAN.md) | Acceptance tests, rollback |
 | [SECURITY-AUDIT-PHASE-9A](docs/SECURITY-AUDIT-PHASE-9A.md) | Phase 9A findings by severity, fixes, open items |
 | [SECURITY-AUDIT-PHASE-9B](docs/SECURITY-AUDIT-PHASE-9B.md) | Disposition of F-12…F-16, new findings F-18…F-21, regression checklist |
-| [ENFORCEMENT-PLANNING](docs/ENFORCEMENT-PLANNING.md) | Stages, existing-policy comparison, merge, rollback, staleness; DIR strategy review; what is unimplemented |
-| [WINDOWS-ACCEPTANCE-CHECKLIST](docs/WINDOWS-ACCEPTANCE-CHECKLIST.md) | Tickable Stage A–E checklist with evidence slots |
+| [ENFORCEMENT-PLANNING](docs/ENFORCEMENT-PLANNING.md) | Stages, existing-policy comparison, merge, rollback, staleness; read-only policy inspection, installed-device assessment, mock policy backend (Phase 10); what is unimplemented |
+| [WINDOWS-ACCEPTANCE-CHECKLIST](docs/WINDOWS-ACCEPTANCE-CHECKLIST.md) | Tickable Stage A–F checklist (Phase 10: A compile, B device inspection, C service/IPC, D MSI/recovery, E read-only policy inspection; F not executed) |
 | [AUDIT-INTEGRITY](docs/AUDIT-INTEGRITY.md) | Non-destructive restore, backup verification, tamper-resistance limits |
 | [WINDOWS-VM-ACCEPTANCE](docs/WINDOWS-VM-ACCEPTANCE.md) | Stages A–F on a disposable Windows 10 Pro VM; Hyper-V USB limits |
 | [RELEASE-READINESS](docs/RELEASE-READINESS.md) | Target config, installer design, hashes, dependencies, readiness classification |

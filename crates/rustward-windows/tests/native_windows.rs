@@ -142,3 +142,31 @@ fn internal_disks_are_classified_as_system_storage_on_this_machine() {
     }
     assert!(internal >= 1, "the boot disk must be found and excluded");
 }
+
+#[test]
+fn device_install_policy_capture_is_read_only_and_repeatable() {
+    // Phase 10: reads the Restrictions key with KEY_READ only. Two captures
+    // in a row must agree (nothing was written between them), and the OS
+    // facts must come from RtlGetVersion on a real Windows 10/11 machine.
+    let first = rustward_windows::capture_device_install_policy(1).expect("policy capture");
+    let second = rustward_windows::capture_device_install_policy(2).expect("policy capture");
+    println!(
+        "native: restrictions key present = {}, values = {}, read errors = {}, os = {:?}",
+        first.key_present,
+        first.values.values.len(),
+        first.read_errors.len(),
+        first.os
+    );
+    assert!(first.os.is_windows);
+    assert_eq!(
+        first.os.major,
+        Some(10),
+        "Windows 10 and 11 report major 10"
+    );
+    assert!(first.os.build.is_some_and(|b| b >= 10240));
+    assert_eq!(first.key_present, second.key_present);
+    assert_eq!(first.values, second.values);
+    if !first.key_present {
+        assert!(first.values.values.is_empty());
+    }
+}

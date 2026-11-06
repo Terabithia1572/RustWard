@@ -73,6 +73,11 @@
 - `rustward-windows`'s inventory backend imports only five read-only Win32 functions, and a
   crate-wide test fails if any module references device-changing, driver, registry,
   service-configuration, `DeviceIoControl` or `CreateFile` APIs.
+- Phase 10: the only registry access is `policy_reader`, which has its own allowlist test
+  (`RegOpenKeyExW`, `RegEnumValueW`, `RegEnumKeyExW`, `RegGetValueW`, `RegCloseKey`;
+  access mask `KEY_READ | KEY_WOW64_64KEY` only). `rustward-enforcement`'s scan covers
+  `policy_eval`, `policy_inspect` and `installed_assessment`. `GetEnforcementReadiness` is a
+  read-only request; nothing in RustWard writes the Restrictions key.
 - `rustward-core`, `rustward-enforcement` and `rustward-inventory` forbid `unsafe`.
 - No component can report `VerifiedProtected` without `VerificationEvidence`, which has no
   public constructor and is not `Deserialize` (cannot be forged from IPC or files).

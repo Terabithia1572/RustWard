@@ -56,6 +56,24 @@ Last updated: 2026-11-06.
 | Desktop workflow | 13 Vitest integration tests drive the real backend (SQLite) through a dev-only stdio harness, incl. standard-user refusals | IMPLEMENTED AND AUTOMATED-TESTED |
 | Documents | SECURITY-AUDIT-PHASE-9B, ENFORCEMENT-PLANNING, WINDOWS-ACCEPTANCE-CHECKLIST; updated others | — |
 
+## Phase 10 — read-only policy inspection and installed-device assessment
+
+The actual Windows policy **application** code is **not implemented** (blocked by design): there
+is no registry write path anywhere in RustWard, `ACTIVATION_ENABLED = false`, and Stage F was not
+executed.
+
+| Step | Item | Content | Classification |
+|---|---|---|---|
+| 1 | Policy reader | `rustward-windows::policy_reader`: `RegOpenKeyExW(KEY_READ \| KEY_WOW64_64KEY)`, `RegEnumValueW`, `RegEnumKeyExW`, `RegGetValueW` (UBR), `RegCloseKey`; `RtlGetVersion`, `GetProductInfo`; bounded (4096 entries, 64 KiB per value); allowlist test | IMPLEMENTED BUT NOT WINDOWS-VERIFIED (type-checked; native test written, NOT RUN) |
+| 1 | Interpretation | `policy_inspect` (documented / unresolved / unrecognised names, layering support by build/UBR, edition, conflicts, plan presence), `policy_eval` (layered install-time evaluation model) | IMPLEMENTED AND AUTOMATED-TESTED |
+| 1 | CLI | `rustward-inventory policy-capture`, `policy-inspect` | Logic tested from fixtures; live capture NOT WINDOWS-VERIFIED |
+| 2 | Installed devices | `installed_assessment` + `rustward-inventory assess-installed`: denied-but-installed storage, internal disks protected, manual Device Manager steps (TR/EN) only, sanitized report | IMPLEMENTED AND AUTOMATED-TESTED (on synthetic inventories) |
+| 3 | UI | Read-only IPC request `GetEnforcementReadiness` (26th request type); **Uygulama Hazırlığı** page: actual state, inspection source, conflicts, planned changes, 15 gates, permissions, recovery model, installed assessment; "Politikayı etkinleştir" permanently disabled | IMPLEMENTED AND AUTOMATED-TESTED (WebView2 NOT WINDOWS-VERIFIED) |
+| 4 | Mock backend | `tests/mock_policy_backend.rs`: in-memory registry with fault injection — interruption, resumable rollback, unrelated values preserved, stale plans, authorization, "values present ≠ protected", verification failures | IMPLEMENTED AND AUTOMATED-TESTED (simulation only) |
+| 4 | Fixes | F-19 follow-up (`PRAGMA journal_mode=WAL` busy without busy handler: bounded retry); integration harness truncated-line race | Fixed + repeated runs |
+| 4 | Acceptance | WINDOWS-ACCEPTANCE-CHECKLIST.md and WINDOWS-VM-ACCEPTANCE.md restructured to Stages A–F (A compile, B device inspection, C service/IPC, D MSI/recovery, E policy inspection, F not executed) | Documented; no stage executed |
+| — | Unresolved | List-entry layout and `*Retroactive` names (not in the Policy CSP mapping table); UBR has no documented API | Reported as unresolved, never guessed |
+
 ## Feature gaps (known, not hidden)
 
 | Gap | Status |
@@ -72,9 +90,9 @@ Last updated: 2026-11-06.
 
 | Category | Items |
 |---|---|
-| Verified facts (documentation) | Microsoft docs: DeviceInstallation CSP editions/versions/layering; USBSTOR vendor-level hardware ID format. Tauri bundler behaviour read from tauri-bundler 2.10.4 source (WiX download, WebView2 HEAD request, environment clearing). |
+| Verified facts (documentation) | Microsoft docs: DeviceInstallation CSP editions/versions/layering and the Policy CSP registry mapping table (value names used by the Phase 10 reader); USBSTOR vendor-level hardware ID format. Tauri bundler behaviour read from tauri-bundler 2.10.4 source (WiX download, WebView2 HEAD request, environment clearing). |
 | Engineering assumptions | Install prevention ⇒ no volume ⇒ no access; non-retroactive rules; SCSI-namespace padding; INQUIRY vendor strings of SanDisk/Kingston/Seagate; WiX fragment works with Tauri's template. |
-| Tested | See `TEST-RESULTS.md`: 181 Rust workspace tests, 2 release-mode bridge tests, 4 Tauri IPC tests, 38 Vitest tests, fmt/clippy/tsc/build — all on Linux. |
+| Tested | See `TEST-RESULTS.md`: 270 Rust workspace tests, 2 release-mode bridge tests, 4 Tauri IPC tests, 43 Vitest + 16 Vitest integration tests, fmt/clippy/tsc/build/deny — all on Linux (Phase 10). |
 | Not tested | Anything on Windows; anything on hardware. |
 
 ## Commits (private local repository, never pushed)
@@ -90,7 +108,11 @@ Last updated: 2026-11-06.
 | `a77c9d8` | Milestone F — Tauri desktop app |
 | `e3f9bde` | Milestone H — offline packaging preparation, documentation |
 | `c43a4c1`, `4909958` | Service host on windows-sys, device-change wake-up, Event Log mirror, authorization/backup auditing, workstation ID, restore; UI for these; documentation |
-| `73537a2`, `296efc7` | Phase 9B — final implementation hardening before Windows validation (SECURITY-AUDIT-PHASE-9B.md) |
+| `73537a2`, `296efc7`, `3c60cad` | Phase 9B — final implementation hardening before Windows validation (SECURITY-AUDIT-PHASE-9B.md) |
+| `c63d188` | Phase 10 step 1 — read-only inspection of Device Installation Restrictions |
+| `e17bd54` | Phase 10 step 2 — read-only assessment of already-installed storage devices |
+| `60a676e` | Phase 10 step 3 — read-only enforcement readiness in the Turkish UI |
+| (this commit) | Phase 10 step 4 — mock policy backend tests, Stage A–F acceptance documents, F-19 follow-up fix |
 | `3aac8a2`, `7fd1a4b` | Phase 9A — security hardening and Windows acceptance readiness — see SECURITY-AUDIT-PHASE-9A.md |
 
 ## Environment

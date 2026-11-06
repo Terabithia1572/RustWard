@@ -323,6 +323,30 @@ impl std::fmt::Debug for Store {
     }
 }
 
+/// Switch a file database to WAL.
+///
+/// Changing the journal mode needs an exclusive lock, and SQLite reports
+/// `SQLITE_BUSY` for it **without** calling the busy handler when another
+/// connection is opening the same new file at that moment (F-19 follow-up,
+/// Phase 10). Retry for a bounded time (about the busy timeout), then fail.
+fn enable_wal(conn: &Connection) -> Result<(), StorageError> {
+    const ATTEMPTS: u32 = 100;
+    const PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
+    let mut attempt = 0;
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy && attempt < ATTEMPTS =>
+            {
+                attempt += 1;
+                std::thread::sleep(PAUSE);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 impl Store {
     /// Open (or create) a database file and apply migrations.
     pub fn open(path: &Path, clock: Arc<dyn Clock>) -> Result<Self, StorageError> {
@@ -340,7 +364,7 @@ impl Store {
         // FULL sync: survive abrupt power loss without losing committed edits.
         conn.pragma_update(None, "synchronous", "FULL")?;
         if file {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
+            enable_wal(&conn)?;
         }
         migrations::migrate(&mut conn, clock.now_ms())?;
         let mut store = Self {
