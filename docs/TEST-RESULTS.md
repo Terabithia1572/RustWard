@@ -1,6 +1,8 @@
 # Test Results
 
-Last run: **2026-11-06**, **Phase 11** (native Windows build preparation). **No native Windows test was executed** (no Windows execution environment or disposable VM was available; PHASE-11-NATIVE-VALIDATION.md).
+**Native Windows VM test 2026-11-06 (service installed from the complete MSI): see [WINDOWS-VM-TEST-2026-11-06.md](WINDOWS-VM-TEST-2026-11-06.md)** — IPC, LocalSystem service, SCM stop/start/restart/crash recovery, elevation-based authorization, SQLite persistence across reinstall, real SetupAPI inventory, Event Log writes and uninstall PASS; caller identity FAIL then fixed and PASS; formatted Event Viewer messages NOT VERIFIED; scripted pipe-ACL/impostor tests NOT RUN. Linux suite at `de4c6b4`: 277 Rust workspace + 3 release + 4 src-tauri, 50 Vitest, 16 integration — PASS.
+
+Earlier entry — Last run: **2026-11-06**, **Phase 11** (native Windows build preparation). **No native Windows test was executed** (no Windows execution environment or disposable VM was available; PHASE-11-NATIVE-VALIDATION.md).
 
 After Phase 11 (Linux): **276 workspace + 3 release-mode + 4 src-tauri = 283 Rust; 43 Vitest + 16 Vitest integration — PASS, 0 failed, 0 ignored.** `scripts/verify-all.sh` with `RUSTWARD_PWSH` and `RUSTWARD_WINDOWS_TARGET_CHECK=1`: **19 PASS**, 0 FAIL, 4 NOT RUN (native Windows, pipes/service runtime, native SetupAPI, physical USB).
 
