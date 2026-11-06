@@ -32,7 +32,9 @@
 | T9 | Unlock SIR II to bypass policy (re-enumeration) | Policy evaluated per devnode; test T-05/T-06 | Unknown until tested |
 | T10 | Raw disk access to a blocked device | Device never installs → no disk object | Verify in Phase 2 |
 | T11 | Log tampering | Hash chain + Event Log; tamper-evident only | L-11 |
-| T13 | Standard user squats a pipe name (scheduled task in session 0) to impersonate the service | Client requires pipe owner = LocalSystem (`O:SY`) and session 0 (F-03) | Verify on Windows (C12) |
+| T13 | Standard user squats a pipe name (scheduled task in session 0) or creates an extra instance of the running service's pipe to impersonate the service | Client requires pipe owner = LocalSystem/service SID, server PID = SCM's RustWardService PID, session 0 (F-03); users lack `FILE_CREATE_PIPE_INSTANCE` (F-18) | Verify on Windows (C12, C17) |
+| T15 | Standard user exhausts pipe connections | Pooled servers, idle timeout, admin pipe not openable by users (F-13) | Status-pipe DoS possible (L-26) |
+| T16 | Administrator removes the newest audit records | Truncation/gap detection, Event-Log-mirrored checkpoints, `verify-checkpoint` (F-12) | Undetectable if every out-of-database copy is destroyed (L-24) |
 | T14 | Restore an old backup to re-activate a permissive policy or erase audit records | Two-step restore, registered SHA-256, new version, audit never replaced (F-01/F-02) | Admin-only; admins trusted |
 | T12 | Misclassification blocks keyboard/mouse/system disk | DiskDrive-only rule, non-retroactive, baseline instance-ID allow list, peripheral tests, rollback | Verified only by hardware tests |
 

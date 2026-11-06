@@ -34,11 +34,27 @@ Last updated: 2026-11-06.
 |---|---|---|
 | Audit integrity | Two-step, non-destructive restore (backup policy becomes a new version; audit never replaced); registered + hashed backups; append-only triggers; failed attempts audited (AUDIT-INTEGRITY.md) | IMPLEMENTED AND AUTOMATED-TESTED |
 | Privileged IPC | Full refusal matrix, replay, interruption and malformed-request tests through the real pipeline (`ipc_security.rs`); per-request identification after read; unidentifiable callers refused | Logic: IMPLEMENTED AND AUTOMATED-TESTED. Pipe owner check (`O:SY`), per-request token query: IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
-| Activation workflow | `rustward-enforcement::activation`: 6 stages, 13 gates, plan fingerprint, computed system-disk gate; activation refused (`ACTIVATION_ENABLED = false`) | IMPLEMENTED AND AUTOMATED-TESTED (as a refusal) |
+| Activation workflow | `rustward-enforcement::activation`: 6 stages, 13 gates (15 after Phase 9B), plan fingerprint, computed system-disk gate; activation refused (`ACTIVATION_ENABLED = false`) | IMPLEMENTED AND AUTOMATED-TESTED (as a refusal) |
 | Event Log | MESSAGETABLE generator (tested), `build.rs` embedding (Windows only), WiX `util:EventSource`, start-failure event 1008 | Generator tested; embedding/registration IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
 | Release readiness | `deny.toml` + `cargo deny` clean (Windows target), dependency inventory, BUILD-INFO + hashes in release script, installer/version consistency tests | PARTIALLY IMPLEMENTED (Windows build NOT RUN) |
 | Acceptance workflow | Stages A–F (F separate, not runnable in this build), Hyper-V limits (WINDOWS-VM-ACCEPTANCE.md) | Documented |
 | Findings | 17 findings: 1 High, 6 Medium, 7 Low, 3 Info; 12 fixed or implemented, 5 open and documented (F-12…F-16) — SECURITY-AUDIT-PHASE-9A.md | — |
+
+## Phase 9B — final implementation hardening before Windows validation
+
+| Item | Content | Classification |
+|---|---|---|
+| F-12 audit vs. administrators | Truncation/gap detection, daily `audit_checkpoint` (5008) mirrored to the Event Log, read-only `verify-checkpoint` command | Partially mitigated (by design); tested |
+| F-13 one pipe client at a time | Platform-independent pooled server (8 status / 4 admin), busy refusal, idle timeout | Logic tested; pipes NOT WINDOWS-VERIFIED |
+| F-14 threads not joined | Shutdown wakes, answers in-flight, joins within 3 s, audits incomplete shutdown (1010) | Logic tested; NOT WINDOWS-VERIFIED |
+| F-15 mirror cursor in memory | Persisted cursor, ordered back-fill (≤ 1000, gap event 1009), retry | IMPLEMENTED AND AUTOMATED-TESTED (Event Log delivery unverified) |
+| F-16 LocalSystem | Service SID derivation (verified vector), SDDL builders, owner check accepts service SID, server-PID check | Prepared; open; decide in VM C16 |
+| New F-18 pipe DACL | AU no longer gets `FILE_CREATE_PIPE_INSTANCE`; client rights reduced | Fixed; NOT WINDOWS-VERIFIED |
+| New F-19 concurrent open | IMMEDIATE transactions, single migration transaction | Fixed + regression test |
+| New F-20/F-21 | Offline-asset check, polyfill removed; test-runner advisories (dev only) | Fixed / open |
+| Enforcement planning | `policy_state`: existing-policy model, conflicts, merge, exact rollback, suspend/resume, staleness; 2 new gates (15 total) | IMPLEMENTED AND AUTOMATED-TESTED; OS enforcement NOT IMPLEMENTED |
+| Desktop workflow | 13 Vitest integration tests drive the real backend (SQLite) through a dev-only stdio harness, incl. standard-user refusals | IMPLEMENTED AND AUTOMATED-TESTED |
+| Documents | SECURITY-AUDIT-PHASE-9B, ENFORCEMENT-PLANNING, WINDOWS-ACCEPTANCE-CHECKLIST; updated others | — |
 
 ## Feature gaps (known, not hidden)
 

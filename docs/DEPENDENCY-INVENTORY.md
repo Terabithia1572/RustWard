@@ -34,6 +34,7 @@ advisory policy: `deny.toml` (`cargo deny check`). Regenerate after every lockfi
 | serde_core | v1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | v1.0.229 | MIT OR Apache-2.0 |
 | serde_json | v1.0.154 | MIT OR Apache-2.0 |
+| sha1 | v0.11.0 | MIT OR Apache-2.0 |
 | sha2 | v0.11.1 | MIT OR Apache-2.0 |
 | shlex | v2.0.1 | MIT OR Apache-2.0 |
 | smallvec | v1.16.4 | MIT OR Apache-2.0 |
@@ -208,6 +209,7 @@ not listed above. Regenerate on the Windows build machine for the exact list.
 | serialize-to-javascript | v0.1.2 | MIT OR Apache-2.0 |
 | serialize-to-javascript-impl | v0.1.2 | MIT OR Apache-2.0 |
 | servo_arc | v0.4.3 | MIT OR Apache-2.0 |
+| sha1 | v0.11.0 | MIT OR Apache-2.0 |
 | sha2 | v0.10.9 | MIT OR Apache-2.0 |
 | sha2 | v0.11.1 | MIT OR Apache-2.0 |
 | shlex | v2.0.1 | MIT OR Apache-2.0 |

@@ -5,20 +5,27 @@
 | Component | Runs as | May | Must not |
 |---|---|---|---|
 | Desktop UI (Tauri) | Logged-on user, unelevated | Show status, request actions over IPC | Open the DB, change policy directly, run commands |
-| Service | `LocalSystem` initially; evaluate a virtual service account + specific rights in Phase 7 | Read device state, apply/verify the enforcement provider, write audit | Accept unauthenticated requests |
+| Service | `LocalSystem`; a `NT SERVICE\RustWardService` virtual-account variant is prepared (Phase 9B, F-16) and decided in VM step C16 | Read device state, apply/verify the enforcement provider, write audit | Accept unauthenticated requests |
 | Enforcement | Windows OS policy | Enforce independently of RustWard processes | — |
 
 ## IPC — implemented, NOT Windows-verified
 
-- Two pipes: `\\.\pipe\RustWard.Status.v1` (SDDL `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`,
+- Two pipes: `\\.\pipe\RustWard.Status.v1` (SDDL `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12008b;;;AU)`,
   read-only requests) and `\\.\pipe\RustWard.Admin.v1` (SDDL `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)`).
-- `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`. Before sending anything the
-  client checks that the pipe object is **owned by LocalSystem** (`GetSecurityInfo`; the
-  server sets `O:SY`, which a standard user cannot assign) and that the server runs in
-  session 0 (`GetNamedPipeServerSessionId`). The session check alone was insufficient: a
-  standard user can run a process in session 0 via a scheduled task and squat the pipe name
-  while the service is stopped or between two connections (Phase 9A finding F-03).
-- Per request, not per connection: `ImpersonateNamedPipeClient` → `CheckTokenMembership`
+  Authenticated Users get `FILE_GENERIC_READ | FILE_WRITE_DATA` only, never `GENERIC_WRITE`,
+  which on pipes includes `FILE_CREATE_PIPE_INSTANCE` (Phase 9B finding F-18). Clients open
+  with exactly those rights.
+- Pooled servers (Phase 9B): one listening instance is always kept; the first instance uses
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`, later ones are created only while one of ours is connected.
+  Up to 8 (status) / 4 (admin) concurrent callers, 15 s idle timeout, joined at service stop.
+  `PIPE_REJECT_REMOTE_CLIENTS`.
+- Before sending anything the client checks that the pipe object is **owned by LocalSystem**
+  (or the RustWard service SID, for the prepared virtual-account variant), that the serving
+  process is the process the SCM reports for `RustWardService` (`GetNamedPipeServerProcessId`
+  + `QueryServiceStatusEx`), and that it runs in session 0. The session check alone was
+  insufficient: a standard user can run a process in session 0 via a scheduled task and squat
+  the pipe name while the service is stopped (Phase 9A finding F-03).
+- Per request, after the request frame was read (Phase 9A F-04): `ImpersonateNamedPipeClient` → `CheckTokenMembership`
   (Administrators) + `TokenElevation`; impersonation is always reverted or the process aborts.
   Clients connect with `SECURITY_IDENTIFICATION`.
 - Versioned envelopes; length-prefixed JSON frames ≤ 4 MiB; reads bounded with `PeekNamedPipe`;
@@ -36,7 +43,9 @@
 - CSP `default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
   `freezePrototype: true`; `withGlobalTauri: false`.
 - No devtools feature; release builds have no devtools and no development backend.
-- All assets local (system font stack, bundled lucide icons).
+- All assets local (system font stack, bundled lucide icons). `scripts/check-offline-assets.mjs`
+  fails the build on any external URL, non-local reference or network API in `dist/`; a Rust
+  test asserts the CSP lists only local sources (Phase 9B, F-20).
 
 ## Data protection
 

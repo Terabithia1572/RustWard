@@ -1,5 +1,7 @@
 # Security Audit — Phase 9A
 
+> **Update:** the dispositions of the open findings F-12 to F-16, and new findings F-18 to F-21, are in [SECURITY-AUDIT-PHASE-9B.md](SECURITY-AUDIT-PHASE-9B.md).
+
 Date: 2026-11-06 · Baseline: `4909958` · Auditor: repository review plus automated tests,
 Linux development container only.
 

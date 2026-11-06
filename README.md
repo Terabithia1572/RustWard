@@ -30,7 +30,8 @@ Test evidence: [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md).
 ## Development
 
 ```bash
-./scripts/verify-all.sh                       # fmt, clippy, all tests, UI typecheck/tests/build, cargo deny
+./scripts/verify-all.sh                       # fmt, clippy, all tests, UI typecheck/tests/build,
+                                              # offline-asset check, UI ↔ real-backend integration, cargo deny
 
 cd apps/rustward-desktop && npm ci
 npm test                                      # Vitest
@@ -69,12 +70,15 @@ report a generic controller vendor. TÜBİTAK SIR II identifiers are still unkno
 | [TEST-RESULTS](docs/TEST-RESULTS.md) | What was tested where, and what is DEFERRED |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | Crates, trust boundaries, IPC contract |
 | [SECURITY-MODEL](docs/SECURITY-MODEL.md) / [THREAT-MODEL](docs/THREAT-MODEL.md) | Privilege separation, pipes, Tauri hardening |
-| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Residual risks L-01…L-29 |
+| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Residual risks L-01…L-31 |
 | [OFFLINE-DEPLOYMENT](docs/OFFLINE-DEPLOYMENT.md) | Vendoring, MSI, WebView2, install/uninstall |
 | [ENFORCEMENT-FEASIBILITY](docs/ENFORCEMENT-FEASIBILITY.md) | Mechanism comparison and decision |
 | [BRAND-IDENTIFICATION](docs/BRAND-IDENTIFICATION.md) / [DEVICE-CLASSIFICATION](docs/DEVICE-CLASSIFICATION.md) | Identifiers, categories |
 | [TEST-PLAN](docs/TEST-PLAN.md) / [RECOVERY-PLAN](docs/RECOVERY-PLAN.md) | Acceptance tests, rollback |
 | [SECURITY-AUDIT-PHASE-9A](docs/SECURITY-AUDIT-PHASE-9A.md) | Phase 9A findings by severity, fixes, open items |
+| [SECURITY-AUDIT-PHASE-9B](docs/SECURITY-AUDIT-PHASE-9B.md) | Disposition of F-12…F-16, new findings F-18…F-21, regression checklist |
+| [ENFORCEMENT-PLANNING](docs/ENFORCEMENT-PLANNING.md) | Stages, existing-policy comparison, merge, rollback, staleness; DIR strategy review; what is unimplemented |
+| [WINDOWS-ACCEPTANCE-CHECKLIST](docs/WINDOWS-ACCEPTANCE-CHECKLIST.md) | Tickable Stage A–E checklist with evidence slots |
 | [AUDIT-INTEGRITY](docs/AUDIT-INTEGRITY.md) | Non-destructive restore, backup verification, tamper-resistance limits |
 | [WINDOWS-VM-ACCEPTANCE](docs/WINDOWS-VM-ACCEPTANCE.md) | Stages A–F on a disposable Windows 10 Pro VM; Hyper-V USB limits |
 | [RELEASE-READINESS](docs/RELEASE-READINESS.md) | Target config, installer design, hashes, dependencies, readiness classification |

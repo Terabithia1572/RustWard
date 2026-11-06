@@ -1,6 +1,7 @@
 # Windows VM Acceptance Workflow
 
-Status: **procedure only. No stage has been executed.** Every result is recorded as
+Status: **procedure only. No stage has been executed.** The tickable list with the Phase 9B
+additions (C16–C19, D6–D8, E7–E8) is [WINDOWS-ACCEPTANCE-CHECKLIST.md](WINDOWS-ACCEPTANCE-CHECKLIST.md). Every result is recorded as
 PASS / FAIL / NOT RUN in an evidence folder; nothing here may be reported as passed without
 that evidence.
 
@@ -70,10 +71,14 @@ Checkpoint **CP-C** first. Install the acceptance MSI (`-WithService`) as `rwadm
 | C9 | As `rwuser`: try to add/remove a manufacturer, change workstation ID, create/restore a backup | refused "elevated administrator required"; one `authorization_failed` event each (≤ 20/min) |
 | C10 | As `rwadmin` **unelevated**: same | refused (not elevated) |
 | C11 | As `rwadmin` elevated ("Run as administrator"): add a test brand, then remove it; rename workstation; create backup; prepare + apply restore of that backup | succeed; policy versions increase; `policy_restored` with restore id; pre-restore backup listed |
-| C12 | Impostor test: stop the service; as `rwuser` create a scheduled task (run whether logged on or not) that runs a pipe server named `RustWard.Status.v1`; start the UI | client refuses: "pipe is not owned by LocalSystem" (finding F-03). Delete the task afterwards. |
+| C12 | Impostor test: stop the service; as `rwuser` create a scheduled task (run whether logged on or not) that runs a pipe server named `RustWard.Status.v1`; start the UI | client refuses: pipe owner is not LocalSystem / the RustWard service, or the serving process is not the SCM's RustWardService process (F-03, Phase 9B). Delete the task afterwards. |
 | C13 | Kill the UI mid-request (Task Manager) during a policy edit; reopen | change applied at most once; a retry with the old version gets `conflict` |
 | C14 | Uninstall the MSI | service stopped and deleted; `%ProgramData%\RustWard` **kept**; Event Log source key removed (`Test-Path HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\RustWard` → False) |
 | C15 | Reinstall over the kept data | existing DB opened, chain status OK, history intact |
+| C16 | F-16: virtual-account variant on a separate checkpoint (`ServiceInstall Account="NT SERVICE\RustWardService"`, data-dir ACL from `service_sid::data_dir_sddl(VirtualAccount)`, pipe SDDL from `admin_pipe_sddl/status_pipe_sddl(VirtualAccount)`) | record whether inventory, notifications, Event Log and pipes work; decide |
+| C17 | F-18: while the service runs, `rwuser` calls `CreateNamedPipeW("\\.\pipe\RustWard.Status.v1", PIPE_ACCESS_DUPLEX, …)` (small PowerShell/C# snippet) | fails with ERROR_ACCESS_DENIED (5) |
+| C18 | F-13: open 8 idle connections to the status pipe as `rwuser` | the UI still works via the admin pipe; the 9th status connection is closed at once; slots free after 15 s idle |
+| C19 | F-14: stop the service while an idle client is connected | STOPPED within about 3 s; no `ipc_shutdown_incomplete` (1010) |
 
 ## Stage D — Event Log and device notifications
 
@@ -84,7 +89,10 @@ Checkpoint **CP-C** first. Install the acceptance MSI (`-WithService`) as `rwadm
 | D3 | IDs present after Stage C actions | 1000 service_started, 1001 service_stopping, 1004 backend_started, 3001 policy_changed, 4000 authorization_failed, 5001 backup_created, 5005 restore_prepared, 5007 policy_restored, 2000/2001 device events |
 | D4 | Rename `%ProgramData%\RustWard\rustward.db` to an unreadable copy (deny SYSTEM read on a copy, or put a newer-schema file) and start the service | service fails to start; Event Log **1008 service_start_failed** (Error) with the reason; restore the file afterwards |
 | D5 | Plug/unplug a virtual or redirected device that creates a PnP node (Stage E covers storage) | next inventory refresh happens within seconds (`CM_Register_Notification` wake-up), not after the full interval |
-| D6 | `wevtutil epl Application C:\rw-evidence\D\app.evtx` | evidence saved |
+| D6 | Copy head id and hash prefix from an `audit_checkpoint` (5008) entry; run `rustward-service verify-checkpoint --head-id <id> --hash <prefix>` | `MATCH`, exit 0 (read-only) |
+| D7 | On a **copy** of the database: delete the newest events (attacker simulation), run D6 against `--db <copy>` | `MISSING`/`MISMATCH`, exit 3; Diagnostics on the copy reports TRUNCATED or EVENTS MISSING |
+| D8 | Stop the Windows Event Log service briefly (test VM only), generate events, start it again | Diagnostics shows *pending*; entries are delivered in order after recovery; > 1000 pending → Event 1009 |
+| D9 | `wevtutil epl Application C:\rw-evidence\D\app.evtx` | evidence saved |
 
 Full ID list: `rustward-windows/src/eventlog_map.rs` (`EVENT_IDS`, 9000 = other).
 
@@ -100,6 +108,8 @@ No enforcement, no ejection, no mounting changes.
 | E4 | UI → Devices → Explain | simulated verdict only, labelled "SİMÜLE" |
 | E5 | Encrypted drive: unlock prompt (vendor app / hardware PIN) appears normally | RustWard does not interfere |
 | E6 | Keyboard, mouse, printer | classified as peripherals, never in scope |
+| E7 | UASP drive | `SCSI\Disk…` namespace, USB parent chain resolved |
+| E8 | `reg export "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall" C:\rw-evidence\E\deviceinstall.reg` | evidence for the future read-only `PolicySnapshot` capture; nothing changed |
 
 ### Hyper-V limitation (important)
 
@@ -144,6 +154,8 @@ Gates evaluated by `rustward-enforcement::activation::evaluate_gates` (all must 
 | `explicit_approval` | separate final approval bound to the plan fingerprint |
 | `post_activation_verification_ready` | approved and unapproved test devices on hand; read/write probe procedure ready |
 | `rollback_ready` | removal of every written value tested in the VM for this build |
+| `existing_policy_compatible` (Phase 9B) | the Restrictions key captured read-only shows no conflict with the plan (`policy_state::compare`) |
+| `plan_current` (Phase 9B) | no hardware, OS-build or policy change since the baseline (`policy_state::staleness`) |
 
 Stages reported to operators (never conflated): device detection → manufacturer
 classification → simulated authorization → planned enforcement → activated Windows policy

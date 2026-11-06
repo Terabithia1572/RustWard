@@ -54,6 +54,18 @@ build machine must be air-gapped, switch to `fixedVersion` and pre-provision WiX
 
 ## 4. Building (Windows build machine)
 
+**Prerequisites (Phase 9B, consolidated):**
+
+| Component | Version / note |
+|---|---|
+| Windows 10/11 x64 build machine | separate from the five workstations |
+| Rust | stable ≥ 1.90 (`rust-version` in `Cargo.toml`; tested with 1.97.0 on Linux), target `x86_64-pc-windows-msvc` |
+| Visual Studio 2022 Build Tools | "Desktop development with C++", **Windows 10/11 SDK** (`rc.exe` is required by `rustward-service/build.rs` to embed the Event Log message table; the build fails loudly without it) |
+| Node.js | 22 LTS (npm 10) |
+| WiX Toolset | 3.14 in `%LOCALAPPDATA%\tauri\WixTools314` (air-gapped: pre-provision) |
+| WebView2 | offline installer embedded by `tauri build` (connected machine) or `fixedVersion` runtime (air-gapped) |
+| cargo-deny | optional; `cargo deny check` with an offline advisory-db copy |
+
 ```powershell
 # Connected build machine (recommended)
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -WithService
@@ -118,6 +130,22 @@ prints the `sc.exe`/`icacls` commands; it executes nothing.
 - A database with a newer schema is refused (fail closed); a tampered policy row is reported
   as corrupt and the service keeps running with diagnostics.
 
+## 6a. Service registration, data and backup locations (summary)
+
+| Item | Value |
+|---|---|
+| Service name / display name | `RustWardService` / "RustWard USB Storage Control" |
+| Binary / arguments | `C:\Program Files\RustWard\rustward-service.exe service` |
+| Account | `LocalSystem` (virtual-account variant prepared, decided in VM step C16) |
+| Start / recovery | automatic; restart after 5 s ×3, reset after 1 day; SCM stop wait hint 15 s |
+| Event Log source | Application / `RustWard`, message file = service exe |
+| Pipes | `\\.\pipe\RustWard.Admin.v1` (SY+BA), `\\.\pipe\RustWard.Status.v1` (+AU read/write-data) |
+| Data directory | `%ProgramData%\RustWard` — protected DACL SYSTEM + Administrators, kept on uninstall |
+| Database | `%ProgramData%\RustWard\rustward.db` (+ `-wal`, `-shm`) |
+| Backups | `%ProgramData%\RustWard\backups\rustward-backup-<ms>.db`, `rustward-pre-restore-<ms>.db`; registered with SHA-256 |
+| Audit check | `rustward-service verify-checkpoint --head-id N --hash HEX` (read-only) |
+| Runtime network | **none**: no CDN, fonts, update checks or telemetry; CSP `default-src 'self'`; checked by `scripts/check-offline-assets.mjs` |
+
 ## 7. Uninstall and recovery
 
 | Action | Result |
@@ -125,7 +153,11 @@ prints the `sc.exe`/`icacls` commands; it executes nothing.
 | MSI uninstall | Stops and deletes `RustWardService`, removes program files. `%ProgramData%\RustWard` (database, backups, audit chain) is **kept**. |
 | Remove audit data | Administrator exports events (UI → Audit Logs → CSV/JSON) and creates a backup (Settings), then deletes `%ProgramData%\RustWard` manually. |
 | Restore | Two-step and non-destructive (Settings → Yedekler → Geri yükle → preview → Uygula): only registered backups whose SHA-256 matches; integrity, schema and policy are verified; the backup's policy becomes a **new** version after a pre-restore backup; audit history is never replaced (AUDIT-INTEGRITY.md). Backups never overwrite an existing file. |
-| OS policy | Nothing to roll back in this build (no enforcement). Enforcement-phase rollback is specified in `RECOVERY-PLAN.md`. |
+| OS policy | Nothing to roll back in this build (no enforcement). Enforcement-phase rollback is specified in `RECOVERY-PLAN.md` and modelled exactly by `policy_state::rollback_ops` (ENFORCEMENT-PLANNING.md). |
+| Uninstall fails with the service running | `sc.exe stop RustWardService`, wait for STOPPED, retry the uninstall. |
+| Orphaned service entry | `sc.exe delete RustWardService` (administrator), then reinstall/uninstall. |
+| Orphaned event source | Remove `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\RustWard` (administrator; documented manual step; RustWard never touches it). |
+| Database locked or corrupt at start | Event 1008; follow RECOVERY-PLAN.md "Corrupted RustWard DB". |
 
 ## 8. Requirements that stay in force
 

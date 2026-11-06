@@ -1,4 +1,4 @@
-# Release Readiness (Phase 9A)
+# Release Readiness (Phase 9A, updated Phase 9B)
 
 Classification concerns **readiness for Windows VM testing**, not production security
 approval. Nothing below has been built, installed or run on Windows.
@@ -54,8 +54,10 @@ Binaries are **unsigned** (L-19). Verify on the target with
 
 ## 5. Dependency inventory and supply chain
 
-| Check | Result (Linux, 2026-11-06) |
+| Check | Result (Linux, 2026-11-06, Phase 9B) |
 |---|---|
+| Frontend runtime network | none — `scripts/check-offline-assets.mjs` on `dist/` (no external URL, no fetch/XHR/WebSocket; module-preload polyfill disabled), CSP local-only (test) |
+| `npm audit --omit=dev` | 0 vulnerabilities in shipped dependencies; the dev-only test runner has advisories (L-30) |
 | `cargo deny check` — workspace, Windows target | advisories ok, bans ok, licenses ok, sources ok |
 | `cargo deny check` — Tauri shell, Windows target | advisories ok, bans ok (10 duplicate-version warnings), licenses ok, sources ok |
 | Inventory | 38 crates (service/libs, + embed-resource and deps on a Windows host), 233 crates (shell), 5 npm production packages — `docs/DEPENDENCY-INVENTORY.md` |
@@ -85,13 +87,19 @@ Air-gapped advisory checks: copy a RustSec `advisory-db` checkout and run
 | Restore no longer destroys audit history | PASS (tests) |
 | Privileged IPC refused for every non-elevated or wrong-channel caller | PASS (tests, mock transport) |
 | Pipe owner + per-request identification implemented | Implemented, type-checked; **NOT RUN on Windows** |
+| Pipe DACL without create-instance for users, server-PID check, pooled servers with joined shutdown (F-13/F-14/F-18) | Logic tested; pipe code type-checked; **NOT RUN on Windows** |
+| Audit truncation detection, checkpoints, read-only verify tool, persisted mirror cursor (F-12/F-15) | PASS (tests); Event Log delivery **NOT RUN on Windows** |
+| Concurrent first open of the database (F-19) | PASS (regression test) |
+| Enforcement planning: conflicts, merge, exact rollback, suspend/resume, staleness | PASS (tests); registry capture/write **not implemented** |
+| UI against the real backend (SQLite, authorization) | PASS (13 integration tests) |
 | Event Log message table + installer registration | Implemented, tested generator; **NOT RUN on Windows** |
 | Activation disabled and gated | PASS (tests) |
 | Windows build (MSVC) | **NOT RUN** — first step of Stage A |
 | MSI build/install/uninstall | **NOT RUN** — Stages A, C |
 | Code signing | Not set up (L-19) |
 
-**Classification: CONDITIONAL READY for Windows VM validation.** The conditions are the
-Windows-only items above: the first native MSVC build may surface compile errors in code
-that has only been type-checked (`rc.exe`/embed-resource, SCM host, pipes), which must be
-fixed before Stage B.
+**Classification (Phase 9B): CONDITIONAL READY for Windows VM validation.** The conditions
+are the Windows-only items above: the first native MSVC build may surface compile errors in
+code that has only been type-checked (`rc.exe`/embed-resource, SCM host, pooled pipes, SID
+conversion, SCM PID query), which must be fixed before Stage B. The tickable list is
+WINDOWS-ACCEPTANCE-CHECKLIST.md. This is not a production security approval.

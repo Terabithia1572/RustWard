@@ -1,6 +1,6 @@
 # Audit Integrity (Phase 9A)
 
-Status: **implemented and tested on Linux** (SQLite logic, IPC, UI). Event Log
+Status (updated Phase 9B): **implemented and tested on Linux** (SQLite logic, IPC, UI). Event Log
 mirroring, the message table and the installer's event-source registration are
 **NOT VERIFIED ON WINDOWS**.
 
@@ -101,9 +101,22 @@ anyone who can write the database file can drop the triggers.
 | Option | Assessment |
 |---|---|
 | Separate append-only SQLite file for audit | Rejected for now. A policy change and its audit event would no longer commit atomically: SQLite multi-database transactions are not atomic across files in WAL mode, so a crash could leave a policy change without its audit record, or the reverse. The same ACL protects both files, so a separate file adds no protection against an administrator. The real problem, restore erasing audit history, is solved by never replacing the database. |
-| Windows Event Log mirror | **Kept and strengthened** (message table + installer registration). It is a second, independent copy outside the RustWard database and survives deletion of RustWard data. Limits: administrators can clear the log; log size/retention is a Windows setting (`wevtutil sl Application /ms:`); mirroring runs after commit and only while the service runs; events written before the mirror attaches at start-up, or while the Event Log was unavailable, are not back-filled (the in-memory cursor starts at the newest event, to avoid duplicates after a restart). |
+| Windows Event Log mirror | **Kept and strengthened** (message table + installer registration). It is a second, independent copy outside the RustWard database and survives deletion of RustWard data. Limits: administrators can clear the log; log size/retention is a Windows setting (`wevtutil sl Application /ms:`); mirroring runs after commit and only while the service runs. **Phase 9B:** the delivery cursor is persisted, so events written before the mirror attaches or during an Event Log outage are delivered later in order (newest 1000 at most; an older gap is recorded as `event_log_backfill_skipped`, 1009); delivery is at-least-once. |
 | Event forwarding / WORM / remote syslog | The strongest option, but it needs a network or removable media workflow. Out of scope for an air-gapped, standalone design. A periodic **signed export to write-once media** (CD-R, or a separate locked USB drive kept by the security officer) is the recommended organisational control. |
 | Keyed hash (HMAC) chain | Not adopted. A key stored on the same machine is readable by the same administrators who can rewrite the chain, so it adds complexity without changing the threat model. |
+
+## 5a. Detection added in Phase 9B
+
+| Mechanism | Detects | Does not detect |
+|---|---|---|
+| `verify_chain` → `Missing` | removed events inside the chain (id gap), including newest events removed and new ones appended | a rewrite that renumbers ids consistently |
+| `verify_chain` → `Truncated` | newest events removed (SQLite `AUTOINCREMENT` counter above the newest id) | an attacker who also resets `sqlite_sequence` |
+| `audit_checkpoint` (5008) at start and daily, mirrored to the Event Log | anything that changes or removes the checkpointed head, compared with `rustward-service verify-checkpoint` (read-only) | changes when every out-of-database copy (Event Log, exports, printouts) is also destroyed |
+
+Procedure: an auditor copies `head #N <hash>` from a 5008 entry in Event Viewer (or from an
+export kept on write-once media) and runs
+`rustward-service verify-checkpoint --head-id N --hash <hash>`. Exit 0 = unchanged, 3 = rewritten
+or removed, 4 = older than retention (not verifiable).
 
 ## 6. Tamper-resistance limits (honest statement)
 
@@ -114,10 +127,11 @@ bugs. It is not tamper-proof.**
   recompute the SHA-256 chain (it is unkeyed) and the anchor, delete backups, and clear the
   Event Log. Clearing the Application log is itself logged by Windows (System/Security
   logs), but those can be cleared too.
-- The chain detects modification or removal of records **inside** the chain. It cannot
-  detect truncation of the newest records (the last remaining record is a valid head) or
-  removal of the oldest records combined with an anchor rewrite. Retention legitimately
-  does the latter and records `retention_applied`.
+- The chain detects modification or removal of records **inside** the chain, and (Phase 9B)
+  truncation of the newest records unless the attacker also resets SQLite's sequence
+  counter. A fully consistent rewrite is detected only by comparison with an
+  out-of-database checkpoint (§5a). Removal of the oldest records with an anchor rewrite is
+  what retention legitimately does (`retention_applied`).
 - Retention uses the system clock; an administrator who moves the clock forward can make
   retention delete more than intended. The deletion is recorded and mirrored.
 - Backups are protected by the data-directory ACL (SYSTEM + Administrators) and by the
