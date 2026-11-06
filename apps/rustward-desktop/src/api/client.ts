@@ -3,6 +3,7 @@ import type {
   DashboardView,
   DeviceView,
   DiagnosticsView,
+  EnforcementReadinessView,
   ErrorCode,
   EventQuery,
   EventView,
@@ -107,6 +108,9 @@ export class Api {
   }
   async diagnostics(): Promise<DiagnosticsView> {
     return expect(await this.call({ type: "get_diagnostics" }), "diagnostics");
+  }
+  async enforcementReadiness(): Promise<EnforcementReadinessView> {
+    return expect(await this.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
   }
   async settings(): Promise<SettingsView> {
     return expect(await this.call({ type: "get_settings" }), "settings");

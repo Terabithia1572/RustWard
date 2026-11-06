@@ -1131,3 +1131,61 @@ fn truncated_audit_chain_is_reported_and_checkpointed() {
     let cp = s.record_audit_checkpoint().unwrap();
     assert_eq!(cp.chain, "missing");
 }
+
+#[test]
+fn enforcement_readiness_is_read_only_and_reports_inspection_and_assessment() {
+    use rustward_app::StaticPolicySource;
+    use rustward_enforcement::device_install::RESTRICTIONS_KEY;
+    use rustward_enforcement::policy_inspect::CapturedPolicy;
+    use rustward_enforcement::policy_state::{PolicyConflict, PolicySnapshot, RegData};
+
+    // Without a source that works (Linux), the inspection is reported missing.
+    let plain = mem_service();
+    call(&plain, Request::LoadSyntheticInventory);
+    let ResponseBody::EnforcementReadiness(v) = call(&plain, Request::GetEnforcementReadiness)
+    else {
+        panic!()
+    };
+    assert!(v.inspection.is_none());
+    assert_eq!(v.inspection_source, "unavailable");
+    assert!(v.inspection_error.is_some());
+
+    let captured = CapturedPolicy {
+        key_present: true,
+        values: PolicySnapshot::default().with(
+            RESTRICTIONS_KEY,
+            "DenyUnspecified",
+            RegData::Dword(1),
+        ),
+        ..CapturedPolicy::default()
+    };
+    let s = mem_service().with_policy_source(Box::new(StaticPolicySource(captured)));
+    call(&s, Request::LoadSyntheticInventory);
+    let version = policy_version(&s);
+    let before = event_kinds(&s);
+    let ResponseBody::EnforcementReadiness(v) = call(&s, Request::GetEnforcementReadiness) else {
+        panic!()
+    };
+    // Real status, never inferred from configuration.
+    assert!(!v.actual_enforcement.verified_protection);
+    assert!(!v.actual_enforcement.activation_available);
+    assert_eq!(v.inspection_source, "fixture");
+    assert!(
+        v.conflicts
+            .contains(&PolicyConflict::ExistingDenyUnspecified)
+    );
+    assert!(
+        v.gates
+            .iter()
+            .any(|g| g.code == "existing_policy_compatible"
+                && g.status == rustward_enforcement::PreconditionStatus::NotMet)
+    );
+    assert!(v.gates.iter().any(|g| g.code == "administrator_authorized"
+        && g.status == rustward_enforcement::PreconditionStatus::Met));
+    assert!(v.recovery.rollback_modelled_exact);
+    assert!(v.installed.summary.denied_but_installed > 0);
+    assert!(v.installed.sanitized);
+    // Reading changed nothing: no policy version, no audit event.
+    assert_eq!(policy_version(&s), version);
+    assert_eq!(event_kinds(&s), before);
+}

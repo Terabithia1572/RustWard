@@ -3,7 +3,12 @@
 
 use rustward_core::explain::Explanation;
 use rustward_core::policy_edit::ManufacturerInput;
-use rustward_enforcement::{CapabilityReport, Precondition};
+use rustward_enforcement::installed_assessment::InstalledAssessment;
+use rustward_enforcement::policy_inspect::PolicyInspection;
+use rustward_enforcement::policy_state::PolicyConflict;
+use rustward_enforcement::{
+    CapabilityReport, PlannedChange, Precondition, PreconditionStatus, RecoveryStep,
+};
 use serde::{Deserialize, Serialize};
 
 /// Event query.
@@ -96,6 +101,10 @@ pub enum Request {
     },
     /// Diagnostics.
     GetDiagnostics,
+    /// Read-only enforcement readiness: policy inspection, planned changes,
+    /// conflicts, prerequisites, recovery, installed-device assessment and
+    /// the actual (inactive) enforcement status.
+    GetEnforcementReadiness,
     /// Settings.
     GetSettings,
     /// Re-evaluate the current inventory under the current policy (no writes).
@@ -215,6 +224,7 @@ impl Request {
             | Self::ListEvents { .. }
             | Self::ListPolicyChanges { .. }
             | Self::GetDiagnostics
+            | Self::GetEnforcementReadiness
             | Self::GetSettings
             | Self::RunSimulation => AccessLevel::ReadOnly,
             Self::AddManufacturer { .. }
@@ -599,6 +609,8 @@ pub enum ResponseBody {
     PolicyChanges(Vec<PolicyChangeView>),
     /// Diagnostics.
     Diagnostics(DiagnosticsView),
+    /// Enforcement readiness (read-only).
+    EnforcementReadiness(Box<EnforcementReadinessView>),
     /// Settings.
     Settings(SettingsView),
     /// Simulation.
@@ -686,4 +698,82 @@ pub struct EventLogView {
     /// (recorded as `event_log_backfill_skipped`).
     #[serde(default)]
     pub skipped: u64,
+}
+
+/// Turkish and English text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextTrEn {
+    /// Turkish.
+    pub tr: String,
+    /// English.
+    pub en: String,
+}
+
+/// The real enforcement status (never inferred from configuration).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActualEnforcementView {
+    /// State code (e.g. `pending_validation`).
+    pub state: String,
+    /// Turkish label.
+    pub label_tr: String,
+    /// English label.
+    pub label_en: String,
+    /// Read/write denial verified. Always false in this build.
+    pub verified_protection: bool,
+    /// The build has an activation path. Always false in this build.
+    pub activation_available: bool,
+}
+
+/// One activation gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateView {
+    /// Gate code.
+    pub code: String,
+    /// Status.
+    pub status: PreconditionStatus,
+    /// Detail (English, technical).
+    pub detail: String,
+}
+
+/// Recovery readiness (model).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryReadinessView {
+    /// Documented recovery steps.
+    pub steps: Vec<RecoveryStep>,
+    /// Applying the plan and then its rollback to the captured policy
+    /// restores it exactly (in-memory model).
+    pub rollback_modelled_exact: bool,
+    /// Registry operations the plan would perform (model; nothing is written).
+    pub forward_operations: u32,
+    /// Operations of the exact rollback.
+    pub rollback_operations: u32,
+    /// Operations of the feature-update suspend step.
+    pub suspend_operations: u32,
+}
+
+/// Read-only enforcement readiness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnforcementReadinessView {
+    /// The actual enforcement status.
+    pub actual_enforcement: ActualEnforcementView,
+    /// `windows_registry_read_only`, `fixture` or `unavailable`.
+    pub inspection_source: String,
+    /// Interpreted inspection (None when the policy could not be read).
+    pub inspection: Option<PolicyInspection>,
+    /// Why the inspection is missing.
+    pub inspection_error: Option<String>,
+    /// SHA-256 fingerprint of the (merged) plan.
+    pub plan_fingerprint: String,
+    /// Planned registry values (description only, never written).
+    pub planned_changes: Vec<PlannedChange>,
+    /// Conflicts between the captured policy and the plan.
+    pub conflicts: Vec<PolicyConflict>,
+    /// Activation prerequisites.
+    pub gates: Vec<GateView>,
+    /// Rights a future activation would need (none are used now).
+    pub required_permissions: Vec<TextTrEn>,
+    /// Recovery readiness.
+    pub recovery: RecoveryReadinessView,
+    /// Already-installed storage assessment (sanitised).
+    pub installed: InstalledAssessment,
 }

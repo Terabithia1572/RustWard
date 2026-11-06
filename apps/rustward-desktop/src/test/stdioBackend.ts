@@ -20,12 +20,20 @@ export interface RealBackend {
 }
 
 /** Start a real backend over a fresh SQLite database. */
-export function startRealBackend(caller: "admin" | "user" = "admin", dataDir?: string): RealBackend {
+export function startRealBackend(
+  caller: "admin" | "user" = "admin",
+  dataDir?: string,
+  options: { policyCapture?: string } = {},
+): RealBackend {
   if (!STDIO_BACKEND) {
     throw new Error("RUSTWARD_STDIO_BACKEND is not set (run scripts/verify-all.sh or see docs/TEST-RESULTS.md)");
   }
   const dir = dataDir ?? mkdtempSync(join(tmpdir(), "rustward-ui-int-"));
-  const child: ChildProcessWithoutNullStreams = spawn(STDIO_BACKEND, [dir, caller], { stdio: "pipe" });
+  const env = { ...process.env };
+  delete env.RUSTWARD_DEV_POLICY_CAPTURE;
+  // A SYNTHETIC policy capture file stands in for the read-only registry read.
+  if (options.policyCapture) env.RUSTWARD_DEV_POLICY_CAPTURE = options.policyCapture;
+  const child: ChildProcessWithoutNullStreams = spawn(STDIO_BACKEND, [dir, caller], { stdio: "pipe", env });
   const pending: Array<{ resolve: (v: ResponseBody) => void; reject: (e: unknown) => void }> = [];
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));

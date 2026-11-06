@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod inventory;
+mod policy_source;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,11 +35,12 @@ use rustward_enforcement::{
     NOT_VALIDATED_BANNER_TR, PlanInputs,
 };
 use rustward_ipc::messages::{
-    AdapterView, BackupView, DashboardView, DatabaseHealthView, DeviceView, DiagnosticsView,
-    EnforcementView, EventLogView, EventQuery, EventView, ExplanationView, ExportFormat,
-    ExportView, IdentifierView, ManufacturerView, ManufacturersView, MutationView,
-    PolicyChangeView, PolicyHealthView, RestorePreviewView, ServiceStatusView, SettingsView,
-    SimulationView,
+    ActualEnforcementView, AdapterView, BackupView, DashboardView, DatabaseHealthView, DeviceView,
+    DiagnosticsView, EnforcementReadinessView, EnforcementView, EventLogView, EventQuery,
+    EventView, ExplanationView, ExportFormat, ExportView, GateView, IdentifierView,
+    ManufacturerView, ManufacturersView, MutationView, PolicyChangeView, PolicyHealthView,
+    RecoveryReadinessView, RestorePreviewView, ServiceStatusView, SettingsView, SimulationView,
+    TextTrEn,
 };
 use rustward_ipc::rpc::Handler;
 use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, Request, ResponseBody};
@@ -49,6 +51,7 @@ use rustward_storage::{
 };
 
 pub use inventory::{EmptyInventory, FixtureInventory, InventorySource, LiveInventory};
+pub use policy_source::{LivePolicySource, PolicySource, StaticPolicySource};
 
 /// Which host runs the application service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +139,7 @@ pub struct AppService {
     clock: Arc<dyn Clock>,
     config: AppConfig,
     provider: DeviceInstallRestrictionProvider,
+    policy_source: Box<dyn PolicySource>,
     started_ms: i64,
 }
 
@@ -484,7 +488,127 @@ impl AppService {
             clock,
             config,
             provider: DeviceInstallRestrictionProvider,
+            policy_source: Box::new(LivePolicySource),
             started_ms,
+        })
+    }
+
+    /// Replace the read-only policy source (tests, development backend).
+    #[must_use]
+    pub fn with_policy_source(mut self, source: Box<dyn PolicySource>) -> Self {
+        self.policy_source = source;
+        self
+    }
+
+    /// Read-only enforcement readiness. Captures the policy (read-only),
+    /// builds the plan merged with it, evaluates the activation gates (all
+    /// refused in this build), models recovery and assesses installed
+    /// storage devices. Nothing is written anywhere.
+    fn enforcement_readiness(
+        &self,
+        g: &Inner,
+        identity: &ClientIdentity,
+    ) -> Result<EnforcementReadinessView, IpcError> {
+        use rustward_enforcement::activation::{ActivationRequest, evaluate_gates};
+        use rustward_enforcement::installed_assessment::{AssessmentInputs, assess};
+        use rustward_enforcement::policy_inspect::inspect;
+        use rustward_enforcement::policy_state::{
+            PolicySnapshot, apply_ops, compare, forward_ops, merge_plan, rollback_ops, suspend_ops,
+        };
+        let v = Self::validated(&g.store)?;
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        let captured = self.policy_source.capture(self.clock.now_ms());
+        let existing = captured
+            .as_ref()
+            .map_or_else(|_| PolicySnapshot::default(), |c| c.values.clone());
+        let mut env = Self::env_facts();
+        if let Ok(c) = &captured {
+            env.os_build = c.os.build.zip(c.os.ubr);
+        }
+        let inputs = PlanInputs {
+            policy: &v.policy,
+            catalog: &v.catalog,
+            snapshot: &snap,
+            env: &env,
+        };
+        let plan = merge_plan(&existing, &self.provider.plan(inputs));
+        let dry = self.provider.dry_run(&plan, inputs);
+        let gates = evaluate_gates(
+            &plan,
+            &dry,
+            &inputs,
+            &ActivationRequest {
+                caller_is_elevated_administrator: identity.is_administrator && identity.elevated,
+                existing_policy: captured.as_ref().ok().map(|c| c.values.clone()),
+                ..ActivationRequest::default()
+            },
+        );
+        let forward = forward_ops(&existing, &plan).unwrap_or_default();
+        let after = apply_ops(&existing, &forward);
+        let rollback = rollback_ops(&existing, &forward);
+        let suspend = suspend_ops(&after);
+        let state = self.provider.status();
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        let text = |tr: &str, en: &str| TextTrEn {
+            tr: tr.into(),
+            en: en.into(),
+        };
+        Ok(EnforcementReadinessView {
+            actual_enforcement: ActualEnforcementView {
+                state: state.code().into(),
+                label_tr: state.label_tr().into(),
+                label_en: state.label_en().into(),
+                verified_protection: state.is_verified_protection(),
+                activation_available: rustward_enforcement::ACTIVATION_ENABLED,
+            },
+            inspection_source: if captured.is_ok() {
+                self.policy_source.name().into()
+            } else {
+                "unavailable".into()
+            },
+            inspection: captured.as_ref().ok().map(|c| inspect(c, Some(&plan))),
+            inspection_error: captured.as_ref().err().cloned(),
+            plan_fingerprint: gates.plan_fingerprint.clone(),
+            conflicts: compare(&existing, &plan).conflicts,
+            planned_changes: plan.changes.clone(),
+            gates: gates
+                .gates
+                .iter()
+                .map(|x| GateView {
+                    code: x.id.code().into(),
+                    status: x.status,
+                    detail: x.detail.clone(),
+                })
+                .collect(),
+            required_permissions: vec![
+                text(
+                    "Okuma: politika incelemesi ve envanter için standart kullanıcı yeterlidir (yalnızca KEY_READ).",
+                    "Read: a standard user suffices for inspection and inventory (KEY_READ only).",
+                ),
+                text(
+                    "Gelecekteki etkinleştirme: HKLM\\SOFTWARE\\Policies altına yazmak için SYSTEM veya yükseltilmiş yönetici gerekir. Bu sürümde yazma kodu yoktur.",
+                    "Future activation: writing under HKLM\\SOFTWARE\\Policies needs SYSTEM or an elevated administrator. This build contains no write code.",
+                ),
+                text(
+                    "Kurulu aygıtların kaldırılması: yalnızca yöneticinin Aygıt Yöneticisi'nde elle yapacağı bir işlemdir.",
+                    "Removing installed devices: only a manual administrator action in Device Manager.",
+                ),
+            ],
+            recovery: RecoveryReadinessView {
+                steps: plan.recovery.clone(),
+                rollback_modelled_exact: apply_ops(&after, &rollback) == existing,
+                forward_operations: count(forward.len()),
+                rollback_operations: count(rollback.len()),
+                suspend_operations: count(suspend.len()),
+            },
+            installed: assess(&AssessmentInputs {
+                snapshot: &snap,
+                policy: &v.policy,
+                catalog: &v.catalog,
+                plan: &plan,
+                existing: &existing,
+                sanitize: true,
+            }),
         })
     }
 
@@ -1649,6 +1773,12 @@ impl Handler for AppService {
             Request::GetDiagnostics => {
                 let g = self.lock()?;
                 Ok(ResponseBody::Diagnostics(self.diagnostics(&g)))
+            }
+            Request::GetEnforcementReadiness => {
+                let g = self.lock()?;
+                Ok(ResponseBody::EnforcementReadiness(Box::new(
+                    self.enforcement_readiness(&g, identity)?,
+                )))
             }
             Request::GetSettings => {
                 let g = self.lock()?;

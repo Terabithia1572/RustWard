@@ -4,6 +4,7 @@ import {
   Ban,
   Cpu,
   Factory,
+  ClipboardCheck,
   LayoutDashboard,
   ScrollText,
   Settings as SettingsIcon,
@@ -23,9 +24,18 @@ import { DashboardPage } from "./pages/Dashboard";
 import { DevicesPage } from "./pages/Devices";
 import { DiagnosticsPage } from "./pages/Diagnostics";
 import { ManufacturersPage } from "./pages/Manufacturers";
+import { ReadinessPage } from "./pages/Readiness";
 import { SettingsPage } from "./pages/Settings";
 
-export type PageId = "dashboard" | "devices" | "manufacturers" | "blocked" | "audit" | "diagnostics" | "settings";
+export type PageId =
+  | "dashboard"
+  | "devices"
+  | "manufacturers"
+  | "blocked"
+  | "audit"
+  | "readiness"
+  | "diagnostics"
+  | "settings";
 
 const NAV: { id: PageId; label: TKey; icon: ComponentType<{ className?: string }> }[] = [
   { id: "dashboard", label: "nav.dashboard", icon: LayoutDashboard },
@@ -33,6 +43,7 @@ const NAV: { id: PageId; label: TKey; icon: ComponentType<{ className?: string }
   { id: "manufacturers", label: "nav.manufacturers", icon: Factory },
   { id: "blocked", label: "nav.blocked", icon: Ban },
   { id: "audit", label: "nav.audit", icon: ScrollText },
+  { id: "readiness", label: "nav.readiness", icon: ClipboardCheck },
   { id: "diagnostics", label: "nav.diagnostics", icon: Activity },
   { id: "settings", label: "nav.settings", icon: SettingsIcon },
 ];
@@ -93,6 +104,7 @@ function Shell({
           {page === "manufacturers" && <ManufacturersPage />}
           {page === "blocked" && <BlockedPage />}
           {page === "audit" && <AuditPage />}
+          {page === "readiness" && <ReadinessPage />}
           {page === "diagnostics" && <DiagnosticsPage />}
           {page === "settings" && <SettingsPage settings={settings} onSaved={onSettings} />}
         </div>

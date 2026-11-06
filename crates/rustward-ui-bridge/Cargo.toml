@@ -14,11 +14,9 @@ host-typecheck = ["rustward-ipc/host-typecheck"]
 
 [dependencies]
 rustward-app.workspace = true
+serde_json.workspace = true
 rustward-ipc.workspace = true
 rustward-storage.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

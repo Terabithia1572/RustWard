@@ -1,0 +1,14 @@
+{
+  "captured_ms": 0,
+  "key_present": true,
+  "values": {
+    "values": [
+      { "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions", "name": "AllowDeviceIDs", "data": { "type": "dword", "data": 1 } },
+      { "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions\\AllowDeviceIDs", "name": "1", "data": { "type": "sz", "data": "USBPRINT\\SYNTHETIC_PRINTER0001" } },
+      { "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions", "name": "DenyUnspecified", "data": { "type": "dword", "data": 0 } },
+      { "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions", "name": "SyntheticVendorTool", "data": { "type": "sz", "data": "not interpreted" } }
+    ]
+  },
+  "read_errors": [],
+  "os": { "is_windows": false, "major": 10, "minor": 0, "build": 19045, "ubr": 5011, "product_type": 48 }
+}

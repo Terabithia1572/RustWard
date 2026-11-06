@@ -35,6 +35,10 @@
     },
     {
       "access": "read_only",
+      "type": "get_enforcement_readiness"
+    },
+    {
+      "access": "read_only",
       "type": "get_settings"
     },
     {

@@ -79,6 +79,19 @@ mod dev {
                 &default_policy_state()?,
             )
             .map_err(|e| e.to_string())?;
+            // Development only: a SYNTHETIC policy capture file can stand in
+            // for the read-only Windows registry capture (inspection source
+            // "fixture"). Never used by the service or a release build.
+            let app = match std::env::var_os("RUSTWARD_DEV_POLICY_CAPTURE") {
+                Some(path) => {
+                    let text = std::fs::read_to_string(&path)
+                        .map_err(|e| format!("RUSTWARD_DEV_POLICY_CAPTURE: {e}"))?;
+                    let captured = serde_json::from_str(&text)
+                        .map_err(|e| format!("RUSTWARD_DEV_POLICY_CAPTURE: {e}"))?;
+                    app.with_policy_source(Box::new(rustward_app::StaticPolicySource(captured)))
+                }
+                None => app,
+            };
             let account = std::env::var("USERNAME")
                 .or_else(|_| std::env::var("USER"))
                 .unwrap_or_else(|_| "developer".into());

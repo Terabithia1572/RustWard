@@ -130,6 +130,7 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         | Request::ListDevices { .. }
         | Request::ListManufacturers
         | Request::GetDiagnostics
+        | Request::GetEnforcementReadiness
         | Request::GetSettings
         | Request::RunSimulation
         | Request::ApplyRetention

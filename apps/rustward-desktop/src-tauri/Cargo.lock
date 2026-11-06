@@ -2594,6 +2594,7 @@ dependencies = [
  "rustward-app",
  "rustward-ipc",
  "rustward-storage",
+ "serde_json",
 ]
 
 [[package]]

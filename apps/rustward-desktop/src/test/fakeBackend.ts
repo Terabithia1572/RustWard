@@ -7,6 +7,7 @@ import type {
   DashboardView,
   DeviceView,
   DiagnosticsView,
+  EnforcementReadinessView,
   EventView,
   ManufacturerView,
   Request,
@@ -92,6 +93,8 @@ export interface FakeState {
   calls: Request[];
   /** Force the next call (optionally only of type `only`) to fail with this IPC error. */
   failNext: { code: string; message: string; only?: Request["type"] } | null;
+  /** Readiness view includes a policy inspection (otherwise "unavailable"). */
+  readinessInspection: boolean;
 }
 
 export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; state: FakeState } {
@@ -102,6 +105,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     events: [event()],
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
     workstationId: "PC-TEST",
+    readinessInspection: true,
     backups: [
       {
         file_name: "rustward-backup-1700000000000.db",
@@ -181,6 +185,76 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     app_version: "0.0.0-test",
   });
 
+  const readiness = (): EnforcementReadinessView => ({
+    actual_enforcement: {
+      state: "pending_validation",
+      label_tr: "Doğrulama bekleniyor — koruma etkin değil",
+      label_en: "Pending validation — protection not active",
+      verified_protection: false,
+      activation_available: false,
+    },
+    inspection_source: state.readinessInspection ? "fixture" : "unavailable",
+    inspection: state.readinessInspection
+      ? {
+          captured_ms: 1_700_000_000_000,
+          key_present: true,
+          layered: { name: "AllowDenyLayered", value: null, name_status: "documented" },
+          deny_unspecified: { name: "DenyUnspecified", value: 1, name_status: "documented" },
+          lists: [
+            { name: "AllowDeviceIDs", allow: true, layer: "device_id", enabled: 1, entries: ["X"], name_status: "documented", layout_status: "unresolved" },
+          ],
+          retroactive: [{ name: "DenyDeviceClassesRetroactive", value: null, name_status: "unresolved" }],
+          unrecognised: [[{ key: "K", name: "VENDORTOOL" }, { type: "sz", data: "x" }]],
+          os: { is_windows: true, major: 10, minor: 0, build: 19045, ubr: 5011, product_type: 48 },
+          edition_supported: true,
+          layering: { status: "unresolved", reason: "UBR undocumented" },
+          conflicts: [{ kind: "existing_deny_unspecified" }],
+          plan_presence: { state: "partial", matching: 1, missing: 5, different: 0 },
+          read_errors: [],
+        }
+      : null,
+    inspection_error: state.readinessInspection ? null : "policy inspection requires Windows",
+    plan_fingerprint: "ab".repeat(32),
+    planned_changes: [
+      {
+        hive: "HKLM",
+        key: "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions",
+        value_name: "AllowDenyLayered",
+        value_type: "REG_DWORD",
+        data: "1",
+        purpose: "layered",
+        confirmed_against_documentation: true,
+      },
+    ],
+    conflicts: state.readinessInspection ? [{ kind: "existing_deny_unspecified" }] : [],
+    gates: [
+      { code: "build_permits_activation", status: "not_met", detail: "ACTIVATION_ENABLED is false" },
+      { code: "administrator_authorized", status: "met", detail: "" },
+    ],
+    required_permissions: [{ tr: "Okuma: standart kullanıcı.", en: "Read: standard user." }],
+    recovery: { steps: [{ order: 1, tr: "Dışa aktarın.", en: "Export." }], rollback_modelled_exact: true, forward_operations: 6, rollback_operations: 6, suspend_operations: 1 },
+    installed: {
+      sanitized: true,
+      devices: [
+        {
+          instance_id: "USBSTOR\\DISK&VEN_KINGSTON\\ID-001",
+          name: "Kingston DataTraveler",
+          attachment: "usb_bot",
+          present: true,
+          install_state: "installed",
+          simulated_verdict: "deny",
+          planned_new_install: { outcome: "prevented", rule: { layer: "setup_class", list: "DenyDeviceClasses", entry: "{x}" } },
+          remains_accessible_after_activation: true,
+          finding: "denied_but_installed",
+          remediation: [{ tr: "Aygıtı yönetici elle kaldırır. RustWard bu işlemi yapmaz.", en: "Removed manually. RustWard never does this." }],
+        },
+      ],
+      summary: { assessed: 1, denied_but_installed: 1, denied_not_installed: 0, allowed: 0, internal_protected: 0, internal_unprotected: 0, needs_review: 0, plan_disagreements: 0 },
+      limitations: [{ tr: "Yükleme kısıtlamaları mevcut kurulumları etkilemez.", en: "Installation restrictions do not affect existing installations." }],
+      manual_only: true,
+    },
+  });
+
   const handle = (r: Request): ResponseBody => {
     switch (r.type) {
       case "get_dashboard":
@@ -228,6 +302,8 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       }
       case "get_diagnostics":
         return { type: "diagnostics", data: diagnostics() };
+      case "get_enforcement_readiness":
+        return { type: "enforcement_readiness", data: readiness() };
       case "get_settings":
         return { type: "settings", data: state.settings };
       case "run_simulation":

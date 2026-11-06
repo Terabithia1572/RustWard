@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Api } from "../api/client";
+import { PRIVILEGED } from "../api/types";
 import { App, type PageId } from "../App";
 import { BANNER_TR, fakeBackend, type FakeState } from "./fakeBackend";
 
@@ -272,5 +273,42 @@ describe("Diagnostics Event Log", () => {
   it("states that Event Log mirroring is not attached outside the Windows service", async () => {
     setup("diagnostics");
     expect(await screen.findByText("Bağlı değil (yalnızca Windows hizmetinde)")).toBeInTheDocument();
+  });
+});
+
+describe("Enforcement readiness (read-only)", () => {
+  it("shows the real status, keeps activation disabled and never claims blocking", async () => {
+    const { state } = setup("readiness");
+    expect(await screen.findByText("Uygulama Hazırlığı (salt okunur)")).toBeInTheDocument();
+    const actual = screen.getByTestId("actual-enforcement");
+    expect(actual).toHaveTextContent("Doğrulama bekleniyor — koruma etkin değil");
+    const button = screen.getByRole("button", { name: "Politikayı etkinleştir" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/ACTIVATION_ENABLED = false/)).toBeInTheDocument();
+    // Only read-only requests were made (no privileged request at all).
+    expect(state.calls.some((c) => c.type === "get_enforcement_readiness")).toBe(true);
+    expect(state.calls.filter((c) => PRIVILEGED.has(c.type))).toEqual([]);
+    expect(document.body.textContent).not.toMatch(/engellendi|engellenmiştir/i);
+  });
+
+  it("explains conflicts, unresolved names, prerequisites and manual remediation in Turkish", async () => {
+    setup("readiness");
+    expect(await screen.findByTestId("conflicts")).toHaveTextContent("DenyUnspecified = 1: tanımlanmayan tüm yeni aygıtlar");
+    expect(screen.getByText("Kayıt düzeni Microsoft CSP tablosunda yok; VM'de doğrulanmalı.")).toBeInTheDocument();
+    expect(screen.getByText("Tanınmayan değerler (yorumlanmaz, değiştirilmez): 1")).toBeInTheDocument();
+    expect(screen.getByText("Kısmi: 1 eşleşen, 5 eksik, 0 farklı")).toBeInTheDocument();
+    expect(screen.getByText("Yalnızca politika durumudur; erişim engelinin kanıtı değildir.")).toBeInTheDocument();
+    const gates = screen.getByTestId("gates");
+    expect(within(gates).getByText("Sürüm etkinleştirmeye izin veriyor")).toBeInTheDocument();
+    expect(within(gates).getAllByText("Karşılanmadı").length).toBe(1);
+    expect(screen.getByText("Reddedilen ama kurulu — elle düzeltme gerekli")).toBeInTheDocument();
+    expect(screen.getByTestId("remediation-steps")).toHaveTextContent("RustWard bu işlemi yapmaz");
+    expect(screen.getByText("SİMÜLE RET")).toBeInTheDocument();
+  });
+
+  it("states plainly when the policy cannot be read (not on Windows)", async () => {
+    setup("readiness", { readinessInspection: false });
+    expect(await screen.findByTestId("inspection-error")).toHaveTextContent("Politika okunamadı: policy inspection requires Windows");
+    expect(screen.getByText("Okunamadı")).toBeInTheDocument();
   });
 });

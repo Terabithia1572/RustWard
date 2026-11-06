@@ -50,6 +50,7 @@ export type Request =
   | { type: "list_events"; query: EventQuery }
   | { type: "list_policy_changes"; limit: number }
   | { type: "get_diagnostics" }
+  | { type: "get_enforcement_readiness" }
   | { type: "get_settings" }
   | { type: "run_simulation" }
   | { type: "add_manufacturer"; input: ManufacturerInput; allowed: boolean; expected_policy_version: number }
@@ -80,6 +81,7 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "list_events",
   "list_policy_changes",
   "get_diagnostics",
+  "get_enforcement_readiness",
   "get_settings",
   "run_simulation",
   "add_manufacturer",
@@ -339,6 +341,7 @@ export type ResponseBody =
   | { type: "events"; data: EventView[] }
   | { type: "policy_changes"; data: PolicyChangeView[] }
   | { type: "diagnostics"; data: DiagnosticsView }
+  | { type: "enforcement_readiness"; data: EnforcementReadinessView }
   | { type: "settings"; data: SettingsView }
   | { type: "simulation"; data: SimulationView }
   | { type: "mutation"; data: MutationView }
@@ -358,3 +361,168 @@ export type ErrorCode =
   | "unavailable"
   | "timeout"
   | "internal";
+
+// ---- Enforcement readiness (read-only; Phase 10) ---------------------------
+// Mirrors rustward-ipc EnforcementReadinessView and the embedded
+// rustward-enforcement types (serde shapes).
+
+export type RegData =
+  | { type: "dword"; data: number }
+  | { type: "sz"; data: string }
+  | { type: "multi_sz"; data: string[] }
+  | { type: "other"; data: { reg_type: number; bytes: number } };
+
+export interface ValueRef {
+  key: string;
+  name: string;
+}
+
+export type NameStatus = "documented" | "unresolved";
+
+export interface PolicyListView {
+  name: string;
+  allow: boolean;
+  layer: "instance_id" | "device_id" | "setup_class";
+  enabled: number | null;
+  entries: string[];
+  name_status: NameStatus;
+  layout_status: NameStatus;
+}
+
+export interface PolicyFlagView {
+  name: string;
+  value: number | null;
+  name_status: NameStatus;
+}
+
+export type LayeringSupport =
+  | { status: "supported" }
+  | { status: "not_supported"; reason: string }
+  | { status: "unresolved"; reason: string };
+
+export type PlanPresence =
+  | { state: "not_applied" }
+  | { state: "partial"; matching: number; missing: number; different: number }
+  | { state: "policy_values_present" };
+
+export interface PolicyInspection {
+  captured_ms: number;
+  key_present: boolean;
+  layered: PolicyFlagView;
+  deny_unspecified: PolicyFlagView;
+  lists: PolicyListView[];
+  retroactive: PolicyFlagView[];
+  unrecognised: [ValueRef, RegData][];
+  os: {
+    is_windows: boolean;
+    major: number | null;
+    minor: number | null;
+    build: number | null;
+    ubr: number | null;
+    product_type: number | null;
+  };
+  edition_supported: boolean | null;
+  layering: LayeringSupport;
+  conflicts: PolicyConflict[];
+  plan_presence: PlanPresence | null;
+  read_errors: string[];
+}
+
+export type PolicyConflict =
+  | { kind: "existing_deny_unspecified" }
+  | { kind: "retroactive_flag"; value: string }
+  | { kind: "list_index_collision"; list: string; index: number; existing: string; planned: string }
+  | { kind: "deny_overlaps_allow"; deny_list: string; id: string }
+  | { kind: "invalid_planned_value"; detail: string };
+
+export interface PlannedChange {
+  hive: string;
+  key: string;
+  value_name: string;
+  value_type: string;
+  data: string;
+  purpose: string;
+  confirmed_against_documentation: boolean;
+}
+
+export interface TextTrEn {
+  tr: string;
+  en: string;
+}
+
+export interface GateView {
+  code: string;
+  status: "met" | "not_met" | "unknown";
+  detail: string;
+}
+
+export type InstallOutcome =
+  | { outcome: "allowed"; rule: { layer: string; list: string; entry: string } }
+  | { outcome: "prevented"; rule: { layer: string; list: string; entry: string } }
+  | { outcome: "not_restricted" };
+
+export type InstalledFinding =
+  | "denied_but_installed"
+  | "denied_not_installed"
+  | "allowed"
+  | "internal_disk_protected"
+  | "internal_disk_unprotected"
+  | "attachment_unknown"
+  | "allowed_but_plan_prevents"
+  | "denied_but_plan_allows";
+
+export interface AssessedDevice {
+  instance_id: string;
+  name: string;
+  attachment: "usb_bot" | "usb_uasp" | "usb_other" | "internal" | "unknown_attachment";
+  present: boolean | null;
+  install_state: "installed" | "not_installed" | "unknown";
+  simulated_verdict: string;
+  planned_new_install: InstallOutcome;
+  remains_accessible_after_activation: boolean;
+  finding: InstalledFinding;
+  remediation: TextTrEn[];
+}
+
+export interface InstalledAssessment {
+  sanitized: boolean;
+  devices: AssessedDevice[];
+  summary: {
+    assessed: number;
+    denied_but_installed: number;
+    denied_not_installed: number;
+    allowed: number;
+    internal_protected: number;
+    internal_unprotected: number;
+    needs_review: number;
+    plan_disagreements: number;
+  };
+  limitations: TextTrEn[];
+  manual_only: boolean;
+}
+
+export interface EnforcementReadinessView {
+  actual_enforcement: {
+    state: string;
+    label_tr: string;
+    label_en: string;
+    verified_protection: boolean;
+    activation_available: boolean;
+  };
+  inspection_source: "windows_registry_read_only" | "fixture" | "unavailable";
+  inspection: PolicyInspection | null;
+  inspection_error: string | null;
+  plan_fingerprint: string;
+  planned_changes: PlannedChange[];
+  conflicts: PolicyConflict[];
+  gates: GateView[];
+  required_permissions: TextTrEn[];
+  recovery: {
+    steps: { order: number; en: string; tr: string }[];
+    rollback_modelled_exact: boolean;
+    forward_operations: number;
+    rollback_operations: number;
+    suspend_operations: number;
+  };
+  installed: InstalledAssessment;
+}

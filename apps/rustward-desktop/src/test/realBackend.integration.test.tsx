@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Api } from "../api/client";
 import { App, type PageId } from "../App";
 import type { ResponseBody } from "../api/types";
+import { resolve } from "node:path";
 import { startRealBackend, type RealBackend } from "./stdioBackend";
 
 const BANNER_TR = "Koruma henüz gerçek Windows ortamında doğrulanmadı.";
@@ -246,5 +247,52 @@ describe("real backend: standard user (no administrator rights)", () => {
     const after = data(await real.call({ type: "list_manufacturers" }), "manufacturers");
     expect(after.policy_version).toBe(before.policy_version);
     expect(after.manufacturers).toEqual(before.manufacturers);
+  });
+});
+
+// Tests run from apps/rustward-desktop (vitest root).
+const POLICY_FIXTURE = resolve(process.cwd(), "../../tests/fixtures/policy-capture-synthetic.json");
+
+describe("real backend: enforcement readiness (read-only)", () => {
+  it("inspects a synthetic policy capture, merges around existing entries and keeps activation disabled", async () => {
+    real = startRealBackend("admin", undefined, { policyCapture: POLICY_FIXTURE });
+    await real.call({ type: "load_synthetic_inventory" });
+    const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
+    expect(v.actual_enforcement.verified_protection).toBe(false);
+    expect(v.actual_enforcement.activation_available).toBe(false);
+    expect(v.inspection_source).toBe("fixture");
+    // The administrator's existing AllowDeviceIDs\1 is kept; planned entries follow it.
+    const allow = v.planned_changes.filter((c) => c.key.endsWith("\\AllowDeviceIDs"));
+    expect(allow.length).toBeGreaterThan(0);
+    expect(allow.every((c) => c.value_name !== "1")).toBe(true);
+    expect(v.conflicts).toEqual([]);
+    expect(v.recovery.rollback_modelled_exact).toBe(true);
+    expect(v.gates.find((g) => g.code === "build_permits_activation")?.status).toBe("not_met");
+    expect(v.installed.summary.denied_but_installed).toBeGreaterThan(0);
+    expect(v.installed.manual_only).toBe(true);
+
+    render(<App api={new Api(real.backend)} initialPage="readiness" />);
+    expect(await screen.findByText("SENTETİK kayıt dosyası (geliştirme)")).toBeInTheDocument();
+    expect(screen.getByText(/SYNTHETICVENDORTOOL/)).toBeInTheDocument();
+    expect(screen.getByText("Çakışma yok.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Politikayı etkinleştir" })).toBeDisabled();
+    expect(within(screen.getByTestId("installed-table")).getAllByText("Reddedilen ama kurulu — elle düzeltme gerekli").length).toBe(
+      v.installed.summary.denied_but_installed,
+    );
+    expect(screen.getByTestId("remediation-steps")).toHaveTextContent("RustWard bu işlemi yapmaz");
+    expect(document.body.textContent).not.toMatch(FORBIDDEN_BLOCKED_CLAIM);
+  });
+
+  it("says plainly that the policy cannot be read off Windows", async () => {
+    await boot("readiness");
+    expect(await screen.findByTestId("inspection-error")).toHaveTextContent("policy inspection requires Windows");
+  });
+
+  it("is readable by a standard user, whose administrator gate is not met", async () => {
+    real = startRealBackend("user", undefined, { policyCapture: POLICY_FIXTURE });
+    const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
+    expect(v.gates.find((g) => g.code === "administrator_authorized")?.status).toBe("not_met");
+    render(<App api={new Api(real.backend)} initialPage="readiness" />);
+    expect(await screen.findByTestId("actual-enforcement")).toHaveTextContent("koruma etkin değil");
   });
 });
