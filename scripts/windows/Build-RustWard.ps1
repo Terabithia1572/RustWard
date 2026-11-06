@@ -255,6 +255,14 @@ else {
 }
 Write-Info ''
 
+# Copying over a running executable fails, so stop early with a clear message.
+$running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($Dist, [StringComparison]::OrdinalIgnoreCase)
+    })
+if ($running.Count -gt 0) {
+    Exit-Build 15 ("dist klasöründeki RustWard çalışıyor: " + (($running | ForEach-Object { $_.ProcessName }) -join ', ')) 'Açık RustWard pencerelerini kapatıp BUILD-RUSTWARD.cmd dosyasını yeniden çalıştırın.'
+}
+
 # ---------------------------------------------------------------- 2. npm ci
 if ((Invoke-Logged 'npm-ci' $App 'npm ci --no-audit --no-fund') -ne 0) {
     Exit-Build 50 'npm ci başarısız oldu.' 'İnternet bağlantısını ve günlükteki npm hatasını kontrol edin.'
@@ -311,7 +319,8 @@ foreach ($b in $builds) {
         Exit-Build 72 'rustward-service.exe içinde Olay Günlüğü ileti tablosu (MESSAGETABLE) yok.' 'Windows SDK rc.exe ile yeniden derleyin; günlükte embed-resource hatasına bakın.'
     }
     $dst = Join-Path $Dist $b.Dst
-    Copy-Item -LiteralPath $b.Src -Destination $dst -Force
+    try { Copy-Item -LiteralPath $b.Src -Destination $dst -Force -ErrorAction Stop }
+    catch { Exit-Build 73 "$dst kopyalanamadı (dosya kullanımda olabilir): $($_.Exception.Message)" 'Açık RustWard pencerelerini kapatıp yeniden çalıştırın.' }
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dst).Hash.ToLowerInvariant()
     $size = (Get-Item -LiteralPath $dst).Length
     $deps = ''
