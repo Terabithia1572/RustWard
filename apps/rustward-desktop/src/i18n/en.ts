@@ -8,11 +8,13 @@ export const en: Record<TKey, string> = {
 
   "nav.dashboard": "Dashboard",
   "nav.devices": "Devices",
-  "nav.manufacturers": "Allowed Manufacturers",
+  "nav.manufacturers": "Allowed Brands",
   "nav.blocked": "Denied Devices",
-  "nav.audit": "Audit Logs",
+  "nav.audit": "Event Logs",
   "nav.diagnostics": "Diagnostics",
   "nav.settings": "Settings",
+
+  "banner.notActivated": "USB protection has not been activated yet.",
 
   "banner.notValidated": "Protection has not yet been validated on a real Windows environment.",
   "banner.simulationDetail": "All decisions are simulated. RustWard currently does not block any USB device.",

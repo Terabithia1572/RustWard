@@ -8,13 +8,14 @@ import {
   LayoutDashboard,
   ScrollText,
   Settings as SettingsIcon,
+  ShieldAlert,
   ShieldHalf,
   Usb,
 } from "lucide-react";
 import type { Api } from "./api/client";
 import type { SettingsView } from "./api/types";
 import { DenialNotifier } from "./components/Notifier";
-import { I18nProvider, useI18n, type Lang } from "./i18n";
+import { I18nProvider, translate, useI18n, type Lang } from "./i18n";
 import type { TKey } from "./i18n/tr";
 import { ApiProvider } from "./lib/hooks";
 import { applyTheme, readCachedPrefs, writeCachedPrefs } from "./lib/prefs";
@@ -43,8 +44,8 @@ const NAV: { id: PageId; label: TKey; icon: ComponentType<{ className?: string }
   { id: "manufacturers", label: "nav.manufacturers", icon: Factory },
   { id: "blocked", label: "nav.blocked", icon: Ban },
   { id: "audit", label: "nav.audit", icon: ScrollText },
-  { id: "readiness", label: "nav.readiness", icon: ClipboardCheck },
   { id: "diagnostics", label: "nav.diagnostics", icon: Activity },
+  { id: "readiness", label: "nav.readiness", icon: ClipboardCheck },
   { id: "settings", label: "nav.settings", icon: SettingsIcon },
 ];
 
@@ -59,7 +60,7 @@ function Shell({
   settings: SettingsView | null;
   onSettings: (s: SettingsView) => void;
 }) {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   return (
     <div className="flex h-full min-h-0">
       <nav
@@ -98,6 +99,16 @@ function Shell({
         </div>
       </nav>
       <main className="min-w-0 flex-1 overflow-y-auto">
+        {/* Mandatory on every page while enforcement is compiled out. */}
+        <div
+          role="status"
+          data-testid="not-activated-warning"
+          className="sticky top-0 z-10 flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-6 py-2 text-sm font-semibold text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+        >
+          <ShieldAlert className="size-4 shrink-0" aria-hidden />
+          {translate("tr", "banner.notActivated")}
+          {lang !== "tr" && <span className="font-normal opacity-90">({t("banner.notActivated")})</span>}
+        </div>
         <div className="mx-auto max-w-[1400px] px-6 py-5">
           {page === "dashboard" && <DashboardPage onNavigate={setPage} />}
           {page === "devices" && <DevicesPage />}

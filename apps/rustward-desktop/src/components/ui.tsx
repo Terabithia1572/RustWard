@@ -278,8 +278,13 @@ export function NotValidatedBanner() {
     >
       <ShieldAlert className="mt-0.5 size-5 shrink-0" aria-hidden />
       <div>
+        <p className="font-semibold">{translate("tr", "banner.notActivated")}</p>
         <p className="font-semibold">{translate("tr", "banner.notValidated")}</p>
-        {lang !== "tr" && <p className="text-sm font-medium">{t("banner.notValidated")}</p>}
+        {lang !== "tr" && (
+          <p className="text-sm font-medium">
+            {t("banner.notActivated")} {t("banner.notValidated")}
+          </p>
+        )}
         <p className="text-sm opacity-90">{t("banner.simulationDetail")}</p>
       </div>
     </div>

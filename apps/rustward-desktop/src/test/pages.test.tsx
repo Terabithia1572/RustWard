@@ -49,6 +49,41 @@ describe("Dashboard", () => {
   });
 });
 
+describe("Navigation and mandatory warning", () => {
+  it("shows the eight pages in the required order and the not-activated warning", async () => {
+    setup("dashboard");
+    await screen.findByTestId("not-validated-banner");
+    const nav = screen.getByRole("navigation");
+    const labels = within(nav)
+      .getAllByRole("button")
+      .map((b) => b.textContent?.trim());
+    expect(labels).toEqual([
+      "Dashboard",
+      "Cihazlar",
+      "İzinli Markalar",
+      "Engellenen Cihazlar",
+      "Olay Kayıtları",
+      "Tanılama",
+      "Uygulama Hazırlığı",
+      "Ayarlar",
+    ]);
+    expect(screen.getByTestId("not-activated-warning")).toHaveTextContent(
+      "USB koruması henüz etkinleştirilmemiştir.",
+    );
+  });
+
+  it("keeps the not-activated warning when the service is not installed", async () => {
+    const down = {
+      call: () => Promise.reject({ code: "unavailable", message: "the RustWard service is not reachable" }),
+    };
+    render(<App api={new Api(down)} initialPage="readiness" />);
+    expect(await screen.findByTestId("not-activated-warning")).toHaveTextContent(
+      "USB koruması henüz etkinleştirilmemiştir.",
+    );
+    expect(document.body.textContent).not.toMatch(/USB engellenmiştir/i);
+  });
+});
+
 describe("Service unavailable (stopped or not installed)", () => {
   it("never reads a missing service as protection: banner stays, error is explicit", async () => {
     const down = {
@@ -135,7 +170,7 @@ describe("Blocked devices", () => {
   it("states that the decision was not enforced", async () => {
     setup("blocked");
     expect(await screen.findByText("Uygulanmadı — yalnızca simüle karar")).toBeInTheDocument();
-    expect(screen.getByText("Reddedilen Aygıtlar (simülasyon)")).toBeInTheDocument();
+    expect(screen.getByText("Engellenen Cihazlar (simülasyon)")).toBeInTheDocument();
   });
 });
 

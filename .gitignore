@@ -40,3 +40,5 @@ Thumbs.db
 /.npm-offline-cache/
 /.cargo-offline/
 /release-out/
+# Local Windows build logs (scripts/windows/Build-RustWard.ps1)
+/build-logs/

@@ -103,6 +103,7 @@ fn scripts_exist_and_are_scanned() {
         "windows/Invoke-StageC-ServiceInspection.ps1",
         "windows/Invoke-StageE-PolicyInspection.ps1",
         "windows/Invoke-AcceptanceMsi.ps1",
+        "windows/Build-RustWard.ps1",
     ] {
         assert!(names.iter().any(|n| n == expected), "missing {expected}");
     }
@@ -182,4 +183,47 @@ fn stage_e_compares_the_policy_key_before_and_after() {
     assert!(before < capture && capture < after);
     assert!(text.contains("E10 RESULT: PASS"));
     assert!(text.contains("E10 RESULT: FAIL"));
+}
+
+#[test]
+fn build_script_builds_without_installing_or_elevating() {
+    let (_, text) = powershell_files()
+        .into_iter()
+        .find(|(n, _)| n == "windows/Build-RustWard.ps1")
+        .expect("build script");
+    // UTF-8 BOM: Windows PowerShell 5.1 reads the Turkish messages correctly.
+    assert!(
+        text.starts_with('\u{feff}'),
+        "Build-RustWard.ps1 needs a UTF-8 BOM"
+    );
+    let lower = text.to_lowercase();
+    for f in [
+        "runas",
+        "-verb runas",
+        "winget",
+        "choco ",
+        "msiexec",
+        "rustup-init.exe -y",
+        "invoke-webrequest",
+        "start-bitstransfer",
+    ] {
+        assert!(
+            !lower.contains(f),
+            "build script must not install or elevate: `{f}`"
+        );
+    }
+    assert!(text.contains("npx tauri build --no-bundle"));
+    assert!(text.contains("npx tauri build --debug --no-bundle --features gui-subsystem"));
+    assert!(
+        text.contains("Test-PeGuiX64"),
+        "outputs are verified before copying"
+    );
+    let launcher =
+        std::fs::read_to_string(scripts_dir().join("../BUILD-RUSTWARD.cmd")).expect("launcher");
+    assert!(launcher.contains("scripts\\windows\\Build-RustWard.ps1"));
+    assert!(launcher.is_ascii(), "cmd launcher stays ASCII");
+    assert!(
+        launcher.contains("exit /b %RW_EXIT%"),
+        "nonzero exit code is passed on"
+    );
 }

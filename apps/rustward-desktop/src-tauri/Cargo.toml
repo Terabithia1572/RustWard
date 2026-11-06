@@ -29,6 +29,9 @@ serde_json = "1.0.154"
 # can never include it even with this feature on.
 default = ["dev-backend"]
 dev-backend = ["rustward-ui-bridge/dev-backend"]
+# Preview builds only: no console window in a debug build. Changes nothing
+# else (backend selection still follows debug_assertions + dev-backend).
+gui-subsystem = []
 
 [profile.release]
 codegen-units = 1

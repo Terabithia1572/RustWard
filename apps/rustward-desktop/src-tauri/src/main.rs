@@ -12,7 +12,13 @@
 //! with webkit2gtk in the development container (`scripts/verify-all.sh`).
 //! The Windows build (WebView2, MSI) is NOT VERIFIED and must be done on
 //! Windows 10 Pro x64.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Release builds, and the debug "preview" build made by
+// scripts\windows\Build-RustWard.ps1 (feature `gui-subsystem`), open as a
+// normal Windows GUI app without a console window.
+#![cfg_attr(
+    any(not(debug_assertions), feature = "gui-subsystem"),
+    windows_subsystem = "windows"
+)]
 
 use std::sync::Arc;
 

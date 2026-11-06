@@ -21,6 +21,7 @@ describe("i18n", () => {
 
   it("carries the mandated not-validated sentence verbatim", () => {
     expect(tr["banner.notValidated"]).toBe("Koruma henüz gerçek Windows ortamında doğrulanmadı.");
+    expect(tr["banner.notActivated"]).toBe("USB koruması henüz etkinleştirilmemiştir.");
   });
 
   it("never claims that a device was actually blocked", () => {
