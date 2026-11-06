@@ -155,7 +155,44 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         | Request::SetManufacturerAllowed { id, .. }
         | Request::SetRuleEnabled { id, .. } => slug("id", id),
         Request::UpdateSettings { settings: s } => settings(s),
+        Request::ListBackups => Ok(()),
+        Request::SetWorkstationId { workstation_id, .. } => {
+            if (1..=64).contains(&workstation_id.len())
+                && workstation_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                Ok(())
+            } else {
+                Err(bad("workstation_id must match [A-Za-z0-9_-]{1,64}"))
+            }
+        }
+        Request::RestoreBackup { file_name } => {
+            if parse_backup_file_name(file_name).is_some() {
+                Ok(())
+            } else {
+                Err(bad(
+                    "file_name must be a RustWard backup file name, not a path",
+                ))
+            }
+        }
     }
+}
+
+/// Parse `rustward-backup-<ms>.db` / `rustward-pre-restore-<ms>.db`.
+/// Returns `(kind, created_ms)`. Anything else — including any path
+/// separator, `..`, drive letter or alternate data stream — is rejected.
+#[must_use]
+pub fn parse_backup_file_name(name: &str) -> Option<(&'static str, i64)> {
+    let (kind, rest) = match name.strip_prefix("rustward-backup-") {
+        Some(r) => ("manual", r),
+        None => ("pre_restore", name.strip_prefix("rustward-pre-restore-")?),
+    };
+    let digits = rest.strip_suffix(".db")?;
+    if digits.is_empty() || digits.len() > 16 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((kind, digits.parse().ok()?))
 }
 
 #[cfg(test)]
@@ -171,6 +208,53 @@ mod tests {
             identifiers: vec![],
             notes: None,
         }
+    }
+
+    #[test]
+    fn backup_file_names_cannot_escape_the_backup_directory() {
+        assert_eq!(
+            parse_backup_file_name("rustward-backup-1793836800000.db"),
+            Some(("manual", 1_793_836_800_000))
+        );
+        assert_eq!(
+            parse_backup_file_name("rustward-pre-restore-5.db"),
+            Some(("pre_restore", 5))
+        );
+        for bad in [
+            "",
+            "rustward-backup-.db",
+            "rustward-backup-12.db.exe",
+            "rustward-backup-12.db:stream",
+            "..\\rustward-backup-1.db",
+            "../rustward-backup-1.db",
+            "C:\\x\\rustward-backup-1.db",
+            "rustward-backup-1/../../x.db",
+            "rustward-backup-١٢.db",
+            "rustward-backup-99999999999999999.db",
+            "RUSTWARD-BACKUP-1.DB",
+            "other.db",
+        ] {
+            assert!(parse_backup_file_name(bad).is_none(), "{bad:?}");
+            assert!(
+                validate_request(&Request::RestoreBackup {
+                    file_name: bad.into()
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn workstation_ids_are_validated() {
+        let ok = |w: &str| {
+            validate_request(&Request::SetWorkstationId {
+                workstation_id: w.into(),
+                expected_policy_version: 1,
+            })
+            .is_ok()
+        };
+        assert!(ok("PC-02") && ok("lab_pc_7"));
+        assert!(!ok("") && !ok("PC 02") && !ok("PC/02") && !ok("İSTASYON") && !ok(&"a".repeat(65)));
     }
 
     #[test]

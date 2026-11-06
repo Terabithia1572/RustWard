@@ -1,6 +1,6 @@
 [package]
 name = "rustward-service"
-description = "RustWard Windows service host: background inventory refresh, health, retention, IPC servers. SCM integration is Windows-only and NOT VERIFIED."
+description = "RustWard Windows service host: background inventory refresh, health, retention, IPC servers. SCM integration (windows-sys, in rustward-windows) is NOT VERIFIED on Windows."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,17 +11,16 @@ name = "rustward-service"
 path = "src/main.rs"
 
 [features]
-# Type-check the named-pipe server code on non-Windows hosts.
-host-typecheck = ["rustward-ipc/host-typecheck"]
+# Type-check the named-pipe server and SCM host code on non-Windows hosts.
+host-typecheck = ["rustward-ipc/host-typecheck", "rustward-windows/host-typecheck"]
 
 [dependencies]
 rustward-app.workspace = true
 rustward-core.workspace = true
 rustward-ipc.workspace = true
 rustward-storage.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-windows-service = "0.8.1"
+rustward-windows.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

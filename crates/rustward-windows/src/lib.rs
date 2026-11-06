@@ -1,23 +1,43 @@
-//! Read-only Windows device inventory for RustWard.
+//! Windows adapters for RustWard.
 //!
-//! This crate **only reads** Plug and Play state through SetupAPI device
-//! properties. It does not disable, remove, install or reconfigure
-//! devices, and it does not touch the registry or Group Policy. The set of
-//! imported Win32 functions is pinned by [`WIN32_API_ALLOWLIST`] and
-//! checked by a unit test.
+//! - Read-only device inventory through SetupAPI device properties
+//!   ([`collect_inventory`]); the imported inventory functions are pinned by
+//!   [`WIN32_API_ALLOWLIST`].
+//! - Device-change notifications (`device_notify`, telemetry only).
+//! - Windows Event Log writer (`event_log`).
+//! - Service Control Manager host (`service_host`).
 //!
-//! On non-Windows hosts [`collect_inventory`] returns
-//! [`InventoryError::UnsupportedPlatform`]. The `host-typecheck` feature
-//! compiles the SetupAPI backend anyway so it can be type-checked in CI.
+//! Nothing in this crate disables, removes, installs or reconfigures
+//! devices or drivers, or writes the registry or Group Policy; a unit test
+//! scans every source file for such APIs.
+//!
+//! Platform-neutral logic ([`engine`], [`wide`], [`svc_control`],
+//! [`devchange`], [`eventlog_map`]) builds and is tested on every OS. The
+//! FFI modules compile on Windows, and on other hosts with the
+//! `host-typecheck` feature so CI can type-check them; they are **not
+//! verified on Windows yet**.
 
 #![cfg_attr(not(any(windows, feature = "host-typecheck")), forbid(unsafe_code))]
 
+pub mod devchange;
 pub mod engine;
+pub mod eventlog_map;
+pub mod svc_control;
 pub mod wide;
 
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]
 mod setupapi;
+
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod device_notify;
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod event_log;
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod service_host;
 
 use rustward_core::device::{
     DeviceRecord, DeviceSnapshot, SNAPSHOT_SCHEMA_VERSION, SnapshotSource,
@@ -177,6 +197,67 @@ mod tests {
                 !tokens.contains(&forbidden),
                 "forbidden API {forbidden} present"
             );
+        }
+    }
+
+    /// No source file in this crate may reference APIs that change device,
+    /// driver, service-configuration, registry or policy state.
+    #[test]
+    fn no_module_references_state_changing_apis() {
+        let src = concat!(
+            include_str!("setupapi.rs"),
+            include_str!("engine.rs"),
+            include_str!("device_notify.rs"),
+            include_str!("event_log.rs"),
+            include_str!("service_host.rs"),
+            include_str!("svc_control.rs"),
+            include_str!("devchange.rs"),
+            include_str!("eventlog_map.rs"),
+            include_str!("wide.rs"),
+        );
+        let tokens: std::collections::HashSet<&str> = src
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+            .collect();
+        let forbidden_prefixes = [
+            "SetupDiSet",
+            "SetupDiCall",
+            "SetupDiChange",
+            "SetupDiRemove",
+            "SetupDiInstall",
+            "SetupDiRegister",
+            "SetupDiDelete",
+            "CM_Disable",
+            "CM_Enable",
+            "CM_Uninstall",
+            "CM_Set",
+            "CM_Setup",
+            "CM_Reenumerate",
+            "CM_Query_And_Remove",
+            "CM_Request_Device_Eject",
+            "RegSet",
+            "RegCreate",
+            "RegDelete",
+            "RegOpen",
+            "DiInstall",
+            "DiUninstall",
+            "UpdateDriver",
+            "CreateService",
+            "DeleteService",
+            "ChangeServiceConfig",
+            "OpenSCManager",
+            "StartServiceW",
+            "ControlService",
+            "DeviceIoControl",
+            "CreateFile",
+        ];
+        for t in &tokens {
+            for p in forbidden_prefixes {
+                assert!(
+                    !t.starts_with(p),
+                    "forbidden API-like token {t} (prefix {p})"
+                );
+            }
         }
     }
 

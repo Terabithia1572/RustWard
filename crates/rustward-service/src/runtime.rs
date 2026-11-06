@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use rustward_app::AppService;
 use rustward_storage::{Clock, Severity};
@@ -13,6 +14,39 @@ use rustward_storage::{Clock, Severity};
 pub const RETENTION_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 /// Consecutive failures before the health state becomes `Degraded`.
 pub const DEGRADED_AFTER_FAILURES: u32 = 3;
+
+/// After a device-change wake-up, wait this long for the device stack to
+/// settle (a USB disk produces several devnodes in quick succession).
+pub const WAKE_SETTLE: Duration = Duration::from_millis(750);
+/// Minimum spacing between wake-triggered refreshes (protects against
+/// notification storms, e.g. during driver reinstallation).
+pub const MIN_WAKE_SPACING: Duration = Duration::from_secs(2);
+
+/// Something that can wake the runtime early (device-change telemetry).
+/// Waking only schedules an inventory refresh; it never enforces anything.
+pub trait WakeSource: Send {
+    /// Block up to `timeout`; `true` if a wake-up signal arrived.
+    fn wait(&mut self, timeout: Duration) -> bool;
+    /// Discard queued signals; returns how many were dropped.
+    fn drain(&mut self) -> usize;
+}
+
+impl<T: Send> WakeSource for Receiver<T> {
+    fn wait(&mut self, timeout: Duration) -> bool {
+        match self.recv_timeout(timeout) {
+            Ok(_) => true,
+            Err(RecvTimeoutError::Timeout) => false,
+            // A dead sender must not turn the loop into a busy spin.
+            Err(RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(timeout);
+                false
+            }
+        }
+    }
+    fn drain(&mut self) -> usize {
+        self.try_iter().count()
+    }
+}
 
 /// Service health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +76,8 @@ pub struct ServiceRuntime {
     stop: Arc<AtomicBool>,
     last_retention_ms: Option<i64>,
     failures: u32,
+    wake: Option<Box<dyn WakeSource>>,
+    wake_refreshes: u64,
 }
 
 impl std::fmt::Debug for ServiceRuntime {
@@ -61,7 +97,65 @@ impl ServiceRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             last_retention_ms: None,
             failures: 0,
+            wake: None,
+            wake_refreshes: 0,
         }
+    }
+
+    /// Use an externally owned stop flag (e.g. the SCM control handler's).
+    #[must_use]
+    pub fn with_stop_handle(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.stop = stop;
+        self
+    }
+
+    /// Refresh early when `wake` signals a device change.
+    #[must_use]
+    pub fn with_wake_source(mut self, wake: Box<dyn WakeSource>) -> Self {
+        self.wake = Some(wake);
+        self
+    }
+
+    /// Refreshes triggered by wake-ups so far.
+    #[must_use]
+    pub fn wake_refreshes(&self) -> u64 {
+        self.wake_refreshes
+    }
+
+    /// Sleep up to `interval` in short slices. Returns early (after the
+    /// settle delay) when a wake-up arrives and `MIN_WAKE_SPACING` has
+    /// passed since the previous wake-triggered refresh.
+    fn idle(&mut self, interval: Duration, last_wake_refresh: &mut Option<Instant>) -> bool {
+        let start = Instant::now();
+        let slice = Duration::from_millis(100);
+        while !self.stop.load(Ordering::SeqCst) {
+            let elapsed = start.elapsed();
+            if elapsed >= interval {
+                return false;
+            }
+            let step = slice.min(interval - elapsed);
+            let woke = match self.wake.as_mut() {
+                Some(w) => w.wait(step),
+                None => {
+                    std::thread::sleep(step);
+                    false
+                }
+            };
+            let spaced = last_wake_refresh.is_none_or(|t| t.elapsed() >= MIN_WAKE_SPACING);
+            if woke && spaced {
+                let settle_until = Instant::now() + WAKE_SETTLE;
+                while Instant::now() < settle_until && !self.stop.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                if let Some(w) = self.wake.as_mut() {
+                    w.drain();
+                }
+                *last_wake_refresh = Some(Instant::now());
+                self.wake_refreshes += 1;
+                return true;
+            }
+        }
+        false
     }
 
     /// Handle used by the SCM control handler / Ctrl+C to request a stop.
@@ -131,6 +225,7 @@ impl ServiceRuntime {
             "RustWard service loop started",
         );
         let mut iterations = 0u64;
+        let mut last_wake_refresh: Option<Instant> = None;
         while !self.stop.load(Ordering::SeqCst) {
             self.tick();
             iterations += 1;
@@ -140,12 +235,7 @@ impl ServiceRuntime {
             let interval = interval_override.unwrap_or_else(|| {
                 Duration::from_secs(u64::from(self.app.refresh_interval_seconds()))
             });
-            let mut slept = Duration::ZERO;
-            while slept < interval && !self.stop.load(Ordering::SeqCst) {
-                let step = Duration::from_millis(100).min(interval - slept);
-                std::thread::sleep(step);
-                slept += step;
-            }
+            self.idle(interval, &mut last_wake_refresh);
         }
         let _ = self.app.record_event(
             Severity::Info,
@@ -271,6 +361,51 @@ mod tests {
         let k = kinds(&rt);
         assert!(k.contains(&"service_started".to_owned()));
         assert!(k.contains(&"service_stopping".to_owned()));
+    }
+
+    #[test]
+    fn device_change_wakes_the_loop_early_and_storms_are_coalesced() {
+        let (rt, _) = runtime(Box::new(FixtureInventory::bundled().unwrap()));
+        let (tx, rx) = std::sync::mpsc::channel::<u8>();
+        let mut rt = rt.with_wake_source(Box::new(rx));
+        let stop = rt.stop_handle();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            // A burst of 50 notifications (one USB disk = several devnodes).
+            for i in 0..50u8 {
+                let _ = tx.send(i);
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+            stop.store(true, Ordering::SeqCst);
+            tx
+        });
+        let started = Instant::now();
+        // Without a wake-up the first sleep would last a full hour.
+        let n = rt.run(None, Some(Duration::from_secs(3600)));
+        let _tx = sender.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(n, 2, "initial refresh + exactly one wake-triggered refresh");
+        assert_eq!(rt.wake_refreshes(), 1, "the burst is coalesced");
+    }
+
+    #[test]
+    fn disconnected_wake_source_does_not_spin() {
+        let (rt, _) = runtime(Box::new(FixtureInventory::bundled().unwrap()));
+        let (tx, rx) = std::sync::mpsc::channel::<u8>();
+        drop(tx);
+        let mut rt = rt.with_wake_source(Box::new(rx));
+        let started = Instant::now();
+        assert_eq!(rt.run(Some(2), Some(Duration::from_millis(300))), 2);
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert_eq!(rt.wake_refreshes(), 0);
+    }
+
+    #[test]
+    fn external_stop_handle_is_honoured() {
+        let (rt, _) = runtime(Box::new(FixtureInventory::bundled().unwrap()));
+        let stop = Arc::new(AtomicBool::new(true));
+        let mut rt = rt.with_stop_handle(Arc::clone(&stop));
+        assert_eq!(rt.run(None, Some(Duration::from_secs(3600))), 0);
     }
 
     #[test]

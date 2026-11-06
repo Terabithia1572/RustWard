@@ -112,6 +112,12 @@ pub enum PolicyEdit {
         /// Enabled.
         enabled: bool,
     },
+    /// Rename the workstation this policy belongs to (`[A-Za-z0-9_-]{1,64}`).
+    /// Policy-level edit: the change record's `brand_id` is empty.
+    SetWorkstationId {
+        /// New workstation identifier.
+        workstation_id: String,
+    },
 }
 
 impl PolicyEdit {
@@ -124,6 +130,7 @@ impl PolicyEdit {
             Self::RemoveManufacturer { .. } => "manufacturer_removed",
             Self::SetAllowed { .. } => "allowlist_changed",
             Self::SetRuleEnabled { .. } => "rule_enabled_changed",
+            Self::SetWorkstationId { .. } => "workstation_id_changed",
         }
     }
 }
@@ -507,6 +514,14 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
             rule.enabled = *enabled;
             id.clone()
         }
+        PolicyEdit::SetWorkstationId { workstation_id } => {
+            let new = workstation_id.trim();
+            if new == next.policy.workstation_id {
+                return Err(EditError::NoChange);
+            }
+            new.clone_into(&mut next.policy.workstation_id);
+            String::new()
+        }
     };
 
     if catalog_changed {
@@ -540,6 +555,10 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
         PolicyEdit::SetRuleEnabled { enabled, .. } => format!(
             "allowlist rule for {brand_id:?} {}",
             if *enabled { "enabled" } else { "disabled" }
+        ),
+        PolicyEdit::SetWorkstationId { .. } => format!(
+            "workstation id changed from {:?} to {:?}",
+            current.policy.workstation_id, next.policy.workstation_id
         ),
     };
     let change = ChangeRecord {
@@ -593,6 +612,53 @@ mod tests {
             aliases: vec![],
             identifiers: idents,
             notes: None,
+        }
+    }
+
+    #[test]
+    fn workstation_id_edit_is_versioned_validated_and_audited() {
+        let base = state();
+        let out = apply_edit(
+            &base,
+            &PolicyEdit::SetWorkstationId {
+                workstation_id: " PC-03 ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(out.state.policy.workstation_id, "PC-03");
+        assert_eq!(
+            out.state.policy.policy_version,
+            base.policy.policy_version + 1
+        );
+        assert_eq!(out.state.catalog, base.catalog, "catalog untouched");
+        assert_eq!(out.change.action, "workstation_id_changed");
+        assert_eq!(out.change.brand_id, "");
+        assert!(
+            out.change.summary.contains("\"PC-01\"") && out.change.summary.contains("\"PC-03\"")
+        );
+        assert_eq!(
+            apply_edit(
+                &out.state,
+                &PolicyEdit::SetWorkstationId {
+                    workstation_id: "PC-03".into()
+                }
+            )
+            .unwrap_err(),
+            EditError::NoChange
+        );
+        for bad in ["", "PC 03", "PC/03", "İSTASYON", &"x".repeat(65)] {
+            assert!(
+                matches!(
+                    apply_edit(
+                        &base,
+                        &PolicyEdit::SetWorkstationId {
+                            workstation_id: bad.into()
+                        }
+                    ),
+                    Err(EditError::Validation { .. })
+                ),
+                "{bad:?} must be rejected"
+            );
         }
     }
 

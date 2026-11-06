@@ -19,10 +19,14 @@ mod paths;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod runtime;
 
+// Used by the Windows SCM host; tested on every OS.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod event_mirror;
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]
 mod ipc_server;
-#[cfg(windows)]
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod scm;
 
 use std::path::PathBuf;

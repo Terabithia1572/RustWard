@@ -615,3 +615,283 @@ fn diagnostics_report_pending_native_work_honestly() {
     assert!(!d.pending_native_tests.is_empty());
     assert!(!d.windows_adapter.live_inventory_available);
 }
+
+fn event_kinds(s: &AppService) -> Vec<String> {
+    match call(
+        s,
+        Request::ListEvents {
+            query: EventQuery::default(),
+        },
+    ) {
+        ResponseBody::Events(e) => e.into_iter().map(|e| e.kind).collect(),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn file_service(dir: &TempDir, clock: Arc<ManualClock>) -> AppService {
+    service_with(
+        Store::open(&dir.0.join("rustward.db"), clock.clone()).unwrap(),
+        clock,
+        Box::new(EmptyInventory),
+        true,
+        Some(dir.0.join("backups")),
+    )
+}
+
+#[test]
+fn workstation_id_is_a_versioned_audited_policy_edit() {
+    let s = mem_service();
+    let v = policy_version(&s);
+    let ResponseBody::Mutation(m) = call(
+        &s,
+        Request::SetWorkstationId {
+            workstation_id: "PC-04".into(),
+            expected_policy_version: v,
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(m.policy_version, v + 1);
+    let ResponseBody::Dashboard(d) = call(&s, Request::GetDashboard) else {
+        panic!()
+    };
+    assert_eq!(d.workstation_id, "PC-04");
+    let ResponseBody::PolicyChanges(h) = call(&s, Request::ListPolicyChanges { limit: 5 }) else {
+        panic!()
+    };
+    assert_eq!(h[0].action, "workstation_id_changed");
+    // Stale version and no-op edits are refused.
+    let stale = s
+        .handle(
+            &Request::SetWorkstationId {
+                workstation_id: "PC-05".into(),
+                expected_policy_version: v,
+            },
+            &admin(),
+        )
+        .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::Conflict);
+}
+
+#[test]
+fn restore_saves_current_state_first_and_reverts_policy() {
+    let dir = TempDir::new("restore");
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = file_service(&dir, clock.clone());
+    let ResponseBody::Done { message } = call(&s, Request::CreateBackup) else {
+        panic!()
+    };
+    let backup = message.trim_start_matches("backup created: ").to_owned();
+    let v1 = policy_version(&s);
+    clock.advance(1_000);
+    call(
+        &s,
+        Request::SetManufacturerAllowed {
+            id: "kingston".into(),
+            allowed: true,
+            expected_policy_version: v1,
+        },
+    );
+    assert_eq!(policy_version(&s), v1 + 1);
+
+    let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
+        panic!()
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        (list[0].file_name.as_str(), list[0].kind.as_str()),
+        (backup.as_str(), "manual")
+    );
+
+    clock.advance(1_000);
+    let ResponseBody::Done { message } = call(
+        &s,
+        Request::RestoreBackup {
+            file_name: backup.clone(),
+        },
+    ) else {
+        panic!()
+    };
+    assert!(message.contains("rustward-pre-restore-"));
+    assert_eq!(policy_version(&s), v1, "policy reverted to the backup");
+    let ResponseBody::Events(ev) = call(
+        &s,
+        Request::ListEvents {
+            query: EventQuery::default(),
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(ev[0].kind, "audit_history_replaced");
+    assert!(
+        ev[0].message.contains("rustward-pre-restore-"),
+        "{}",
+        ev[0].message
+    );
+    assert_eq!(ev[1].kind, "database_restored");
+
+    // The pre-restore copy is listed and can undo the restore.
+    let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
+        panic!()
+    };
+    assert_eq!(list.len(), 2);
+    let pre = list
+        .iter()
+        .find(|b| b.kind == "pre_restore")
+        .unwrap()
+        .file_name
+        .clone();
+    call(&s, Request::RestoreBackup { file_name: pre });
+    assert_eq!(policy_version(&s), v1 + 1, "restore undone");
+}
+
+#[test]
+fn restore_rejects_missing_files_and_non_backup_names() {
+    let dir = TempDir::new("restore-bad");
+    let s = file_service(&dir, Arc::new(ManualClock::new(1_793_836_800_000)));
+    let missing = s
+        .handle(
+            &Request::RestoreBackup {
+                file_name: "rustward-backup-42.db".into(),
+            },
+            &admin(),
+        )
+        .unwrap_err();
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    std::fs::create_dir_all(dir.0.join("backups")).unwrap();
+    std::fs::write(
+        dir.0.join("backups").join("rustward-backup-7.db"),
+        b"not sqlite",
+    )
+    .unwrap();
+    let v = policy_version(&s);
+    assert!(
+        s.handle(
+            &Request::RestoreBackup {
+                file_name: "rustward-backup-7.db".into(),
+            },
+            &admin(),
+        )
+        .is_err()
+    );
+    assert_eq!(policy_version(&s), v, "a failed restore changes nothing");
+    // Unrelated files in the directory are not listed.
+    std::fs::write(dir.0.join("backups").join("notes.txt"), b"x").unwrap();
+    let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
+        panic!()
+    };
+    assert!(list.iter().all(|b| b.file_name.starts_with("rustward-")));
+}
+
+#[test]
+fn backups_are_unavailable_without_a_backup_directory() {
+    let s = mem_service();
+    for r in [Request::ListBackups, Request::CreateBackup] {
+        assert_eq!(
+            s.handle(&r, &admin()).unwrap_err().code,
+            ErrorCode::NotSupported
+        );
+    }
+}
+
+#[test]
+fn backup_creation_is_audited() {
+    let dir = TempDir::new("backup-audit");
+    let s = file_service(&dir, Arc::new(ManualClock::new(1_793_836_800_000)));
+    call(&s, Request::CreateBackup);
+    assert_eq!(event_kinds(&s)[0], "backup_created");
+}
+
+#[test]
+fn refused_privileged_requests_are_audited_and_rate_limited() {
+    use rustward_ipc::rpc::process;
+    use rustward_ipc::{PROTOCOL_VERSION, RequestEnvelope};
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = service_with(
+        Store::open_in_memory(clock.clone()).unwrap(),
+        clock.clone(),
+        Box::new(EmptyInventory),
+        true,
+        None,
+    );
+    let user = ClientIdentity {
+        account: "PC-01\\operator".into(),
+        sid: None,
+        is_administrator: false,
+        elevated: false,
+        source: IdentitySource::Test,
+        channel_max_access: AccessLevel::Administrator,
+    };
+    let env = RequestEnvelope {
+        version: PROTOCOL_VERSION,
+        request_id: 1,
+        request: Request::RemoveManufacturer {
+            id: "sandisk".into(),
+            expected_policy_version: 1,
+        },
+    };
+    for _ in 0..(rustward_app::AUTH_AUDIT_LIMIT + 15) {
+        assert!(process(&env, &user, &s).result.is_err());
+    }
+    let count = |s: &AppService| {
+        event_kinds(s)
+            .iter()
+            .filter(|k| *k == "authorization_failed")
+            .count()
+    };
+    assert_eq!(
+        count(&s),
+        rustward_app::AUTH_AUDIT_LIMIT as usize,
+        "flood is capped"
+    );
+    clock.advance(rustward_app::AUTH_AUDIT_WINDOW_MS);
+    let _ = process(&env, &user, &s);
+    let ResponseBody::Events(ev) = call(
+        &s,
+        Request::ListEvents {
+            query: EventQuery {
+                kind: Some("authorization_failed".into()),
+                ..EventQuery::default()
+            },
+        },
+    ) else {
+        panic!()
+    };
+    assert!(
+        ev[0].message.contains("15 earlier attempts"),
+        "{}",
+        ev[0].message
+    );
+    assert!(ev[0].message.contains("PC-01\\operator"));
+    // The refused request had no effect.
+    assert!(policy_version(&s) >= 1);
+    let ResponseBody::Manufacturers(m) = call(&s, Request::ListManufacturers) else {
+        panic!()
+    };
+    assert!(m.manufacturers.iter().any(|b| b.id == "sandisk"));
+}
+
+#[test]
+fn event_observer_mirrors_events_and_is_reported_in_diagnostics() {
+    use rustward_storage::{EventObserver, SecurityEvent};
+    #[derive(Default)]
+    struct Sink(std::sync::Mutex<Vec<String>>);
+    impl EventObserver for Sink {
+        fn on_event(&self, e: &SecurityEvent) -> Result<(), String> {
+            self.0.lock().unwrap().push(e.kind.clone());
+            Ok(())
+        }
+    }
+    let s = mem_service();
+    let sink = Arc::new(Sink::default());
+    s.set_event_observer(sink.clone()).unwrap();
+    call(&s, Request::LoadSyntheticInventory);
+    let mirrored = sink.0.lock().unwrap().clone();
+    assert!(mirrored.contains(&"decision_simulated".to_owned()));
+    let ResponseBody::Diagnostics(d) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    assert!(d.event_log.attached);
+    assert_eq!(d.event_log.delivered as usize, mirrored.len());
+    assert_eq!(d.event_log.failures, 0);
+}

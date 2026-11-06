@@ -3,6 +3,7 @@
 // bundled into the application and never shown as real data.
 import type { Backend } from "../api/client";
 import type {
+  BackupView,
   DashboardView,
   DeviceView,
   DiagnosticsView,
@@ -85,9 +86,11 @@ export interface FakeState {
   settings: SettingsView;
   events: EventView[];
   devices: DeviceView[];
+  workstationId: string;
+  backups: BackupView[];
   calls: Request[];
-  /** Force the next call to fail with this IPC error. */
-  failNext: { code: string; message: string } | null;
+  /** Force the next call (optionally only of type `only`) to fail with this IPC error. */
+  failNext: { code: string; message: string; only?: Request["type"] } | null;
 }
 
 export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; state: FakeState } {
@@ -97,6 +100,8 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     settings: { theme: "dark", language: "tr", notifications_enabled: true, audit_retention_days: 365, inventory_refresh_seconds: 30 },
     events: [event()],
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
+    workstationId: "PC-TEST",
+    backups: [{ file_name: "rustward-backup-1700000000000.db", bytes: 40960, created_ms: 1_700_000_000_000, kind: "manual" }],
     calls: [],
     failNext: null,
     ...init,
@@ -122,7 +127,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     protection_verified: false,
     not_validated_banner: BANNER_TR,
     service: { backend: "dev_backend", state: "running", healthy: true, started_ms: 1, last_refresh_ms: 2, message: "ok" },
-    workstation_id: "PC-TEST",
+    workstation_id: state.workstationId,
     policy_version: state.version,
     catalog_version: "test",
     last_policy_update_ms: 1_700_000_000_000,
@@ -190,7 +195,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
         return {
           type: "manufacturers",
           data: {
-            workstation_id: "PC-TEST",
+            workstation_id: state.workstationId,
             policy_version: state.version,
             catalog_version: "test",
             mode: "dry_run",
@@ -254,6 +259,18 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
           type: "export",
           data: { file_name: `events.${r.format}`, mime: r.format === "csv" ? "text/csv" : "application/json", content: "x", count: state.events.length },
         };
+      case "set_workstation_id":
+        checkVersion(r.expected_policy_version);
+        state.workstationId = r.workstation_id;
+        return mutation(`workstation ${r.workstation_id}`);
+      case "list_backups":
+        return { type: "backups", data: state.backups };
+      case "restore_backup": {
+        if (!state.backups.some((b) => b.file_name === r.file_name)) throw { code: "not_found", message: "backup not found" };
+        const pre = `rustward-pre-restore-${1_700_000_000_000 + state.backups.length}.db`;
+        state.backups = [{ file_name: pre, bytes: 40960, created_ms: 1_700_000_000_000 + state.backups.length, kind: "pre_restore" }, ...state.backups];
+        return { type: "done", data: { message: `restored ${r.file_name}; previous state saved as ${pre}` } };
+      }
       case "apply_retention":
       case "create_backup":
       case "refresh_inventory":
@@ -265,10 +282,10 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
   const backend: Backend = {
     call(request) {
       state.calls.push(request);
-      if (state.failNext) {
-        const f = state.failNext;
+      if (state.failNext && (state.failNext.only === undefined || state.failNext.only === request.type)) {
+        const { code, message } = state.failNext;
         state.failNext = null;
-        return Promise.reject(f);
+        return Promise.reject({ code, message });
       }
       try {
         return Promise.resolve(handle(request));

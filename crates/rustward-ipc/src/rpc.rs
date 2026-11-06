@@ -23,6 +23,16 @@ pub trait Handler {
         request: &Request,
         identity: &ClientIdentity,
     ) -> Result<ResponseBody, IpcError>;
+
+    /// Called when a request is refused by authorization (before `handle`),
+    /// so the server can audit the attempt. Must not fail or block for long.
+    fn authorization_failed(
+        &self,
+        _request: &Request,
+        _identity: &ClientIdentity,
+        _error: &IpcError,
+    ) {
+    }
 }
 
 /// Client-side errors.
@@ -119,7 +129,11 @@ pub fn process(
 ) -> ResponseEnvelope {
     let result = if env.version == PROTOCOL_VERSION {
         validate_request(&env.request)
-            .and_then(|()| authorize(&env.request, identity))
+            .and_then(|()| {
+                authorize(&env.request, identity).inspect_err(|e| {
+                    handler.authorization_failed(&env.request, identity, e);
+                })
+            })
             .and_then(|()| handler.handle(&env.request, identity))
     } else {
         Err(IpcError::new(

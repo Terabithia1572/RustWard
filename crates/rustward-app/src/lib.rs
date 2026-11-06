@@ -34,16 +34,17 @@ use rustward_enforcement::{
     NOT_VALIDATED_BANNER_TR, PlanInputs,
 };
 use rustward_ipc::messages::{
-    AdapterView, DashboardView, DatabaseHealthView, DeviceView, DiagnosticsView, EnforcementView,
-    EventQuery, EventView, ExplanationView, ExportFormat, ExportView, IdentifierView,
-    ManufacturerView, ManufacturersView, MutationView, PolicyChangeView, PolicyHealthView,
-    ServiceStatusView, SettingsView, SimulationView,
+    AdapterView, BackupView, DashboardView, DatabaseHealthView, DeviceView, DiagnosticsView,
+    EnforcementView, EventLogView, EventQuery, EventView, ExplanationView, ExportFormat,
+    ExportView, IdentifierView, ManufacturerView, ManufacturersView, MutationView,
+    PolicyChangeView, PolicyHealthView, ServiceStatusView, SettingsView, SimulationView,
 };
 use rustward_ipc::rpc::Handler;
+use rustward_ipc::validate::parse_backup_file_name;
 use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, Request, ResponseBody};
 use rustward_storage::{
-    AppSettings, ChainStatus, Clock, DeviceRow, EventFilter, Language, NewEvent, SecurityEvent,
-    Severity, StorageError, Store, Theme, device_key, mask_instance_id,
+    AppSettings, ChainStatus, Clock, DeviceRow, EventFilter, EventObserver, Language, NewEvent,
+    SecurityEvent, Severity, StorageError, Store, Theme, device_key, mask_instance_id,
 };
 
 pub use inventory::{EmptyInventory, FixtureInventory, InventorySource, LiveInventory};
@@ -103,7 +104,17 @@ struct Inner {
     last_refresh_ms: Option<i64>,
     last_inventory_error: Option<String>,
     consecutive_failures: u32,
+    auth_window_start_ms: i64,
+    auth_recorded_in_window: u32,
+    auth_suppressed: u64,
 }
+
+/// At most this many authorization failures are written to the audit log
+/// per [`AUTH_AUDIT_WINDOW_MS`]; further attempts are counted and reported
+/// with the next recorded one (protects the log against request floods).
+pub const AUTH_AUDIT_LIMIT: u32 = 20;
+/// Authorization audit rate-limit window.
+pub const AUTH_AUDIT_WINDOW_MS: i64 = 60_000;
 
 /// The application service.
 pub struct AppService {
@@ -441,6 +452,9 @@ impl AppService {
                 last_refresh_ms: None,
                 last_inventory_error: None,
                 consecutive_failures: 0,
+                auth_window_start_ms: started_ms,
+                auth_recorded_in_window: 0,
+                auth_suppressed: 0,
             }),
             clock,
             config,
@@ -502,6 +516,197 @@ impl AppService {
             })
             .map_err(storage_err)?;
         Ok(())
+    }
+
+    /// Mirror every committed audit event to `observer` (the Windows
+    /// service attaches the Event Log writer here).
+    pub fn set_event_observer(&self, observer: Arc<dyn EventObserver>) -> Result<(), IpcError> {
+        let mut g = self.lock()?;
+        g.store.set_event_observer(observer).map_err(storage_err)
+    }
+
+    fn record_authorization_failure(
+        &self,
+        request: &Request,
+        identity: &ClientIdentity,
+        error: &IpcError,
+    ) {
+        let Ok(mut g) = self.lock() else {
+            return;
+        };
+        let now = self.clock.now_ms();
+        if now.saturating_sub(g.auth_window_start_ms) >= AUTH_AUDIT_WINDOW_MS {
+            g.auth_window_start_ms = now;
+            g.auth_recorded_in_window = 0;
+        }
+        if g.auth_recorded_in_window >= AUTH_AUDIT_LIMIT {
+            g.auth_suppressed = g.auth_suppressed.saturating_add(1);
+            return;
+        }
+        g.auth_recorded_in_window += 1;
+        let suppressed = std::mem::take(&mut g.auth_suppressed);
+        let mut message = format!(
+            "{} refused for {}: {}",
+            request.name(),
+            identity.actor(),
+            error.message
+        );
+        if suppressed > 0 {
+            message.push_str(&format!(
+                " ({suppressed} earlier attempts not recorded individually)"
+            ));
+        }
+        let _ = g.store.append_event(&NewEvent {
+            severity: Severity::Warning,
+            kind: "authorization_failed".into(),
+            device_key: None,
+            message,
+            simulated: false,
+            enforcement_state: self.enforcement_state_code().into(),
+            policy_version: None,
+            details: serde_json::json!({
+                "request": request.name(),
+                "account": identity.account,
+                "is_administrator": identity.is_administrator,
+                "elevated": identity.elevated,
+                "channel": identity.channel_max_access,
+                "suppressed_before": suppressed,
+            }),
+        });
+    }
+
+    fn backup_dir(&self) -> Result<PathBuf, IpcError> {
+        self.config.backup_dir.clone().ok_or_else(|| {
+            IpcError::new(
+                ErrorCode::NotSupported,
+                "backups are not configured on this backend",
+            )
+        })
+    }
+
+    fn list_backups(&self) -> Result<Vec<BackupView>, IpcError> {
+        let dir = self.backup_dir()?;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Ok(Vec::new());
+        };
+        let mut out: Vec<BackupView> = entries
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let (kind, created_ms) = parse_backup_file_name(&name)?;
+                let meta = e.metadata().ok().filter(std::fs::Metadata::is_file)?;
+                Some(BackupView {
+                    file_name: name,
+                    bytes: meta.len(),
+                    created_ms,
+                    kind: kind.into(),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.created_ms
+                .cmp(&a.created_ms)
+                .then(b.file_name.cmp(&a.file_name))
+        });
+        Ok(out)
+    }
+
+    /// `<prefix><ms>.db` that does not exist yet (the timestamp is bumped
+    /// on collision; backups are never overwritten).
+    fn unique_backup_name(&self, dir: &std::path::Path, prefix: &str) -> Result<String, IpcError> {
+        let now = self.clock.now_ms();
+        (0..1000)
+            .map(|i| format!("{prefix}{}.db", now.saturating_add(i)))
+            .find(|n| !dir.join(n).exists())
+            .ok_or_else(|| {
+                IpcError::new(
+                    ErrorCode::Conflict,
+                    "could not choose a free backup file name",
+                )
+            })
+    }
+
+    fn backup_event(g: &mut Inner, name: &str, kind: &str, actor: &str) -> Result<(), IpcError> {
+        g.store
+            .append_event(&NewEvent {
+                severity: Severity::Info,
+                kind: "backup_created".into(),
+                device_key: None,
+                message: format!("database backup {name} created by {actor}"),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({ "file_name": name, "kind": kind }),
+            })
+            .map(|_| ())
+            .map_err(storage_err)
+    }
+
+    fn restore_backup(
+        &self,
+        file_name: &str,
+        identity: &ClientIdentity,
+    ) -> Result<ResponseBody, IpcError> {
+        if parse_backup_file_name(file_name).is_none() {
+            return Err(IpcError::new(
+                ErrorCode::InvalidRequest,
+                "not a RustWard backup file name",
+            ));
+        }
+        let dir = self.backup_dir()?;
+        let source = dir.join(file_name);
+        if !source.is_file() {
+            return Err(IpcError::new(
+                ErrorCode::NotFound,
+                format!("backup {file_name} not found"),
+            ));
+        }
+        let actor = identity.actor();
+        let mut g = self.lock()?;
+        // Keep the current state so the restore itself can be undone.
+        let safety = self.unique_backup_name(&dir, "rustward-pre-restore-")?;
+        g.store.backup_to(&dir.join(&safety)).map_err(storage_err)?;
+        Self::backup_event(&mut g, &safety, "pre_restore", &actor)?;
+        // Restoring replaces the audit table too. Record which history was
+        // replaced and where it is kept, so the restore cannot silently
+        // erase audit records.
+        let head = g
+            .store
+            .list_events(&EventFilter {
+                limit: Some(1),
+                ..EventFilter::default()
+            })
+            .map_err(storage_err)?
+            .into_iter()
+            .next();
+        g.store.restore_from(&source, &actor).map_err(storage_err)?;
+        g.store
+            .append_event(&NewEvent {
+                severity: Severity::Warning,
+                kind: "audit_history_replaced".into(),
+                device_key: None,
+                message: format!(
+                    "restore of {file_name} by {actor} replaced the audit history; the previous history (up to event {}) is preserved in {safety}",
+                    head.as_ref().map_or(0, |e| e.id)
+                ),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "restored_from": file_name,
+                    "previous_history_file": safety,
+                    "previous_last_event_id": head.as_ref().map(|e| e.id),
+                    "previous_chain_head": head.as_ref().map(|e| e.hash.clone()),
+                }),
+            })
+            .map_err(storage_err)?;
+        // The restored policy may differ: re-evaluate the inventory against it.
+        self.reevaluate_locked(&mut g)?;
+        Ok(ResponseBody::Done {
+            message: format!(
+                "database restored from {file_name}; previous state saved as {safety}"
+            ),
+        })
     }
 
     /// Apply audit retention (scheduled by the service).
@@ -1049,19 +1254,29 @@ impl AppService {
             },
             policy,
             enforcement,
+            event_log: {
+                let m = g.store.mirror_status();
+                EventLogView {
+                    attached: m.attached,
+                    delivered: m.delivered,
+                    failures: m.failures,
+                }
+            },
             unsupported_features: vec![
                 "OS-level USB blocking: activation disabled (dry-run only)".into(),
                 "Verified enforcement: no runtime evidence exists".into(),
-                "Real-time PnP notifications (CM_Register_Notification): periodic refresh is used"
-                    .into(),
+                "PnP change notifications (CM_Register_Notification): implemented as telemetry in the Windows service, not verified on Windows".into(),
+                "Windows Event Log mirroring: implemented in the Windows service, not verified on Windows; the event source is registered by the installer".into(),
                 "Windows named-pipe IPC: implemented, not verified on Windows".into(),
+                "Desktop toast notifications outside the app window: not implemented (in-app notices only)".into(),
                 "MTP/PTP and optical drives: scope decision pending".into(),
             ],
             pending_native_tests: vec![
                 "W-01..W-05: native build, tests and live SetupAPI inventory".into(),
                 "T-01..T-30: physical USB hardware acceptance".into(),
                 "Named-pipe DACL, token identity and session-0 check".into(),
-                "Windows service start/stop/recovery under the SCM".into(),
+                "Windows service start/stop/recovery under the SCM (windows-sys host)".into(),
+                "CM_Register_Notification wake-up and Event Log entries".into(),
                 "Offline MSI installation with the WebView2 offline runtime".into(),
             ],
             app_version: self.config.app_version.clone(),
@@ -1171,6 +1386,10 @@ impl AppService {
 }
 
 impl Handler for AppService {
+    fn authorization_failed(&self, request: &Request, identity: &ClientIdentity, error: &IpcError) {
+        self.record_authorization_failure(request, identity, error);
+    }
+
     fn handle(
         &self,
         request: &Request,
@@ -1358,20 +1577,28 @@ impl Handler for AppService {
                 })
             }
             Request::CreateBackup => {
-                let dir = self.config.backup_dir.clone().ok_or_else(|| {
-                    IpcError::new(
-                        ErrorCode::NotSupported,
-                        "backups are not configured on this backend",
-                    )
-                })?;
+                let dir = self.backup_dir()?;
                 std::fs::create_dir_all(&dir).map_err(internal)?;
-                let name = format!("rustward-backup-{}.db", self.clock.now_ms());
-                let g = self.lock()?;
+                let name = self.unique_backup_name(&dir, "rustward-backup-")?;
+                let mut g = self.lock()?;
                 g.store.backup_to(&dir.join(&name)).map_err(storage_err)?;
+                Self::backup_event(&mut g, &name, "manual", &identity.actor())?;
                 Ok(ResponseBody::Done {
                     message: format!("backup created: {name}"),
                 })
             }
+            Request::ListBackups => Ok(ResponseBody::Backups(self.list_backups()?)),
+            Request::RestoreBackup { file_name } => self.restore_backup(file_name, identity),
+            Request::SetWorkstationId {
+                workstation_id,
+                expected_policy_version,
+            } => self.mutate(
+                &PolicyEdit::SetWorkstationId {
+                    workstation_id: workstation_id.clone(),
+                },
+                *expected_policy_version,
+                identity,
+            ),
             Request::RefreshInventory => {
                 let s = self.refresh_inventory()?;
                 Ok(ResponseBody::Done {

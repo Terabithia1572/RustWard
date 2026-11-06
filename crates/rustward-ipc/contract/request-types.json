@@ -84,6 +84,18 @@
     {
       "access": "administrator",
       "type": "load_synthetic_inventory"
+    },
+    {
+      "access": "administrator",
+      "type": "set_workstation_id"
+    },
+    {
+      "access": "administrator",
+      "type": "list_backups"
+    },
+    {
+      "access": "administrator",
+      "type": "restore_backup"
     }
   ]
 }

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use rusqlite::params;
 use rustward_core::policy_edit::{PolicyEdit, PolicyState, apply_edit};
 use rustward_storage::{
-    AppSettings, ChainStatus, DeviceRow, EventFilter, ManualClock, NewEvent, Severity,
-    StorageError, Store,
+    AppSettings, ChainStatus, DeviceRow, EventFilter, EventObserver, ManualClock, NewEvent,
+    SecurityEvent, Severity, StorageError, Store,
 };
 
 const CATALOG: &str = include_str!("../../../config/manufacturer-catalog.json");
@@ -454,4 +454,122 @@ fn newer_schema_is_refused() {
         Store::open(&path, clock()),
         Err(StorageError::SchemaTooNew { found: 999, .. })
     ));
+}
+
+#[derive(Default)]
+struct Recorder {
+    seen: std::sync::Mutex<Vec<(i64, String)>>,
+    fail_kind: Option<&'static str>,
+}
+
+impl EventObserver for Recorder {
+    fn on_event(&self, event: &SecurityEvent) -> Result<(), String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((event.id, event.kind.clone()));
+        if self.fail_kind == Some(event.kind.as_str()) {
+            Err("sink unavailable".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn observer_receives_every_committed_event_once_in_order() {
+    let c = clock();
+    let mut s = Store::open_in_memory(c.clone()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    // History before attaching is not replayed.
+    let rec = Arc::new(Recorder::default());
+    s.set_event_observer(rec.clone()).unwrap();
+    assert!(s.mirror_status().attached);
+
+    s.append_event(&event("device_arrived", Severity::Info, true))
+        .unwrap();
+    let base = s.active_policy().unwrap().unwrap().state;
+    let out = apply_edit(
+        &base,
+        &PolicyEdit::SetAllowed {
+            id: "kingston".into(),
+            allowed: true,
+        },
+    )
+    .unwrap();
+    s.commit_policy_edit(&out, "t").unwrap();
+    let mut settings = s.settings().unwrap();
+    settings.audit_retention_days = 30;
+    s.save_settings(&settings, "t").unwrap();
+    c.advance(40 * DAY);
+    s.apply_retention().unwrap();
+
+    let seen = rec.seen.lock().unwrap().clone();
+    let kinds: Vec<_> = seen.iter().map(|(_, k)| k.as_str()).collect();
+    assert_eq!(kinds[0], "device_arrived");
+    assert!(kinds.contains(&"settings_changed"));
+    assert_eq!(kinds.last(), Some(&"retention_applied"));
+    assert!(
+        kinds.len() >= 4,
+        "policy edit event mirrored too: {kinds:?}"
+    );
+    let ids: Vec<_> = seen.iter().map(|(i, _)| *i).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(ids, sorted, "each event once, ascending");
+    assert_eq!(s.mirror_status().delivered as usize, seen.len());
+    assert_eq!(s.mirror_status().failures, 0);
+}
+
+#[test]
+fn observer_failures_never_block_or_roll_back_writes() {
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    let rec = Arc::new(Recorder {
+        fail_kind: Some("device_arrived"),
+        ..Recorder::default()
+    });
+    s.set_event_observer(rec.clone()).unwrap();
+    s.append_event(&event("device_arrived", Severity::Warning, true))
+        .unwrap();
+    s.append_event(&event("device_removed", Severity::Info, true))
+        .unwrap();
+    let stored = s
+        .list_events(&EventFilter {
+            kind: Some("device_arrived".into()),
+            ..EventFilter::default()
+        })
+        .unwrap();
+    assert_eq!(stored.len(), 1, "event is stored despite the sink failure");
+    let st = s.mirror_status();
+    assert_eq!((st.delivered, st.failures), (1, 1));
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { .. }
+    ));
+}
+
+#[test]
+fn restore_does_not_replay_restored_history_into_the_observer() {
+    let dir = TempDir::new("mirror-restore");
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    s.initialize_policy(&state(), "t").unwrap();
+    for _ in 0..5 {
+        s.append_event(&event("device_arrived", Severity::Info, true))
+            .unwrap();
+    }
+    let backup = dir.0.join("b.db");
+    s.backup_to(&backup).unwrap();
+    let rec = Arc::new(Recorder::default());
+    s.set_event_observer(rec.clone()).unwrap();
+    s.restore_from(&backup, "t").unwrap();
+    let kinds: Vec<_> = rec
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, k)| k.clone())
+        .collect();
+    assert_eq!(kinds, ["database_restored"]);
 }

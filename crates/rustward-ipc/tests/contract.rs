@@ -85,6 +85,14 @@ fn all_requests() -> Vec<Request> {
         Request::CreateBackup,
         Request::RefreshInventory,
         Request::LoadSyntheticInventory,
+        Request::SetWorkstationId {
+            workstation_id: "PC-02".into(),
+            expected_policy_version: 1,
+        },
+        Request::ListBackups,
+        Request::RestoreBackup {
+            file_name: "rustward-backup-1.db".into(),
+        },
     ];
     for r in &all {
         // Exhaustiveness guard.
@@ -109,7 +117,10 @@ fn all_requests() -> Vec<Request> {
             | Request::ApplyRetention
             | Request::CreateBackup
             | Request::RefreshInventory
-            | Request::LoadSyntheticInventory => {}
+            | Request::LoadSyntheticInventory
+            | Request::SetWorkstationId { .. }
+            | Request::ListBackups
+            | Request::RestoreBackup { .. } => {}
         }
     }
     all

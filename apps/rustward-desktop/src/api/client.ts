@@ -1,4 +1,5 @@
 import type {
+  BackupView,
   DashboardView,
   DeviceView,
   DiagnosticsView,
@@ -144,6 +145,18 @@ export class Api {
   }
   async exportEvents(query: EventQuery, format: ExportFormat): Promise<ExportView> {
     return expect(await this.call({ type: "export_events", query, format }), "export");
+  }
+  async setWorkstationId(workstationId: string, version: number): Promise<MutationView> {
+    return expect(
+      await this.call({ type: "set_workstation_id", workstation_id: workstationId, expected_policy_version: version }),
+      "mutation",
+    );
+  }
+  async backups(): Promise<BackupView[]> {
+    return expect(await this.call({ type: "list_backups" }), "backups");
+  }
+  async restoreBackup(fileName: string): Promise<string> {
+    return expect(await this.call({ type: "restore_backup", file_name: fileName }), "done").message;
   }
   async action(type: "apply_retention" | "create_backup" | "refresh_inventory" | "load_synthetic_inventory"): Promise<string> {
     return expect(await this.call({ type }), "done").message;

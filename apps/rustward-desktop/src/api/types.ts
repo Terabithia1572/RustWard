@@ -62,7 +62,10 @@ export type Request =
   | { type: "apply_retention" }
   | { type: "create_backup" }
   | { type: "refresh_inventory" }
-  | { type: "load_synthetic_inventory" };
+  | { type: "load_synthetic_inventory" }
+  | { type: "set_workstation_id"; workstation_id: string; expected_policy_version: number }
+  | { type: "list_backups" }
+  | { type: "restore_backup"; file_name: string };
 
 export type RequestType = Request["type"];
 
@@ -89,6 +92,9 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "create_backup",
   "refresh_inventory",
   "load_synthetic_inventory",
+  "set_workstation_id",
+  "list_backups",
+  "restore_backup",
 ];
 
 /** Requests that require an elevated administrator (server-enforced). */
@@ -104,6 +110,9 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "create_backup",
   "refresh_inventory",
   "load_synthetic_inventory",
+  "set_workstation_id",
+  "list_backups",
+  "restore_backup",
 ]);
 
 export interface ServiceStatusView {
@@ -264,9 +273,18 @@ export interface DiagnosticsView {
     risks: string[];
     enforcement_gaps: string[];
   };
+  /** Windows Event Log mirroring (absent from older services). */
+  event_log?: { attached: boolean; delivered: number; failures: number };
   unsupported_features: string[];
   pending_native_tests: string[];
   app_version: string;
+}
+
+export interface BackupView {
+  file_name: string;
+  bytes: number;
+  created_ms: number;
+  kind: "manual" | "pre_restore" | string;
 }
 
 export interface MutationView {
@@ -304,7 +322,8 @@ export type ResponseBody =
   | { type: "simulation"; data: SimulationView }
   | { type: "mutation"; data: MutationView }
   | { type: "export"; data: ExportView }
-  | { type: "done"; data: { message: string } };
+  | { type: "done"; data: { message: string } }
+  | { type: "backups"; data: BackupView[] };
 
 export type ErrorCode =
   | "invalid_request"

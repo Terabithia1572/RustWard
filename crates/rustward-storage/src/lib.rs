@@ -211,10 +211,32 @@ pub struct StoredPolicy {
     pub created_ms: i64,
 }
 
+/// Receives every security event after it has been committed to the
+/// database (e.g. to mirror it into the Windows Event Log). Failures never
+/// roll back or block the database write; they are counted.
+pub trait EventObserver: Send + Sync {
+    /// Called once per committed event, in id order.
+    fn on_event(&self, event: &SecurityEvent) -> Result<(), String>;
+}
+
+/// Mirror status for diagnostics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MirrorStatus {
+    /// An observer is attached.
+    pub attached: bool,
+    /// Events delivered successfully.
+    pub delivered: u64,
+    /// Events the observer rejected.
+    pub failures: u64,
+}
+
 /// The RustWard database.
 pub struct Store {
     conn: Connection,
     clock: Arc<dyn Clock>,
+    observer: Option<Arc<dyn EventObserver>>,
+    last_mirrored_id: i64,
+    mirror: MirrorStatus,
 }
 
 impl std::fmt::Debug for Store {
@@ -243,7 +265,70 @@ impl Store {
             conn.pragma_update(None, "journal_mode", "WAL")?;
         }
         migrations::migrate(&mut conn, clock.now_ms())?;
-        Ok(Self { conn, clock })
+        let mut store = Self {
+            conn,
+            clock,
+            observer: None,
+            last_mirrored_id: 0,
+            mirror: MirrorStatus::default(),
+        };
+        store.last_mirrored_id = store.max_event_id()?;
+        Ok(store)
+    }
+
+    fn max_event_id(&self) -> Result<i64, StorageError> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM security_events",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Attach an observer. Only events committed after this call are
+    /// delivered (history is not replayed).
+    pub fn set_event_observer(
+        &mut self,
+        observer: Arc<dyn EventObserver>,
+    ) -> Result<(), StorageError> {
+        self.last_mirrored_id = self.max_event_id()?;
+        self.observer = Some(observer);
+        self.mirror.attached = true;
+        Ok(())
+    }
+
+    /// Mirror counters.
+    #[must_use]
+    pub fn mirror_status(&self) -> MirrorStatus {
+        self.mirror
+    }
+
+    /// Deliver events committed since the last delivery. Called after every
+    /// committing write; never fails the write.
+    fn mirror_new_events(&mut self) {
+        let Some(observer) = self.observer.clone() else {
+            return;
+        };
+        let Ok(events) = self.events_after(self.last_mirrored_id) else {
+            self.mirror.failures = self.mirror.failures.saturating_add(1);
+            return;
+        };
+        for e in events {
+            self.last_mirrored_id = self.last_mirrored_id.max(e.id);
+            match observer.on_event(&e) {
+                Ok(()) => self.mirror.delivered = self.mirror.delivered.saturating_add(1),
+                Err(_) => self.mirror.failures = self.mirror.failures.saturating_add(1),
+            }
+        }
+    }
+
+    fn events_after(&self, id: i64) -> Result<Vec<SecurityEvent>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, utc_ms, severity, kind, device_key, message, simulated, enforcement_state,
+                    policy_version, details_json, prev_hash, hash FROM security_events
+             WHERE id > ?1 ORDER BY id ASC LIMIT 10000",
+        )?;
+        let rows = stmt.query_map(params![id], event_from_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Current schema version.
@@ -316,6 +401,7 @@ impl Store {
             },
         )?;
         tx.commit()?;
+        self.mirror_new_events();
         Ok(())
     }
 
@@ -418,6 +504,7 @@ impl Store {
             },
         )?;
         tx.commit()?;
+        self.mirror_new_events();
         Ok(true)
     }
 
@@ -476,6 +563,7 @@ impl Store {
             },
         )?;
         tx.commit()?;
+        self.mirror_new_events();
         Ok(())
     }
 
@@ -669,6 +757,7 @@ impl Store {
         let tx = self.conn.transaction()?;
         let id = Self::append_event_tx(&tx, now, e)?;
         tx.commit()?;
+        self.mirror_new_events();
         Ok(id)
     }
 
@@ -723,26 +812,7 @@ impl Store {
         args.push(i64::from(f.offset.unwrap_or(0)).into());
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
-            let sev: String = r.get(2)?;
-            let details: String = r.get(9)?;
-            Ok(SecurityEvent {
-                id: r.get(0)?,
-                utc_ms: r.get(1)?,
-                severity: Severity::parse(&sev).unwrap_or(Severity::Critical),
-                kind: r.get(3)?,
-                device_key: r.get(4)?,
-                message: r.get(5)?,
-                simulated: r.get(6)?,
-                enforcement_state: r.get(7)?,
-                policy_version: r
-                    .get::<_, Option<i64>>(8)?
-                    .and_then(|v| u64::try_from(v).ok()),
-                details: serde_json::from_str(&details).unwrap_or(serde_json::Value::Null),
-                prev_hash: r.get(10)?,
-                hash: r.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map(params_from_iter(args.iter()), event_from_row)?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -839,6 +909,7 @@ impl Store {
             },
         )?;
         tx.commit()?;
+        self.mirror_new_events();
         Ok(n)
     }
 
@@ -887,6 +958,9 @@ impl Store {
             let tmp = Self {
                 conn: candidate,
                 clock: Arc::clone(&self.clock),
+                observer: None,
+                last_mirrored_id: 0,
+                mirror: MirrorStatus::default(),
             };
             tmp.active_policy()?
                 .ok_or_else(|| StorageError::Invalid("backup has no active policy".into()))?;
@@ -897,6 +971,8 @@ impl Store {
             None::<fn(rusqlite::backup::Progress)>,
         )?;
         migrations::migrate(&mut self.conn, self.clock.now_ms())?;
+        // The restored history was mirrored when it was first written.
+        self.last_mirrored_id = self.max_event_id()?;
         self.append_event(&NewEvent {
             severity: Severity::Warning,
             kind: "database_restored".into(),
@@ -915,6 +991,27 @@ impl Store {
     pub fn connection_for_tests(&self) -> &Connection {
         &self.conn
     }
+}
+
+fn event_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SecurityEvent> {
+    let sev: String = r.get(2)?;
+    let details: String = r.get(9)?;
+    Ok(SecurityEvent {
+        id: r.get(0)?,
+        utc_ms: r.get(1)?,
+        severity: Severity::parse(&sev).unwrap_or(Severity::Critical),
+        kind: r.get(3)?,
+        device_key: r.get(4)?,
+        message: r.get(5)?,
+        simulated: r.get(6)?,
+        enforcement_state: r.get(7)?,
+        policy_version: r
+            .get::<_, Option<i64>>(8)?
+            .and_then(|v| u64::try_from(v).ok()),
+        details: serde_json::from_str(&details).unwrap_or(serde_json::Value::Null),
+        prev_hash: r.get(10)?,
+        hash: r.get(11)?,
+    })
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ use rustward_ipc::{
 #[derive(Default)]
 struct CountingHandler {
     calls: AtomicUsize,
+    rejected: std::sync::Mutex<Vec<String>>,
 }
 
 impl Handler for CountingHandler {
@@ -34,6 +35,14 @@ impl Handler for CountingHandler {
                 message: format!("{} by {}", request.name(), identity.actor()),
             }),
         }
+    }
+
+    fn authorization_failed(&self, request: &Request, identity: &ClientIdentity, error: &IpcError) {
+        assert_eq!(error.code, ErrorCode::Unauthorized);
+        self.rejected
+            .lock()
+            .unwrap()
+            .push(format!("{} by {}", request.name(), identity.actor()));
     }
 }
 
@@ -99,6 +108,23 @@ fn privileged_requests_are_refused_before_reaching_the_handler() {
         other => panic!("{other:?}"),
     }
     assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *handler.rejected.lock().unwrap(),
+        ["remove_manufacturer by PC-01\\operator"],
+        "the refused attempt is reported for auditing"
+    );
+}
+
+#[test]
+fn invalid_requests_are_not_reported_as_authorization_failures() {
+    let handler = Arc::new(CountingHandler::default());
+    let (end, _server) = spawn_server(identity(false, AccessLevel::ReadOnly), handler.clone());
+    let mut client = Client::new(end, Duration::from_secs(2));
+    let _ = client.call(Request::RestoreBackup {
+        file_name: "..\\..\\evil.db".into(),
+    });
+    let _ = client.call(Request::GetDashboard);
+    assert!(handler.rejected.lock().unwrap().is_empty());
 }
 
 #[test]

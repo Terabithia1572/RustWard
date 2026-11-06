@@ -164,6 +164,21 @@ pub enum Request {
     RefreshInventory,
     /// Load the bundled SYNTHETIC device fixture (development backends only).
     LoadSyntheticInventory,
+    /// Rename this workstation in its policy (versioned, audited).
+    SetWorkstationId {
+        /// New id, `[A-Za-z0-9_-]{1,64}`.
+        workstation_id: String,
+        /// Optimistic concurrency.
+        expected_policy_version: u64,
+    },
+    /// List backups in the service's backup directory.
+    ListBackups,
+    /// Restore a backup by file name (no paths). The current database is
+    /// first saved as a pre-restore backup, so a restore can be undone.
+    RestoreBackup {
+        /// `rustward-backup-<digits>.db` or `rustward-pre-restore-<digits>.db`.
+        file_name: String,
+    },
 }
 
 /// Access level required by a request.
@@ -202,7 +217,10 @@ impl Request {
             | Self::ApplyRetention
             | Self::CreateBackup
             | Self::RefreshInventory
-            | Self::LoadSyntheticInventory => AccessLevel::Administrator,
+            | Self::LoadSyntheticInventory
+            | Self::SetWorkstationId { .. }
+            | Self::ListBackups
+            | Self::RestoreBackup { .. } => AccessLevel::Administrator,
         }
     }
 
@@ -498,6 +516,9 @@ pub struct DiagnosticsView {
     pub policy: PolicyHealthView,
     /// Enforcement.
     pub enforcement: EnforcementView,
+    /// Windows Event Log mirroring.
+    #[serde(default)]
+    pub event_log: EventLogView,
     /// Unsupported / not implemented features.
     pub unsupported_features: Vec<String>,
     /// Native tests pending.
@@ -580,4 +601,30 @@ pub enum ResponseBody {
         /// Message.
         message: String,
     },
+    /// Backups, newest first.
+    Backups(Vec<BackupView>),
+}
+
+/// A database backup file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupView {
+    /// File name inside the backup directory.
+    pub file_name: String,
+    /// Size in bytes.
+    pub bytes: u64,
+    /// Creation time (from the file name), UTC ms.
+    pub created_ms: i64,
+    /// `manual` or `pre_restore`.
+    pub kind: String,
+}
+
+/// Windows Event Log mirroring status.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventLogView {
+    /// A mirror is attached (Windows service only).
+    pub attached: bool,
+    /// Entries written.
+    pub delivered: u64,
+    /// Entries that could not be written.
+    pub failures: u64,
 }

@@ -1,9 +1,162 @@
 import { useEffect, useState } from "react";
-import { Archive, Eraser, ShieldCheck } from "lucide-react";
-import type { SettingsView } from "../api/types";
-import { Button, Card, ErrorNotice, Field, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
+import { Archive, Eraser, History, Monitor, ShieldCheck } from "lucide-react";
+import type { BackupView, SettingsView } from "../api/types";
+import { Badge, Button, Card, Dialog, Empty, ErrorNotice, Field, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
+
+/** Same rule as the service (`[A-Za-z0-9_-]{1,64}`); the service re-validates. */
+export const WORKSTATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function WorkstationCard() {
+  const { t } = useI18n();
+  const api = useApi();
+  const [tick, setTick] = useState(0);
+  const r = useResource((a) => a.manufacturers(), `ws-${tick}`);
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useAction();
+  const [notice, setNotice] = useState<string | null>(null);
+  const current = r.data?.workstation_id ?? "";
+  const value = draft ?? current;
+  const valid = WORKSTATION_ID.test(value);
+  const dirty = value !== current;
+
+  const submit = async () => {
+    if (!r.data || !valid || !dirty) return;
+    const res = await save.run(() => api.setWorkstationId(value, r.data!.policy_version));
+    if (res) {
+      setNotice(t("settings.workstationSaved", { version: res.policy_version }));
+      setDraft(null);
+      setTick((n) => n + 1);
+    }
+  };
+
+  return (
+    <Card title={t("settings.workstation")}>
+      {r.error ? (
+        <ErrorNotice error={r.error} onRetry={r.reload} />
+      ) : !r.data ? (
+        <Loading />
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500 dark:text-slate-400">{t("settings.workstationHint")}</p>
+          <Field label={t("settings.workstation")} error={valid ? null : t("settings.workstationInvalid")}>
+            {(id) => (
+              <input
+                id={id}
+                className={`${inputClass} font-mono`}
+                value={value}
+                maxLength={64}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(e) => setDraft(e.target.value)}
+              />
+            )}
+          </Field>
+          <Button
+            icon={<Monitor className="size-4" aria-hidden />}
+            disabled={!dirty || !valid}
+            busy={save.busy}
+            onClick={() => void submit()}
+          >
+            {t("settings.workstationSave")}
+          </Button>
+          {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
+          {save.error && <ErrorNotice error={save.error} />}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function BackupsCard() {
+  const { t, formatTime } = useI18n();
+  const api = useApi();
+  const [tick, setTick] = useState(0);
+  const list = useResource((a) => a.backups(), `backups-${tick}`);
+  const create = useAction();
+  const restore = useAction();
+  const [confirm, setConfirm] = useState<BackupView | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const doCreate = async () => {
+    const msg = await create.run(() => api.action("create_backup"));
+    if (msg !== undefined) {
+      setNotice(msg);
+      setTick((n) => n + 1);
+    }
+  };
+  const doRestore = async (b: BackupView) => {
+    const msg = await restore.run(() => api.restoreBackup(b.file_name));
+    setConfirm(null);
+    if (msg !== undefined) {
+      setNotice(`${t("settings.restoreDone")} ${msg}`);
+      setTick((n) => n + 1);
+    }
+  };
+
+  return (
+    <Card title={t("settings.database")}>
+      <div className="space-y-3">
+        <Button icon={<Archive className="size-4" aria-hidden />} busy={create.busy} onClick={() => void doCreate()}>
+          {t("settings.backup")}
+        </Button>
+        {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
+        {(create.error ?? restore.error) && <ErrorNotice error={create.error ?? restore.error} />}
+        <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t("settings.backups")}</h3>
+        {list.error ? (
+          <ErrorNotice error={list.error} onRetry={list.reload} />
+        ) : !list.data ? (
+          <Loading />
+        ) : list.data.length === 0 ? (
+          <Empty>{t("settings.backupsEmpty")}</Empty>
+        ) : (
+          <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800" aria-label={t("settings.backups")}>
+            {list.data.map((b) => (
+              <li key={b.file_name} className="flex items-center justify-between gap-2 py-1.5">
+                <div className="min-w-0 flex-1" title={b.file_name}>
+                  <div className="truncate font-mono text-xs">{b.file_name}</div>
+                  <div className="text-xs text-slate-500">
+                    {formatTime(b.created_ms)} · {t("settings.size", { kb: Math.max(1, Math.round(b.bytes / 1024)) })}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge tone={b.kind === "pre_restore" ? "warning" : "neutral"}>
+                    {b.kind === "pre_restore" ? t("settings.backupKind.pre_restore") : t("settings.backupKind.manual")}
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    icon={<History className="size-4" aria-hidden />}
+                    onClick={() => setConfirm(b)}
+                  >
+                    {t("settings.restore")}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {confirm && (
+        <Dialog
+          open
+          title={t("settings.restoreTitle")}
+          onClose={() => setConfirm(null)}
+          footer={
+            <>
+              <Button onClick={() => setConfirm(null)}>{t("common.cancel")}</Button>
+              <Button variant="danger" busy={restore.busy} onClick={() => void doRestore(confirm)}>
+                {t("settings.restore")}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">{t("settings.restoreConfirm", { file: confirm.file_name })}</p>
+        </Dialog>
+      )}
+    </Card>
+  );
+}
 
 export const RETENTION_RANGE = [30, 3650] as const;
 export const REFRESH_RANGE = [5, 3600] as const;
@@ -49,7 +202,7 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
     }
   };
 
-  const maintenance = async (type: "apply_retention" | "create_backup") => {
+  const maintenance = async (type: "apply_retention") => {
     const msg = await maint.run(() => api.action(type));
     if (msg !== undefined) setNotice(msg);
   };
@@ -148,16 +301,11 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
             <Button icon={<Eraser className="size-4" aria-hidden />} busy={maint.busy} onClick={() => void maintenance("apply_retention")}>
               {t("settings.applyRetention")}
             </Button>
-          </div>
-        </Card>
-        <Card title={t("settings.database")}>
-          <div className="space-y-3">
-            <Button icon={<Archive className="size-4" aria-hidden />} busy={maint.busy} onClick={() => void maintenance("create_backup")}>
-              {t("settings.backup")}
-            </Button>
             {maint.error && <ErrorNotice error={maint.error} />}
           </div>
         </Card>
+        <WorkstationCard />
+        <BackupsCard />
         <Card title={t("settings.admin")}>
           <div className="flex gap-3 text-sm">
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-cyan-600" aria-hidden />

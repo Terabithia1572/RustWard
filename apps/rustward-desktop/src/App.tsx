@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { Api } from "./api/client";
 import type { SettingsView } from "./api/types";
+import { DenialNotifier } from "./components/Notifier";
 import { I18nProvider, useI18n, type Lang } from "./i18n";
 import type { TKey } from "./i18n/tr";
 import { ApiProvider } from "./lib/hooks";
@@ -96,6 +97,7 @@ function Shell({
           {page === "settings" && <SettingsPage settings={settings} onSaved={onSettings} />}
         </div>
       </main>
+      <DenialNotifier enabled={settings?.notifications_enabled ?? false} />
     </div>
   );
 }

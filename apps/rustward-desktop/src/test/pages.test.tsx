@@ -161,6 +161,49 @@ describe("Diagnostics", () => {
 });
 
 describe("Settings", () => {
+  it("renames the workstation through a versioned policy edit", async () => {
+    const { user, state } = setup("settings");
+    const input = await screen.findByLabelText("İş istasyonu kimliği");
+    await waitFor(() => expect(input).toHaveValue("PC-TEST"));
+    await user.clear(input);
+    await user.type(input, "PC 09");
+    expect(screen.getByText("Yalnızca A–Z, a–z, 0–9, - ve _ kullanılabilir (1–64 karakter).")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kimliği kaydet" })).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "PC-09");
+    await user.click(screen.getByRole("button", { name: "Kimliği kaydet" }));
+    expect(await screen.findByText("İş istasyonu kimliği güncellendi (politika v4).")).toBeInTheDocument();
+    expect(state.workstationId).toBe("PC-09");
+    const call = state.calls.find((c) => c.type === "set_workstation_id");
+    expect(call).toEqual({ type: "set_workstation_id", workstation_id: "PC-09", expected_policy_version: 3 });
+  });
+
+  it("restores a backup only after confirmation and lists the pre-restore copy", async () => {
+    const { user, state } = setup("settings");
+    await screen.findByText("rustward-backup-1700000000000.db");
+    await user.click(screen.getByRole("button", { name: "Geri yükle" }));
+    const dialog = await screen.findByRole("dialog", { name: "Yedeği geri yükle" });
+    expect(dialog).toHaveTextContent("geri yükleme öncesi yedeği olarak saklanır");
+    expect(state.calls.some((c) => c.type === "restore_backup")).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Geri yükle" }));
+    expect(await screen.findByText(/Geri yükleme tamamlandı\./)).toBeInTheDocument();
+    expect(state.calls.find((c) => c.type === "restore_backup")).toEqual({
+      type: "restore_backup",
+      file_name: "rustward-backup-1700000000000.db",
+    });
+    expect(await screen.findByText("Geri yükleme öncesi")).toBeInTheDocument();
+  });
+
+  it("cancelling the restore dialog changes nothing", async () => {
+    const { user, state } = setup("settings");
+    await screen.findByText("rustward-backup-1700000000000.db");
+    await user.click(screen.getByRole("button", { name: "Geri yükle" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Vazgeç" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(state.calls.some((c) => c.type === "restore_backup")).toBe(false);
+  });
+
   it("saves the theme and applies it", async () => {
     const { user, state } = setup("settings");
     await waitFor(() => expect(document.documentElement).toHaveClass("dark"));
@@ -183,8 +226,15 @@ describe("Settings", () => {
     const { user, state } = setup("settings");
     await user.click(await screen.findByRole("button", { name: "Yedek oluştur" }));
     await screen.findByText("create_backup done");
-    state.failNext = { code: "unauthorized", message: "elevation required" };
+    state.failNext = { code: "unauthorized", message: "elevation required", only: "create_backup" };
     await user.click(screen.getByRole("button", { name: "Yedek oluştur" }));
     expect(await screen.findByText("Bu işlem için yükseltilmiş yönetici yetkisi gerekir.")).toBeInTheDocument();
+  });
+});
+
+describe("Diagnostics Event Log", () => {
+  it("states that Event Log mirroring is not attached outside the Windows service", async () => {
+    setup("diagnostics");
+    expect(await screen.findByText("Bağlı değil (yalnızca Windows hizmetinde)")).toBeInTheDocument();
   });
 });

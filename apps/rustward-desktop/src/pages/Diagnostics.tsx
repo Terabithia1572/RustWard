@@ -134,6 +134,19 @@ export function DiagnosticsPage() {
                 <Row label={t("diag.lastError")}>{d.windows_adapter.last_error ?? t("common.none")}</Row>
               </dl>
             </Card>
+            <Card title={t("diag.eventLog")}>
+              <dl className="divide-y divide-slate-100 dark:divide-slate-800">
+                <Row label={t("diag.eventLogAttached")}>
+                  <Badge tone={d.event_log?.attached ? "info" : "neutral"}>
+                    {d.event_log?.attached ? t("diag.eventLogOn") : t("diag.eventLogOff")}
+                  </Badge>
+                </Row>
+                <Row label={t("diag.eventLogDelivered")}>{d.event_log?.delivered ?? 0}</Row>
+                <Row label={t("diag.eventLogFailures")}>
+                  <Badge tone={(d.event_log?.failures ?? 0) > 0 ? "warning" : "neutral"}>{d.event_log?.failures ?? 0}</Badge>
+                </Row>
+              </dl>
+            </Card>
             <Card title={t("diag.policy")}>
               <div className="space-y-2">
                 <OkBadge ok={d.policy.valid} yes={t("diag.valid")} no={t("diag.invalid")} />
