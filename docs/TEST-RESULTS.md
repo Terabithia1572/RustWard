@@ -1,6 +1,6 @@
 # Test Results
 
-Last run: **2026-11-06**, after the service-host / telemetry / audit work (see `PHASE-STATUS.md`). Reproduced from a clean clone of `e3f9bde` before changes: 153 Rust + 30 Vitest PASS.
+Last run: **2026-11-06**, Phase 9A (security hardening). Baseline re-verified first from a clean worktree of `4909958`: 181 workspace Rust tests + 2 release-mode + 4 src-tauri = **187 Rust**, **38 Vitest** — PASS, matching the earlier report. After Phase 9A: **206 + 2 + 4 = 212 Rust, 39 Vitest — PASS, 0 failed, 0 ignored.**
 
 Vocabulary: **PASS** · **FAIL** · **NOT RUN** · **DEFERRED** (postponed by the project
 owner to the final Windows acceptance stage).
@@ -28,19 +28,20 @@ Reproduce: `./scripts/verify-all.sh` (prints PASS / FAIL / NOT RUN per check).
 | `rustward-core` unit (ids, device, catalog, policy, classify, evaluate, plan, report, names, policy_edit incl. workstation-ID edit, explain, diff) | 47 | PASS |
 | `rustward-core` `tests/fixture_eval.rs` (51-device synthetic snapshot, end-to-end) | 19 | PASS |
 | `rustward-core` `tests/encrypted_lifecycle.rs` (synthetic placeholder IDs, re-enumeration) | 3 | PASS |
-| `rustward-windows` unit (property decoding, enumeration engine with failure injection, snapshot assembly, read-only inventory API allowlist, crate-wide forbidden-API scan, SCM control decisions and status fields, device-change decoding, Event Log mapping) | 27 | PASS |
-| `rustward-enforcement` unit (activation compiled out, never claims protection, blocked message needs verified state + device evidence, dry-run plan never retroactive and keeps internal disks, preconditions, no system-modification APIs) | 10 | PASS |
+| `rustward-windows` unit (property decoding, enumeration engine with failure injection, snapshot assembly, read-only inventory API allowlist, crate-wide forbidden-API scan, SCM control decisions and status fields, device-change decoding, Event Log mapping, **MESSAGETABLE generator resolves every event ID and nothing else**) | 28 | PASS |
+| `rustward-enforcement` unit (activation compiled out, never claims protection, blocked message needs verified state + device evidence, dry-run plan never retroactive and keeps internal disks, preconditions, no system-modification APIs incl. `activation.rs`; **activation refused with every operator input and with a forged readiness, confirmations bound to the plan fingerprint, operator gates default NotMet, system-disk gate detects missing allow rules / unknown attachment / missing internal disk / retroactive rule, stage ordering and only verified denial claims protection**) | 16 | PASS |
 | `rustward-inventory` unit | 4 | PASS |
-| `rustward-storage` unit + `tests/store.rs` (migrations, newer schema refused, stale edits rejected atomically, tampered policy detected, hash chain tamper detection, retention keeps chain verifiable, backup/restore, event observer receives every committed event once and in order, observer failures never block writes, restore does not replay history) | 2 + 15 | PASS |
-| `rustward-ipc` unit + `tests/rpc_mock.rs` (framing, authorization matrix, field validation incl. backup file names that cannot escape the backup directory and workstation IDs; privileged requests refused before the handler and reported to the audit hook, invalid requests not reported as authorization failures, admin on read-only channel refused, protocol version mismatch, malformed frames, timeouts, response-id mismatch) | 8 + 10 | PASS |
-| `rustward-ipc` `tests/contract.rs` (golden request contract, round-trip, naming) | 3 | PASS |
-| `rustward-app` unit + `tests/app_flows.rs` (CRUD persists across restart, conflict codes, synthetic simulation, arrival/removal events, degraded health + recovery, export/backup/retention, corrupt policy fails closed, dashboard never claims protection, workstation-ID edit, restore with pre-restore copy and undo, bad backups refused, backup audit, authorization-failure audit with rate limit, Event Log observer + diagnostics) | 2 + 17 | PASS |
-| `rustward-service` unit (console mode on a temp DB with synthetic inventory, degradation/recovery, daily retention, stop handling, external stop handle, device-change wake-up with burst coalescing, disconnected wake source does not spin, Event Log mirror mapping and error propagation, paths) | 12 | PASS |
+| `rustward-storage` unit + `tests/store.rs` (migrations, **v1→v2 upgrade keeps data and adds guards**, newer schema refused, stale edits rejected atomically, tampered policy detected, hash chain tamper detection (triggers dropped first = attacker with file access), retention keeps chain verifiable, **backups registered + hashed + audited, restore as a new version without losing history or audit, stale restore refused atomically, foreign/altered/missing/traversal/symlink backups rejected, registered-but-corrupt/non-RustWard/newer-schema/invalid-policy backups rejected, append-only tables**, event observer once and in order, observer failures never block writes) | 2 + 20 | PASS |
+| `rustward-ipc` unit + `tests/rpc_mock.rs` (framing, authorization matrix, **pipe SDDL owner SYSTEM and minimal DACLs**, field validation incl. backup names and restore ids; privileged requests refused before the handler and reported, invalid requests not reported as authorization failures, admin on read-only channel refused, version mismatch, malformed frames, timeouts, response-id mismatch, **caller identified per request after reading, unidentifiable caller refused and disconnected**) | 9 + 12 | PASS |
+| `rustward-ipc` `tests/contract.rs` (golden request contract — 25 request types, round-trip, naming) | 3 | PASS |
+| `rustward-app` unit + `tests/app_flows.rs` (CRUD persists across restart, conflict codes, synthetic simulation, arrival/removal events, degraded health + recovery, export/backup/retention, corrupt policy fails closed, dashboard never claims protection, workstation-ID edit, **two-step restore never rolls back versions/history/audit, prepared restores single-use + bound to the admin + expire, foreign/altered/traversal restores refused and audited**, authorization-failure audit with rate limit, Event Log observer + diagnostics) | 2 + 18 | PASS |
+| `rustward-app` `tests/ipc_security.rs` — **all 15 privileged requests × 5 refused caller kinds through `rpc::process` with no state change and every refusal audited; read-only requests for standard users change nothing; replayed mutations rejected (exactly one of four captured requests applies); interrupted connection applies a change at most once; duplicate unversioned admin requests harmless; malformed / wrong-version envelopes refused; unidentified callers refused and audited** | 7 | PASS |
+| `rustward-service` unit (console mode, degradation/recovery, retention, stop handling, wake-up coalescing, Event Log mirror mapping, paths, **installer fragment matches service name / event source / ACL / no policy values; product versions consistent**) | 14 | PASS |
 | `rustward-ui-bridge` unit (debug + `dev-backend`) | 2 | PASS |
-| **Rust workspace total** (`cargo test --workspace --all-features`) | **181** | **PASS** |
+| **Rust workspace total** (`cargo test --workspace --all-features`) | **206** | **PASS** |
 | `rustward-ui-bridge` in **release** mode with `dev-backend` on: always selects the service | 2 | PASS |
 | `src-tauri` Tauri mock-runtime IPC tests: `ipc_call` through the real Tauri IPC + capability ACL into the dev backend; stale version → `conflict`; malformed requests rejected; other commands rejected | 4 | PASS |
-| Vitest: i18n completeness/placeholders/forbidden "blocked" claims, IPC contract vs Rust golden file, API client error mapping, page behaviour (banner, explanation, manufacturer CRUD + client validation + conflict, blocked wording, audit filter/export, diagnostics simulation and Event Log status, settings/theme/authorization error, workstation-ID validation and save, restore only after confirmation, cancel changes nothing), in-app notifier (no notice for pre-existing denials, one honest notice per new denial, dismiss, allows ignored, no polling when disabled) | 38 | PASS |
+| Vitest (39): i18n completeness/placeholders/forbidden "blocked" claims, IPC contract vs Rust golden file, API client error mapping, page behaviour (banner, explanation, manufacturer CRUD + client validation + conflict, blocked wording, audit filter/export, diagnostics simulation and Event Log status, settings/theme/authorization error, workstation-ID validation and save, **two-step restore: preview (hash, changes) before apply, cancel changes nothing, missing backup file badge**), in-app notifier (no notice for pre-existing denials, one honest notice per new denial, dismiss, allows ignored, no polling when disabled) | 39 | PASS |
 
 ## 3. Static checks — PASS
 
@@ -52,7 +53,9 @@ Reproduce: `./scripts/verify-all.sh` (prints PASS / FAIL / NOT RUN per check).
 | `tsc -b --noEmit` (strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`) | PASS |
 | `vite build` — bundle contains no external URLs except XML namespace strings and React's error-doc string (not fetched) | PASS |
 | `src-tauri`: `cargo fmt --check`, `cargo clippy --all-targets -D warnings` (Linux/webkit2gtk) | PASS |
-| SCM host, `CM_Register_Notification` subscription, Event Log writer, service entry (`scm.rs`) — compiled with `host-typecheck` in the all-features clippy run (confirmed by planting a type error, which was reported) | PASS (type-check only; never executed) |
+| SCM host, `CM_Register_Notification` subscription, Event Log writer, service entry (`scm.rs`, incl. start-failure entry), pipe owner check and per-request identification — compiled with `host-typecheck` in the all-features clippy run | PASS (type-check only; never executed) |
+| `cargo deny check` (licences, advisories, sources, bans) for `Cargo.lock` and `src-tauri/Cargo.lock`, target `x86_64-pc-windows-msvc` | PASS (src-tauri: 10 duplicate-version warnings) |
+| `build.rs` generates the message table on Linux (embedding needs Windows `rc.exe`: NOT RUN) | PASS (generation only) |
 
 ## 4. Offline build preparation — PASS on Linux
 
@@ -81,8 +84,10 @@ reported as passed until executed on the isolated Windows 10 Pro x64 acceptance 
 | Native build | `cargo build/test` with the MSVC toolchain (TEST-PLAN W-01, W-02); `scm.rs` compile | DEFERRED |
 | Native inventory | Live SetupAPI enumeration, non-present devices, real USBSTOR IDs (W-03..W-05); `tests/native_windows.rs` | DEFERRED |
 | Service | SCM registration, start/stop, failure restart, LocalSystem runtime, `%ProgramData%\RustWard` ACL | DEFERRED |
-| IPC | Named-pipe DACLs, `PIPE_REJECT_REMOTE_CLIENTS`, impersonation + elevation check, session-0 check, standard-user denial (T-22) | DEFERRED |
+| IPC | Named-pipe DACLs and owner, client owner check (impostor test C12), `PIPE_REJECT_REMOTE_CLIENTS`, per-request impersonation + elevation check, session-0 check, standard-user denial (T-22) | DEFERRED |
 | Desktop app | Tauri on WebView2, CSP in WebView2, release build without dev backend, elevation UX | DEFERRED |
-| Packaging | MSI build, WiX service fragment, offline WebView2 install, install/repair/uninstall, offline install (T-25) | DEFERRED |
+| Packaging | MSI build, WiX service fragment, embedded message table (`rc.exe`), event source registration and Event Viewer formatting, offline WebView2 install, install/repair/uninstall, offline install (T-25) | DEFERRED |
 | Enforcement | Any Device Installation Restriction validation; every physical USB test T-01..T-30 | DEFERRED |
 | Hardware identity | TÜBİTAK SIR II inspection (T-04..T-07) | DEFERRED — blocking for SIR II |
+
+Stage-by-stage procedure for every DEFERRED item: [`WINDOWS-VM-ACCEPTANCE.md`](WINDOWS-VM-ACCEPTANCE.md).

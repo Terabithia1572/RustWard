@@ -26,7 +26,8 @@ defines what must exist **before** Phase 2 applies any policy on the isolated te
 | Approved device blocked | Device Manager → remove device → rescan after correcting policy; record evidence. |
 | Keyboard/mouse lost (should be impossible with a DiskDrive-only rule) | Remote: none (air-gapped). Use on-screen keyboard at logon if mouse works; otherwise boot WinRE → Command Prompt → load the offline SOFTWARE hive and remove the policy values, or restore the image. |
 | System disk issue after driver update | Boot WinRE, remove DiskDrive prevent values from offline hive; restore image if needed. |
-| Corrupted RustWard DB/config | Service refuses to change policy (fail-closed for changes); OS policy remains as last applied; restore from signed backup. |
+| Corrupted RustWard DB/config | Service refuses to change policy (fail-closed for changes) and logs Event 1008 if it cannot start; OS policy remains as last applied. Manual recovery: stop the service, move the damaged `rustward.db` aside as evidence, copy the latest verified backup (hash from `SHA256SUMS`/registry export) to `rustward.db`, start, check chain status in Diagnostics, record the incident outside RustWard (AUDIT-INTEGRITY.md §3). |
+| Wrong policy after a restore | Restore the automatic `rustward-pre-restore-<ms>.db` with the same two-step flow (it becomes a new version; nothing is lost). |
 
 Every recovery step is logged and followed by a verification scan.
 

@@ -28,15 +28,27 @@ Last updated: 2026-11-06.
 | G — Integration | UI → `ipc_call` → `rustward-ui-bridge` → (dev backend \| service pipe) → `rustward-app` → policy engine → SQLite | Dev-backend path: IMPLEMENTED AND AUTOMATED-TESTED (Tauri mock runtime). Service path: IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
 | H — Offline packaging preparation | Vendoring script (tested on Linux), offline build verified on Linux, release build script, MSI service fragment (draft), deployment/uninstall documentation | PARTIALLY IMPLEMENTED (Windows build and MSI NOT RUN) |
 
+## Phase 9A — security hardening and Windows acceptance readiness
+
+| Item | Content | Classification |
+|---|---|---|
+| Audit integrity | Two-step, non-destructive restore (backup policy becomes a new version; audit never replaced); registered + hashed backups; append-only triggers; failed attempts audited (AUDIT-INTEGRITY.md) | IMPLEMENTED AND AUTOMATED-TESTED |
+| Privileged IPC | Full refusal matrix, replay, interruption and malformed-request tests through the real pipeline (`ipc_security.rs`); per-request identification after read; unidentifiable callers refused | Logic: IMPLEMENTED AND AUTOMATED-TESTED. Pipe owner check (`O:SY`), per-request token query: IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
+| Activation workflow | `rustward-enforcement::activation`: 6 stages, 13 gates, plan fingerprint, computed system-disk gate; activation refused (`ACTIVATION_ENABLED = false`) | IMPLEMENTED AND AUTOMATED-TESTED (as a refusal) |
+| Event Log | MESSAGETABLE generator (tested), `build.rs` embedding (Windows only), WiX `util:EventSource`, start-failure event 1008 | Generator tested; embedding/registration IMPLEMENTED BUT NOT WINDOWS-VERIFIED |
+| Release readiness | `deny.toml` + `cargo deny` clean (Windows target), dependency inventory, BUILD-INFO + hashes in release script, installer/version consistency tests | PARTIALLY IMPLEMENTED (Windows build NOT RUN) |
+| Acceptance workflow | Stages A–F (F separate, not runnable in this build), Hyper-V limits (WINDOWS-VM-ACCEPTANCE.md) | Documented |
+| Findings | 17 findings: 1 High, 6 Medium, 7 Low, 3 Info; 12 fixed or implemented, 5 open and documented (F-12…F-16) — SECURITY-AUDIT-PHASE-9A.md | — |
+
 ## Feature gaps (known, not hidden)
 
 | Gap | Status |
 |---|---|
 | Desktop notification when a device is denied | **In-app notice only** (while the window is open); Windows toast notifications not implemented |
-| Windows Event Log entries | Implemented in the Windows service; **not verified on Windows**; event source registration is an installer task (not done) |
+| Windows Event Log entries | Implemented in the Windows service; message table + installer registration prepared in Phase 9A; **not verified on Windows** |
 | Real-time PnP arrival notification (`CM_Register_Notification`) | Implemented as a wake-up for the inventory refresh (telemetry only); **not verified on Windows** |
 | Per-workstation ID | Configurable by an administrator (Settings → versioned policy edit); installer property still open |
-| Restore from backup in UI | Implemented (admin, confirmation dialog, automatic pre-restore copy) |
+| Restore from backup in UI | Two-step (preview with hash and changes → apply as a new policy version), automatic pre-restore copy, audit never replaced |
 | Elevation UX | Admin actions need the app started "Run as administrator"; no in-app elevation |
 | Real enforcement | Compiled out (`ACTIVATION_ENABLED = false`) |
 
@@ -61,7 +73,8 @@ Last updated: 2026-11-06.
 | `f173fea` | Milestones C + G — application backend, service foundation |
 | `a77c9d8` | Milestone F — Tauri desktop app |
 | `e3f9bde` | Milestone H — offline packaging preparation, documentation |
-| (next commits) | Service host on windows-sys, device-change wake-up, Event Log mirror, authorization/backup auditing, workstation ID, restore; UI for these; documentation |
+| `c43a4c1`, `4909958` | Service host on windows-sys, device-change wake-up, Event Log mirror, authorization/backup auditing, workstation ID, restore; UI for these; documentation |
+| (Phase 9A commit) | Security hardening and Windows acceptance readiness — see SECURITY-AUDIT-PHASE-9A.md |
 
 ## Environment
 

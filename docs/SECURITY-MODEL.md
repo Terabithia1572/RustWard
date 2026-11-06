@@ -10,17 +10,20 @@
 
 ## IPC — implemented, NOT Windows-verified
 
-- Two pipes: `\\.\pipe\RustWard.Status.v1` (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`,
-  read-only requests) and `\\.\pipe\RustWard.Admin.v1` (SDDL `D:P(A;;GA;;;SY)(A;;GA;;;BA)`).
-- `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`. The client checks with
-  `GetNamedPipeServerSessionId` that the pipe server runs in session 0 (the service), to
-  reject an impostor server created in a user session.
+- Two pipes: `\\.\pipe\RustWard.Status.v1` (SDDL `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)`,
+  read-only requests) and `\\.\pipe\RustWard.Admin.v1` (SDDL `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)`).
+- `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`. Before sending anything the
+  client checks that the pipe object is **owned by LocalSystem** (`GetSecurityInfo`; the
+  server sets `O:SY`, which a standard user cannot assign) and that the server runs in
+  session 0 (`GetNamedPipeServerSessionId`). The session check alone was insufficient: a
+  standard user can run a process in session 0 via a scheduled task and squat the pipe name
+  while the service is stopped or between two connections (Phase 9A finding F-03).
 - Per request, not per connection: `ImpersonateNamedPipeClient` → `CheckTokenMembership`
   (Administrators) + `TokenElevation`; impersonation is always reverted or the process aborts.
   Clients connect with `SECURITY_IDENTIFICATION`.
 - Versioned envelopes; length-prefixed JSON frames ≤ 4 MiB; reads bounded with `PeekNamedPipe`;
   every field validated server-side (`rustward-ipc::validate`).
-- No generic "execute", "write file" or "set registry" request exists; the 24 request types
+- No generic "execute", "write file" or "set registry" request exists; the 25 request types
   are fixed by a golden contract test.
 - Authorization never depends on the UI. A frontend password prompt would not be a boundary
   and is not used; the Windows token of the caller decides.
@@ -44,11 +47,17 @@
   tamper-*evident*.
 - Refused privileged requests are audited (`authorization_failed`, request, account,
   admin/elevation flags), at most 20 per minute with a suppressed-count summary.
-- Backups are audited (`backup_created`). A restore first saves the current database as a
-  pre-restore backup and records `audit_history_replaced` with the previous newest event id
-  and chain head, so a restore cannot silently erase audit records.
+- Backups are registered (name, SHA-256, size, policy version, kind, actor) in the same
+  transaction as their `backup_created` audit event.
+- Restore is two-step and non-destructive (docs/AUDIT-INTEGRITY.md): *prepare* verifies the
+  registered hash and the database contents and returns a preview; *apply* (same
+  administrator, single use, 10-minute expiry, version check) saves a pre-restore backup and
+  stores the backup's policy as a **new** version in one transaction. The audit log is never
+  replaced or rolled back; successful and failed attempts are audited.
 - Restore accepts only `rustward-backup-<digits>.db` / `rustward-pre-restore-<digits>.db`
   file names inside the service's backup directory — no paths.
+- Audit, policy-history and backup-registry tables are append-only for application code
+  (SQLite triggers). This guards against bugs, not against administrators.
 
 ## Guarantees checked by automated tests
 
@@ -56,7 +65,13 @@
   crate-wide test fails if any module references device-changing, driver, registry,
   service-configuration, `DeviceIoControl` or `CreateFile` APIs.
 - `rustward-core`, `rustward-enforcement` and `rustward-inventory` forbid `unsafe`.
-- No component can report `EnforcedVerified` without `VerificationEvidence`, which has no
-  public constructor.
+- No component can report `VerifiedProtected` without `VerificationEvidence`, which has no
+  public constructor and is not `Deserialize` (cannot be forged from IPC or files).
+- Activation stays refused: `activation::request_activation` returns `ActivationDisabled`
+  while `ACTIVATION_ENABLED = false`, even with every gate met or a forged readiness.
+- Every privileged request is refused for non-admin, unelevated and read-only-channel
+  callers through the real server pipeline, with no state change (`ipc_security.rs`).
+- The installer fragment, service name, event source and versions agree
+  (`rustward-service` packaging tests).
 - The blocked notification "USB engellenmiştir. İşlem kayıt altına alınmıştır." is only
   selected with verified state **and** device evidence.

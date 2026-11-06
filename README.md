@@ -17,7 +17,7 @@ workstations.
 | SQLite storage, hash-chained audit | `crates/rustward-storage` | Tested |
 | Application service (all requests) | `crates/rustward-app` | Tested |
 | Windows service | `crates/rustward-service` | Console mode + runtime tested; SCM host, Event Log mirror and device-change wake-up type-checked only (never run) |
-| Dry-run enforcement providers | `crates/rustward-enforcement` | Tested as a model; **no enforcement** |
+| Dry-run enforcement providers + activation gates | `crates/rustward-enforcement` | Tested as a model; activation always refused; **no enforcement** |
 | Local IPC (mock + named pipes) | `crates/rustward-ipc` | Protocol tested; pipes type-checked only |
 | Windows adapters (read-only SetupAPI inventory, device-change notifications, Event Log, SCM host) | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
 | Desktop app (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | UI tested; Tauri shell tested on Linux only |
@@ -30,7 +30,7 @@ Test evidence: [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md).
 ## Development
 
 ```bash
-./scripts/verify-all.sh                       # fmt, clippy, all tests, UI typecheck/tests/build
+./scripts/verify-all.sh                       # fmt, clippy, all tests, UI typecheck/tests/build, cargo deny
 
 cd apps/rustward-desktop && npm ci
 npm test                                      # Vitest
@@ -69,11 +69,16 @@ report a generic controller vendor. TÜBİTAK SIR II identifiers are still unkno
 | [TEST-RESULTS](docs/TEST-RESULTS.md) | What was tested where, and what is DEFERRED |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | Crates, trust boundaries, IPC contract |
 | [SECURITY-MODEL](docs/SECURITY-MODEL.md) / [THREAT-MODEL](docs/THREAT-MODEL.md) | Privilege separation, pipes, Tauri hardening |
-| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Residual risks L-01…L-21 |
+| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Residual risks L-01…L-29 |
 | [OFFLINE-DEPLOYMENT](docs/OFFLINE-DEPLOYMENT.md) | Vendoring, MSI, WebView2, install/uninstall |
 | [ENFORCEMENT-FEASIBILITY](docs/ENFORCEMENT-FEASIBILITY.md) | Mechanism comparison and decision |
 | [BRAND-IDENTIFICATION](docs/BRAND-IDENTIFICATION.md) / [DEVICE-CLASSIFICATION](docs/DEVICE-CLASSIFICATION.md) | Identifiers, categories |
 | [TEST-PLAN](docs/TEST-PLAN.md) / [RECOVERY-PLAN](docs/RECOVERY-PLAN.md) | Acceptance tests, rollback |
+| [SECURITY-AUDIT-PHASE-9A](docs/SECURITY-AUDIT-PHASE-9A.md) | Phase 9A findings by severity, fixes, open items |
+| [AUDIT-INTEGRITY](docs/AUDIT-INTEGRITY.md) | Non-destructive restore, backup verification, tamper-resistance limits |
+| [WINDOWS-VM-ACCEPTANCE](docs/WINDOWS-VM-ACCEPTANCE.md) | Stages A–F on a disposable Windows 10 Pro VM; Hyper-V USB limits |
+| [RELEASE-READINESS](docs/RELEASE-READINESS.md) | Target config, installer design, hashes, dependencies, readiness classification |
+| [DEPENDENCY-INVENTORY](docs/DEPENDENCY-INVENTORY.md) | Generated crate/npm inventory (Windows target) |
 
 ## Safety rules for contributors
 
