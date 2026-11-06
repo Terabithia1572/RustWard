@@ -223,19 +223,51 @@ fn call_service_pipe(request: Request) -> Result<ResponseBody, IpcError> {
         AccessLevel::Administrator => PIPE_NAME_ADMIN,
     };
     let conn = PipeConnection::connect(pipe, Duration::from_secs(5)).map_err(|e| match e {
-        TransportError::Disconnected => IpcError::new(
-            rustward_ipc::ErrorCode::Unavailable,
-            if pipe == PIPE_NAME_ADMIN {
-                "the RustWard service is not reachable or this account is not an elevated administrator"
-            } else {
-                "the RustWard service is not reachable"
-            },
-        ),
+        TransportError::Disconnected => unreachable_reason(pipe == PIPE_NAME_ADMIN),
         other => rustward_ipc::rpc::ClientError::Transport(other).into_ipc_error(),
     })?;
     Client::new(conn, DEFAULT_TIMEOUT)
         .call(request)
         .map_err(rustward_ipc::rpc::ClientError::into_ipc_error)
+}
+
+/// Why the pipe could not be opened, from a read-only SCM query. The
+/// bracketed tag lets the UI show a precise, translated reason; the code
+/// stays `unavailable`, so nothing reads a missing service as protection.
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
+fn unreachable_reason(admin_pipe: bool) -> IpcError {
+    use rustward_ipc::SERVICE_NAME;
+    use rustward_ipc::pipe::{ServiceState, service_state};
+    let message = match service_state(SERVICE_NAME) {
+        Ok(ServiceState::NotInstalled) => {
+            format!(
+                "[service_not_installed] the RustWard service ({SERVICE_NAME}) is not installed"
+            )
+        }
+        Ok(ServiceState::Stopped) => {
+            format!(
+                "[service_stopped] the RustWard service ({SERVICE_NAME}) is installed but stopped"
+            )
+        }
+        Ok(ServiceState::StartPending) => {
+            "[service_starting] the RustWard service is starting".to_owned()
+        }
+        Ok(ServiceState::StopPending) => {
+            "[service_stopping] the RustWard service is stopping".to_owned()
+        }
+        Ok(ServiceState::Running { .. }) if admin_pipe => {
+            "[admin_required] the RustWard service is running, \
+             but this account is not an elevated administrator"
+                .to_owned()
+        }
+        Ok(ServiceState::Running { .. } | ServiceState::Other(_)) => {
+            "[service_unreachable] the RustWard service is running but its pipe did not answer"
+                .to_owned()
+        }
+        Err(e) => format!("[service_unreachable] the RustWard service is not reachable ({e})"),
+    };
+    IpcError::new(rustward_ipc::ErrorCode::Unavailable, message)
 }
 
 fn call_service(request: Request) -> Result<ResponseBody, IpcError> {

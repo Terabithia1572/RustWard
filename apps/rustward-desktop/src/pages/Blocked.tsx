@@ -38,7 +38,7 @@ export function BlockedPage() {
                         {deviceName(d)}
                         {d.synthetic && <Badge tone="synthetic">{t("badge.synthetic")}</Badge>}
                       </div>
-                      <div className="font-mono text-[11px] text-slate-500">{d.display_id}</div>
+                      <div className="break-all font-mono text-[11px] text-slate-500">{d.display_id}</div>
                     </td>
                     <td className="px-3 py-2">
                       {d.matched_brand ?? d.vendor ?? "—"}

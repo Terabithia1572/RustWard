@@ -13,12 +13,12 @@ export function EventRow({ e, compact = false }: { e: EventView; compact?: boole
   const { t, tx, formatTime } = useI18n();
   return (
     <tr className="border-b border-slate-100 align-top last:border-0 dark:border-slate-800">
-      <td className="whitespace-nowrap py-1.5 pr-3 text-xs text-slate-500">{formatTime(e.utc_ms)}</td>
+      <td className="py-1.5 pr-3 text-xs text-slate-500">{formatTime(e.utc_ms)}</td>
       <td className="py-1.5 pr-3">
         <Badge tone={severityTone[e.severity] ?? "neutral"}>{tx("audit.severity", e.severity)}</Badge>
       </td>
-      {!compact && <td className="py-1.5 pr-3 font-mono text-xs">{e.kind}</td>}
-      <td className="py-1.5 pr-3">{e.message}</td>
+      {!compact && <td className="py-1.5 pr-3 font-mono text-xs [overflow-wrap:anywhere]">{e.kind}</td>}
+      <td className="min-w-0 py-1.5 pr-3 [overflow-wrap:anywhere]">{e.message}</td>
       <td className="py-1.5">
         {e.simulated ? <Badge tone="synthetic">{t("audit.origin.simulated")}</Badge> : <Badge>{t("audit.origin.real")}</Badge>}
       </td>
@@ -138,7 +138,8 @@ export function AuditPage() {
         ) : !r.data || r.data.length === 0 ? (
           <Empty />
         ) : (
-          <table className="w-full text-sm">
+          <div className="-m-4 overflow-x-auto p-4">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="pb-2 pr-3">{t("audit.time")}</th>
@@ -154,6 +155,7 @@ export function AuditPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
         <div className="mt-3 flex justify-end gap-2">
           <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>

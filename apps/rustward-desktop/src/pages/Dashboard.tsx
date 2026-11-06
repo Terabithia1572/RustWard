@@ -29,7 +29,10 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
       {r.loading && !d && <Loading />}
       {d && (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          {/* The content area is the window minus the sidebar, so five columns only
+              from 2xl; at the default 1280 px window three columns keep the
+              cards readable. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
             <Stat
               icon={<ShieldQuestion className="size-4" aria-hidden />}
               label={t("dashboard.protection")}
@@ -51,7 +54,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
               hint={d.catalog_version}
             />
           </div>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
             <Card
               title={t("dashboard.recentDenied")}
               actions={<Button variant="ghost" onClick={() => onNavigate("blocked")}>{t("nav.blocked")}</Button>}
@@ -84,7 +87,13 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
               {d.recent_events.length === 0 ? (
                 <Empty />
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full table-fixed text-sm">
+                  <colgroup>
+                    <col className="w-32" />
+                    <col className="w-16" />
+                    <col />
+                    <col className="w-28" />
+                  </colgroup>
                   <tbody>
                     {d.recent_events.map((e) => (
                       <EventRow key={e.id} e={e} compact />

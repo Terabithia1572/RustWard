@@ -1,3 +1,4 @@
+import { serviceReason } from "../lib/serviceReason";
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { AlertTriangle, Loader2, ShieldAlert, X } from "lucide-react";
 import { ApiError } from "../api/client";
@@ -72,12 +73,12 @@ export function Card({
 }) {
   return (
     <section
-      className={`rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 ${className}`}
+      className={`min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 ${className}`}
     >
       {(title !== undefined || actions !== undefined) && (
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5 dark:border-slate-800">
-          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">{title}</h2>
-          <div className="flex items-center gap-2">{actions}</div>
+          <h2 className="min-w-0 text-sm font-semibold text-slate-800 dark:text-slate-100">{title}</h2>
+          <div className="flex shrink-0 items-center gap-2">{actions}</div>
         </header>
       )}
       <div className="p-4">{children}</div>
@@ -87,13 +88,13 @@ export function Card({
 
 export function Stat({ label, value, hint, icon }: { label: string; value: ReactNode; hint?: ReactNode; icon?: ReactNode }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
         {icon}
         {label}
       </div>
-      <div className="mt-2 text-lg font-semibold text-slate-900 dark:text-slate-50">{value}</div>
-      {hint !== undefined && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{hint}</div>}
+      <div className="mt-2 text-lg font-semibold leading-snug text-slate-900 [overflow-wrap:anywhere] dark:text-slate-50">{value}</div>
+      {hint !== undefined && <div className="mt-1 text-xs text-slate-500 [overflow-wrap:anywhere] dark:text-slate-400">{hint}</div>}
     </div>
   );
 }
@@ -101,7 +102,7 @@ export function Stat({ label, value, hint, icon }: { label: string; value: React
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string | undefined; actions?: ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-      <div>
+      <div className="min-w-0">
         <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-50">{title}</h1>
         {subtitle !== undefined && <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{subtitle}</p>}
       </div>
@@ -235,12 +236,14 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
   const { t } = useI18n();
   const e = error instanceof ApiError ? error : new ApiError("client", String(error));
   const key = errorKeys[e.code];
+  const reason = e.code === "unavailable" ? serviceReason(e.message) : null;
   return (
     <div role="alert" className="flex items-start gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="font-medium">{key ? t(key) : t("error.title")}</div>
-        <div className="break-words opacity-90">{e.message}</div>
+        {reason && <div className="font-medium">{t(reason.key)}</div>}
+        <div className="opacity-90 [overflow-wrap:anywhere]">{reason ? reason.detail : e.message}</div>
       </div>
       {onRetry && (
         <Button variant="ghost" onClick={onRetry}>

@@ -18,19 +18,27 @@
             device inventory, labelled synthetic data on request). Isolated
             from the release configuration: the development backend only
             exists in debug builds.
-    5. Verifies both files (PE32+ x64 Windows GUI executable, size, SHA-256)
-       and copies them to dist\RustWard.exe and dist\RustWard-Onizleme.exe,
-       with START-*.cmd launchers and BUILD-INFO.txt.
-    6. Optionally (default on, -SkipMsi to skip) builds the UI-only MSI with
-       npx tauri build --bundles msi. A failure here does not fail the build.
-       The MSI is NOT installed.
+    5. Service build:  cargo build --release -p rustward-service -p rustward-inventory
+         -> the RustWard Windows service executable (Event Log MESSAGETABLE
+            embedded with rc.exe) and the read-only inventory CLI.
+    6. Verifies every file (PE32+ x64, expected subsystem, the service's
+       MESSAGETABLE resource, size, SHA-256) and copies them to dist\
+       (RustWard.exe, RustWard-Onizleme.exe, service\rustward-service.exe,
+       service\rustward-inventory.exe) with START-*.cmd and BUILD-INFO.txt.
+    7. Complete MSI (default on, -SkipMsi to skip): desktop app + Windows
+       service (LocalSystem, auto start, restart on failure) + Event Log
+       source + protected %ProgramData%\RustWard + offline WebView2 installer,
+       from packaging\wix\rustward-service.wxs. The finished MSI is opened
+       READ-ONLY (Windows Installer COM) to confirm the service is inside.
+       The MSI is NOT installed. Install it only on a disposable test VM.
 
   It does NOT change Windows: no service installation, no registry or Group
   Policy change, no device or driver change. USB enforcement stays disabled
   (ACTIVATION_ENABLED = false); the application cannot block USB devices.
 
-  Logs: build-logs\<timestamp>\ (kept). Exit code 0 = executables built and
-  verified; anything else = failure (see the Turkish message and the logs).
+  Logs: build-logs\<timestamp>\ (kept). Exit code 0 = everything built and
+  verified; 3 = executables ready but the MSI failed; anything else = failure
+  (see the Turkish message and the logs).
 #>
 param(
     [switch]$SkipMsi,
@@ -90,9 +98,9 @@ function Get-Version([string]$Text) {
     [version]('{0}.{1}.{2}' -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value)
 }
 
-function Test-PeGuiX64([string]$Path) {
-    # Reads the PE header: MZ, PE\0\0, machine AMD64 (0x8664), PE32+ (0x20B),
-    # subsystem 2 = Windows GUI.
+function Test-PeX64([string]$Path, [int]$Subsystem) {
+    # Reads the PE header: MZ, PE\0\0, machine AMD64 (0x8664), PE32+ (0x20B)
+    # and the subsystem (2 = Windows GUI, 3 = console, used by the service).
     $bytes = [IO.File]::ReadAllBytes($Path)
     if ($bytes.Length -lt 1024 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { return 'MZ başlığı yok' }
     $pe = [BitConverter]::ToInt32($bytes, 0x3C)
@@ -100,11 +108,60 @@ function Test-PeGuiX64([string]$Path) {
     $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
     $opt = $pe + 24
     $magic = [BitConverter]::ToUInt16($bytes, $opt)
-    $subsystem = [BitConverter]::ToUInt16($bytes, $opt + 68)
+    $sub = [BitConverter]::ToUInt16($bytes, $opt + 68)
     if ($machine -ne 0x8664) { return ('makine türü 0x{0:X4} (x64 değil)' -f $machine) }
     if ($magic -ne 0x20B) { return 'PE32+ değil' }
-    if ($subsystem -ne 2) { return "alt sistem $subsystem (Windows GUI = 2 değil)" }
+    if ($sub -ne $Subsystem) { return "alt sistem $sub (beklenen $Subsystem)" }
     'OK'
+}
+
+function Test-MessageTable([string]$Path) {
+    # True when the .rsrc section's root directory has a type-11 (RT_MESSAGETABLE)
+    # entry: Event Viewer needs it to format RustWard events.
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+    $sections = [BitConverter]::ToUInt16($bytes, $pe + 6)
+    $optSize = [BitConverter]::ToUInt16($bytes, $pe + 20)
+    $table = $pe + 24 + $optSize
+    for ($i = 0; $i -lt $sections; $i++) {
+        $h = $table + 40 * $i
+        $name = [Text.Encoding]::ASCII.GetString($bytes, $h, 8).TrimEnd([char]0)
+        if ($name -ne '.rsrc') { continue }
+        $root = [BitConverter]::ToInt32($bytes, $h + 20)
+        $count = [BitConverter]::ToUInt16($bytes, $root + 12) + [BitConverter]::ToUInt16($bytes, $root + 14)
+        for ($e = 0; $e -lt $count; $e++) {
+            $id = [BitConverter]::ToUInt32($bytes, $root + 16 + 8 * $e)
+            if ($id -eq 11) { return $true }
+        }
+    }
+    $false
+}
+
+function Get-MsiRow([string]$MsiPath, [string]$Sql) {
+    # Opens the MSI database READ-ONLY (mode 0) and returns the rows of one
+    # query as string arrays. Nothing is installed or changed.
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $rows = @()
+    $db = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($MsiPath, 0))
+    try {
+        $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @($Sql))
+        $null = $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+        while ($true) {
+            $rec = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+            if ($null -eq $rec) { break }
+            $n = $rec.GetType().InvokeMember('FieldCount', 'GetProperty', $null, $rec, $null)
+            $cols = @()
+            for ($k = 1; $k -le $n; $k++) { $cols += $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, @($k)) }
+            $rows += , $cols
+        }
+        $null = $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null)
+    }
+    finally {
+        $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($db)
+        $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($installer)
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+    , $rows
 }
 
 Write-Info "RustWard Windows derlemesi - $Stamp"
@@ -215,12 +272,22 @@ if (-not $SkipPreview) {
     }
 }
 
-# ---------------------------------------------------------------- 5. Verify + copy
-$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Tauri 'target' }
-$builds = @(@{ Kind = 'release'; Src = Join-Path $targetDir 'release\rustward-desktop.exe'; Dst = 'RustWard.exe' })
-if (-not $SkipPreview) {
-    $builds += @{ Kind = 'preview'; Src = Join-Path $targetDir 'debug\rustward-desktop.exe'; Dst = 'RustWard-Onizleme.exe' }
+# ---------------------------------------------------------------- 5. Service
+if ((Invoke-Logged 'cargo-build-service' $Root 'cargo build --release --locked -p rustward-service -p rustward-inventory') -ne 0) {
+    Exit-Build 62 'Hizmet (rustward-service) derlemesi başarısız oldu.' "Günlük: $Logs\cargo-build-service.log (rc.exe için Windows SDK gerekir)"
 }
+$serviceSrc = Join-Path $Root 'target\release\rustward-service.exe'
+$inventorySrc = Join-Path $Root 'target\release\rustward-inventory.exe'
+
+# ---------------------------------------------------------------- 6. Verify + copy
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Tauri 'target' }
+$builds = @(@{ Kind = 'release'; Src = Join-Path $targetDir 'release\rustward-desktop.exe'; Dst = 'RustWard.exe'; Sub = 2 })
+if (-not $SkipPreview) {
+    $builds += @{ Kind = 'preview'; Src = Join-Path $targetDir 'debug\rustward-desktop.exe'; Dst = 'RustWard-Onizleme.exe'; Sub = 2 }
+}
+$builds += @{ Kind = 'service'; Src = $serviceSrc; Dst = 'service\rustward-service.exe'; Sub = 3 }
+$builds += @{ Kind = 'inventory'; Src = $inventorySrc; Dst = 'service\rustward-inventory.exe'; Sub = 3 }
+New-Item -ItemType Directory -Force -Path (Join-Path $Dist 'service') | Out-Null
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $dumpbin = Get-ChildItem -Path (Join-Path $vsPath 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
@@ -238,8 +305,11 @@ $info = @(
 )
 foreach ($b in $builds) {
     if (-not (Test-Path $b.Src)) { Exit-Build 70 "Derleme çıktısı bulunamadı: $($b.Src)" 'Günlükleri kontrol edin.' }
-    $pe = Test-PeGuiX64 $b.Src
-    if ($pe -ne 'OK') { Exit-Build 71 "$($b.Src) geçerli bir Windows x64 GUI uygulaması değil: $pe" '' }
+    $pe = Test-PeX64 $b.Src $b.Sub
+    if ($pe -ne 'OK') { Exit-Build 71 "$($b.Src) beklenen Windows x64 dosyası değil: $pe" '' }
+    if ($b.Kind -eq 'service' -and -not (Test-MessageTable $b.Src)) {
+        Exit-Build 72 'rustward-service.exe içinde Olay Günlüğü ileti tablosu (MESSAGETABLE) yok.' 'Windows SDK rc.exe ile yeniden derleyin; günlükte embed-resource hatasına bakın.'
+    }
     $dst = Join-Path $Dist $b.Dst
     Copy-Item -LiteralPath $b.Src -Destination $dst -Force
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dst).Hash.ToLowerInvariant()
@@ -257,6 +327,8 @@ foreach ($b in $builds) {
 $info += ''
 $info += 'RustWard.exe          : gerçek uygulama; RustWard Windows hizmetine bağlanır. Hizmet kurulu değilse bunu gösterir.'
 $info += 'RustWard-Onizleme.exe : geliştirme önizlemesi; geçici SQLite veritabanı (%TEMP%\rustward-dev-ui), salt okunur aygıt envanteri, etiketli sentetik veri.'
+$info += 'service\rustward-service.exe : RustWard Windows hizmeti (Olay Günlüğü ileti tablosu gömülü). Yalnızca MSI ile, yalnızca test sanal makinesinde kurun.'
+$info += 'service\rustward-inventory.exe : salt okunur envanter ve politika inceleme aracı.'
 $info += 'Taşınabilirlik doğrulanmadı: WebView2 Runtime gerekir; yukarıdaki DLL listesi dışındaki bağımlılıklar denetlenmedi.'
 $info | Out-File -FilePath (Join-Path $Dist 'BUILD-INFO.txt') -Encoding UTF8
 
@@ -275,23 +347,57 @@ if (-not $SkipPreview) {
     ) | Out-File -FilePath (Join-Path $Dist 'START-RUSTWARD-ONIZLEME.cmd') -Encoding ASCII
 }
 
-# ---------------------------------------------------------------- 6. MSI (secondary)
+# ---------------------------------------------------------------- 7. Complete MSI
 $msiNote = 'MSI: atlandı (-SkipMsi).'
+$msiOk = $true
 if (-not $SkipMsi) {
-    $code = Invoke-Logged 'tauri-build-msi' $App 'npx tauri build --bundles msi'
+    $msiOk = $false
+    # Read by packaging\wix\rustward-service.wxs as $(env.TAURI_RUSTWARD_SERVICE_EXE).
+    $env:TAURI_RUSTWARD_SERVICE_EXE = $serviceSrc
+    $conf = Join-Path $Root 'packaging\tauri.acceptance.conf.json'
+    try { $code = Invoke-Logged 'tauri-build-msi' $App "npx tauri build --bundles msi --config `"$conf`"" }
+    finally { Remove-Item Env:\TAURI_RUSTWARD_SERVICE_EXE -ErrorAction SilentlyContinue }
     $msi = Get-ChildItem -Path (Join-Path $targetDir 'release\bundle\msi') -Filter *.msi -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($code -eq 0 -and $msi) {
+        # Read-only check of the finished package.
+        $checks = @()
+        try {
+            $svc = Get-MsiRow $msi.FullName 'SELECT `Name`, `StartName`, `Arguments`, `StartType` FROM `ServiceInstall`'
+            $files = Get-MsiRow $msi.FullName 'SELECT `FileName`, `FileSize` FROM `File`'
+            $ctl = Get-MsiRow $msi.FullName 'SELECT `Name`, `Event` FROM `ServiceControl`'
+            $reg = Get-MsiRow $msi.FullName 'SELECT `Key`, `Name` FROM `Registry`'
+            $hasSvc = @($svc | Where-Object { $_[0] -eq 'RustWardService' -and $_[1] -eq 'LocalSystem' -and $_[2] -eq 'service' }).Count -eq 1
+            $hasExe = @($files | Where-Object { $_[0] -like '*rustward-service.exe' }).Count -eq 1
+            $hasApp = @($files | Where-Object { $_[0] -like '*.exe' -and $_[0] -notlike '*rustward-service.exe' }).Count -ge 1
+            $hasCtl = @($ctl | Where-Object { $_[0] -eq 'RustWardService' }).Count -ge 1
+            $hasEvt = @($reg | Where-Object { $_[0] -like '*EventLog\Application\RustWard*' }).Count -ge 1
+            $acl = @()
+            try { $acl = Get-MsiRow $msi.FullName 'SELECT `SDDLText` FROM `MsiLockPermissionsEx`' } catch { $null = $_ }
+            $checks += "ServiceInstall RustWardService/LocalSystem/'service': $hasSvc"
+            $checks += "File rustward-service.exe: $hasExe; masaüstü uygulaması: $hasApp"
+            $checks += "ServiceControl: $hasCtl; EventLog kaynağı (Registry): $hasEvt"
+            $checks += "MsiLockPermissionsEx (veri klasörü ACL): $(@($acl | ForEach-Object { $_[0] }) -join '; ')"
+            $msiOk = $hasSvc -and $hasExe -and $hasApp -and $hasCtl -and $hasEvt
+        }
+        catch { $checks += "MSI tabloları okunamadı: $_" }
+        foreach ($c in $checks) { Write-Info "  $c" }
         $inst = Join-Path $Dist 'installer'
         New-Item -ItemType Directory -Force -Path $inst | Out-Null
         Copy-Item -LiteralPath $msi.FullName -Destination $inst -Force
         $mh = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi.FullName).Hash.ToLowerInvariant()
-        $msiNote = "MSI (yalnızca arayüz, hizmet içermez, KURULMADI): $inst\$($msi.Name)  SHA-256 $mh"
+        if ($msiOk) {
+            $msiNote = "MSI (TAM: uygulama + Windows hizmeti + Olay Günlüğü kaynağı + WebView2; KURULMADI): $inst\$($msi.Name)  boyut $('{0:N0}' -f $msi.Length) bayt  SHA-256 $mh"
+        }
+        else {
+            $msiNote = "MSI oluşturuldu ancak hizmet bileşeni doğrulanamadı: $inst\$($msi.Name)  SHA-256 $mh"
+        }
+        Add-Content -Path (Join-Path $Dist 'BUILD-INFO.txt') -Value ($checks + $msiNote) -Encoding UTF8
     }
     else {
         $msiNote = "MSI oluşturulamadı (çıkış kodu $code). EXE dosyaları geçerlidir. Günlük: $Logs\tauri-build-msi.log"
+        Add-Content -Path (Join-Path $Dist 'BUILD-INFO.txt') -Value $msiNote -Encoding UTF8
     }
-    Add-Content -Path (Join-Path $Dist 'BUILD-INFO.txt') -Value $msiNote -Encoding UTF8
 }
 Write-Info $msiNote
 
@@ -299,5 +405,10 @@ Write-Host ''
 Write-Host 'TAMAMLANDI.' -ForegroundColor Green
 Write-Info "Uygulama: $Dist\RustWard.exe  (başlatmak için: $Dist\START-RUSTWARD.cmd)"
 if (-not $SkipPreview) { Write-Info "Önizleme: $Dist\RustWard-Onizleme.exe  (başlatmak için: $Dist\START-RUSTWARD-ONIZLEME.cmd)" }
+Write-Info "Hizmet: $Dist\service\rustward-service.exe (kurulmadı)"
 Write-Info 'USB koruması henüz etkinleştirilmemiştir. Windows ayarlarında değişiklik yapılmadı.'
+if (-not $msiOk) {
+    Write-Host 'UYARI: EXE dosyaları hazır, ancak tam MSI oluşturulamadı veya doğrulanamadı.' -ForegroundColor Yellow
+    exit 3
+}
 exit 0

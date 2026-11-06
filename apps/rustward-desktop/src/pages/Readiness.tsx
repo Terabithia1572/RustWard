@@ -111,7 +111,8 @@ function InspectionCard({ v }: { v: EnforcementReadinessView }) {
           </dl>
           <div>
             <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t("readiness.lists")}</h3>
-            <table className="w-full text-left text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-sm">
               <thead className="text-xs text-slate-500">
                 <tr>
                   <th className="py-1 pr-2">{t("readiness.col.list")}</th>
@@ -133,6 +134,7 @@ function InspectionCard({ v }: { v: EnforcementReadinessView }) {
                 ))}
               </tbody>
             </table>
+            </div>
             <p className="mt-1 text-xs text-slate-500">{t("readiness.layoutUnresolved")}</p>
           </div>
           <div className="text-sm">

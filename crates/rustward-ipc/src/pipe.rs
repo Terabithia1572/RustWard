@@ -48,8 +48,8 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY,
-    ERROR_PIPE_CONNECTED, GENERIC_READ, GetLastError, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
-    LocalFree,
+    ERROR_PIPE_CONNECTED, ERROR_SERVICE_DOES_NOT_EXIST, GENERIC_READ, GetLastError, HANDLE, HLOCAL,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -73,7 +73,8 @@ use windows_sys::Win32::System::Pipes::{
 };
 use windows_sys::Win32::System::Services::{
     CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_HANDLE,
-    SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_STATUS_PROCESS,
+    SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
+    SERVICE_START_PENDING, SERVICE_STATUS_PROCESS, SERVICE_STOP_PENDING, SERVICE_STOPPED,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -184,8 +185,35 @@ impl Drop for ScHandle {
     }
 }
 
-/// Process id of a running service, from the SCM (`None` if not running).
-fn service_process_id(service: &str) -> Result<Option<u32>, TransportError> {
+/// What the Service Control Manager reports about a service. Read-only:
+/// `SC_MANAGER_CONNECT` + `SERVICE_QUERY_STATUS`, which every authenticated
+/// user has. Used to verify the pipe server (F-16) and to tell the user *why*
+/// the service is unreachable (not installed, stopped, starting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceState {
+    /// No service with this name is registered.
+    NotInstalled,
+    /// Registered but stopped.
+    Stopped,
+    /// Starting.
+    StartPending,
+    /// Stopping.
+    StopPending,
+    /// Running in process `pid`.
+    Running {
+        /// Service process id.
+        pid: u32,
+    },
+    /// Any other SCM state (paused, continue/pause pending).
+    Other(u32),
+}
+
+/// Query the SCM for `service`.
+///
+/// # Errors
+/// When the SCM cannot be opened or queried for a reason other than the
+/// service not existing.
+pub fn service_state(service: &str) -> Result<ServiceState, TransportError> {
     // SAFETY: null machine and database names select the local active
     // database; SC_MANAGER_CONNECT is granted to authenticated users.
     let scm = ScHandle(unsafe { OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT) });
@@ -196,6 +224,9 @@ fn service_process_id(service: &str) -> Result<Option<u32>, TransportError> {
     // SAFETY: `scm` is a live SCM handle; `name` is NUL-terminated UTF-16.
     let svc = ScHandle(unsafe { OpenServiceW(scm.0, name.as_ptr(), SERVICE_QUERY_STATUS) });
     if svc.0.is_null() {
+        if last_error() == ERROR_SERVICE_DOES_NOT_EXIST {
+            return Ok(ServiceState::NotInstalled);
+        }
         return Err(os_err("OpenServiceW"));
     }
     // SAFETY: SERVICE_STATUS_PROCESS is plain data; all-zero is valid.
@@ -215,7 +246,23 @@ fn service_process_id(service: &str) -> Result<Option<u32>, TransportError> {
     if ok == 0 {
         return Err(os_err("QueryServiceStatusEx"));
     }
-    Ok((status.dwProcessId != 0).then_some(status.dwProcessId))
+    Ok(match status.dwCurrentState {
+        SERVICE_STOPPED => ServiceState::Stopped,
+        SERVICE_START_PENDING => ServiceState::StartPending,
+        SERVICE_STOP_PENDING => ServiceState::StopPending,
+        SERVICE_RUNNING if status.dwProcessId != 0 => ServiceState::Running {
+            pid: status.dwProcessId,
+        },
+        other => ServiceState::Other(other),
+    })
+}
+
+/// Process id of a running service, from the SCM (`None` if not running).
+fn service_process_id(service: &str) -> Result<Option<u32>, TransportError> {
+    Ok(match service_state(service)? {
+        ServiceState::Running { pid } => Some(pid),
+        _ => None,
+    })
 }
 
 /// Reverts impersonation on drop. If reverting fails the thread would keep

@@ -155,7 +155,7 @@ export function DevicesPage() {
                           {deviceName(d)}
                           {d.synthetic && <Badge tone="synthetic">{t("badge.synthetic")}</Badge>}
                         </div>
-                        <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{d.display_id}</div>
+                        <div className="break-all font-mono text-[11px] text-slate-500 dark:text-slate-400">{d.display_id}</div>
                       </td>
                       <td className="px-3 py-2">
                         {tx("category", d.category)}
@@ -164,7 +164,7 @@ export function DevicesPage() {
                       <td className="px-3 py-2">
                         {d.matched_brand ?? d.vendor ?? "—"}
                       </td>
-                      <td className="px-3 py-2 font-mono text-[11px]">
+                      <td className="break-all px-3 py-2 font-mono text-[11px]">
                         {d.vendor_level_id && <div>{d.vendor_level_id}</div>}
                         {d.usb_vid_pid && <div className="text-slate-500">VID:PID {d.usb_vid_pid}</div>}
                       </td>

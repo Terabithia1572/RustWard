@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { Api } from "./api/client";
 import type { SettingsView } from "./api/types";
+import { ConnectionBar } from "./components/ConnectionBar";
 import { DenialNotifier } from "./components/Notifier";
 import { I18nProvider, translate, useI18n, type Lang } from "./i18n";
 import type { TKey } from "./i18n/tr";
@@ -109,6 +110,7 @@ function Shell({
           {translate("tr", "banner.notActivated")}
           {lang !== "tr" && <span className="font-normal opacity-90">({t("banner.notActivated")})</span>}
         </div>
+        <ConnectionBar />
         <div className="mx-auto max-w-[1400px] px-6 py-5">
           {page === "dashboard" && <DashboardPage onNavigate={setPage} />}
           {page === "devices" && <DevicesPage />}

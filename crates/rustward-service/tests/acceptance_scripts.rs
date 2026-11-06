@@ -215,9 +215,19 @@ fn build_script_builds_without_installing_or_elevating() {
     assert!(text.contains("npx tauri build --no-bundle"));
     assert!(text.contains("npx tauri build --debug --no-bundle --features gui-subsystem"));
     assert!(
-        text.contains("Test-PeGuiX64"),
+        text.contains("Test-PeX64"),
         "outputs are verified before copying"
     );
+    assert!(
+        text.contains("Test-MessageTable"),
+        "the service must carry its Event Log message table"
+    );
+    assert!(
+        text.contains("tauri.acceptance.conf.json"),
+        "the MSI includes the service fragment"
+    );
+    // The MSI is only read (Windows Installer database, mode 0), never installed.
+    assert!(text.contains("@($MsiPath, 0)"));
     let launcher =
         std::fs::read_to_string(scripts_dir().join("../BUILD-RUSTWARD.cmd")).expect("launcher");
     assert!(launcher.contains("scripts\\windows\\Build-RustWard.ps1"));

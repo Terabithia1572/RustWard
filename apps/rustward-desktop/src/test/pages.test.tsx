@@ -84,6 +84,38 @@ describe("Navigation and mandatory warning", () => {
   });
 });
 
+describe("Service connection bar", () => {
+  const down = (message: string) => ({ call: () => Promise.reject({ code: "unavailable", message }) });
+
+  it("explains a service that is not installed, in Turkish, and claims no protection", async () => {
+    render(<App api={new Api(down("[service_not_installed] the RustWard service (RustWardService) is not installed"))} initialPage="devices" />);
+    const bar = await screen.findByTestId("connection-bar");
+    await waitFor(() => expect(bar).toHaveAttribute("data-state", "disconnected"));
+    expect(bar).toHaveTextContent("Hizmet bağlantısı yok.");
+    expect(bar).toHaveTextContent("RustWard hizmeti bu bilgisayarda kurulu değil.");
+    expect(bar).toHaveTextContent("koruma da yok");
+    expect(screen.getByTestId("not-activated-warning")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/koruma etkin(?! değil)|USB engellenmiştir/i);
+  });
+
+  it("distinguishes a stopped service and a missing administrator token", async () => {
+    render(<App api={new Api(down("[service_stopped] the RustWard service (RustWardService) is installed but stopped"))} initialPage="dashboard" />);
+    expect(await screen.findAllByText("RustWard hizmeti kurulu ancak durdurulmuş.")).not.toHaveLength(0);
+  });
+
+  it("reports a rejected service identity as a security refusal", async () => {
+    render(<App api={new Api(down("service identity could not be verified: pipe served by process 42"))} initialPage="dashboard" />);
+    expect(await screen.findAllByText("Hizmetin kimliği doğrulanamadı; bağlantı güvenlik nedeniyle reddedildi.")).not.toHaveLength(0);
+  });
+
+  it("labels the development backend and never equates a connection with protection", async () => {
+    setup("dashboard");
+    const bar = await screen.findByTestId("connection-bar");
+    await waitFor(() => expect(bar).toHaveAttribute("data-state", "connected"));
+    expect(bar).toHaveTextContent("Bağlantı, USB korumasının etkin olduğu anlamına gelmez.");
+  });
+});
+
 describe("Service unavailable (stopped or not installed)", () => {
   it("never reads a missing service as protection: banner stays, error is explicit", async () => {
     const down = {
