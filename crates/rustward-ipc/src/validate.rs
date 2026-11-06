@@ -167,13 +167,20 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
                 Err(bad("workstation_id must match [A-Za-z0-9_-]{1,64}"))
             }
         }
-        Request::RestoreBackup { file_name } => {
+        Request::PrepareRestore { file_name } => {
             if parse_backup_file_name(file_name).is_some() {
                 Ok(())
             } else {
                 Err(bad(
                     "file_name must be a RustWard backup file name, not a path",
                 ))
+            }
+        }
+        Request::ApplyRestore { restore_id, .. } => {
+            if restore_id.len() == 32 && restore_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Ok(())
+            } else {
+                Err(bad("restore_id must be 32 hex characters"))
             }
         }
     }
@@ -236,7 +243,7 @@ mod tests {
         ] {
             assert!(parse_backup_file_name(bad).is_none(), "{bad:?}");
             assert!(
-                validate_request(&Request::RestoreBackup {
+                validate_request(&Request::PrepareRestore {
                     file_name: bad.into()
                 })
                 .is_err()

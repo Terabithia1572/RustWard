@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Archive, Eraser, History, Monitor, ShieldCheck } from "lucide-react";
-import type { BackupView, SettingsView } from "../api/types";
+import type { BackupView, RestorePreviewView, SettingsView } from "../api/types";
 import { Badge, Button, Card, Dialog, Empty, ErrorNotice, Field, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
@@ -76,7 +76,7 @@ function BackupsCard() {
   const list = useResource((a) => a.backups(), `backups-${tick}`);
   const create = useAction();
   const restore = useAction();
-  const [confirm, setConfirm] = useState<BackupView | null>(null);
+  const [preview, setPreview] = useState<RestorePreviewView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const doCreate = async () => {
@@ -86,11 +86,18 @@ function BackupsCard() {
       setTick((n) => n + 1);
     }
   };
-  const doRestore = async (b: BackupView) => {
-    const msg = await restore.run(() => api.restoreBackup(b.file_name));
-    setConfirm(null);
-    if (msg !== undefined) {
-      setNotice(`${t("settings.restoreDone")} ${msg}`);
+  // Step 1: the service verifies the backup and returns a preview; nothing changes.
+  const doPrepare = async (b: BackupView) => {
+    setNotice(null);
+    const p = await restore.run(() => api.prepareRestore(b.file_name));
+    if (p) setPreview(p);
+  };
+  // Step 2: apply the previewed backup as a new policy version.
+  const doApply = async (p: RestorePreviewView) => {
+    const res = await restore.run(() => api.applyRestore(p.restore_id, p.current_policy_version));
+    setPreview(null);
+    if (res) {
+      setNotice(`${t("settings.restoreDone")} ${res.summary}`);
       setTick((n) => n + 1);
     }
   };
@@ -117,41 +124,73 @@ function BackupsCard() {
                 <div className="min-w-0 flex-1" title={b.file_name}>
                   <div className="truncate font-mono text-xs">{b.file_name}</div>
                   <div className="text-xs text-slate-500">
-                    {formatTime(b.created_ms)} · {t("settings.size", { kb: Math.max(1, Math.round(b.bytes / 1024)) })}
+                    {formatTime(b.created_ms)} · {t("settings.backupPolicy", { version: b.policy_version })} ·{" "}
+                    {t("settings.size", { kb: Math.max(1, Math.round(b.bytes / 1024)) })}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Badge tone={b.kind === "pre_restore" ? "warning" : "neutral"}>
                     {b.kind === "pre_restore" ? t("settings.backupKind.pre_restore") : t("settings.backupKind.manual")}
                   </Badge>
-                  <Button
-                    variant="ghost"
-                    icon={<History className="size-4" aria-hidden />}
-                    onClick={() => setConfirm(b)}
-                  >
-                    {t("settings.restore")}
-                  </Button>
+                  {b.file_present ? (
+                    <Button
+                      variant="ghost"
+                      icon={<History className="size-4" aria-hidden />}
+                      busy={restore.busy}
+                      onClick={() => void doPrepare(b)}
+                    >
+                      {t("settings.restore")}
+                    </Button>
+                  ) : (
+                    <Badge tone="danger">{t("settings.backupMissing")}</Badge>
+                  )}
                 </div>
               </li>
             ))}
           </ul>
         )}
       </div>
-      {confirm && (
+      {preview && (
         <Dialog
           open
           title={t("settings.restoreTitle")}
-          onClose={() => setConfirm(null)}
+          onClose={() => setPreview(null)}
           footer={
             <>
-              <Button onClick={() => setConfirm(null)}>{t("common.cancel")}</Button>
-              <Button variant="danger" busy={restore.busy} onClick={() => void doRestore(confirm)}>
-                {t("settings.restore")}
+              <Button onClick={() => setPreview(null)}>{t("common.cancel")}</Button>
+              <Button variant="danger" busy={restore.busy} onClick={() => void doApply(preview)}>
+                {t("settings.restoreApply")}
               </Button>
             </>
           }
         >
-          <p className="text-sm">{t("settings.restoreConfirm", { file: confirm.file_name })}</p>
+          <div className="space-y-3 text-sm">
+            <p>
+              {t("settings.restoreConfirm", {
+                to: preview.resulting_policy_version,
+                from: preview.current_policy_version,
+                backup: preview.backup_policy_version,
+              })}
+            </p>
+            <div>
+              <div className="font-mono text-xs">{preview.file_name}</div>
+              <div className="break-all font-mono text-[11px] text-slate-500">
+                {t("settings.restoreHash")}: {preview.sha256}
+              </div>
+            </div>
+            <div>
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t("settings.restoreChanges")}</h3>
+              {preview.changes.length === 0 ? (
+                <p className="text-slate-500">{t("settings.restoreNoChanges")}</p>
+              ) : (
+                <ul className="list-disc space-y-0.5 pl-5" aria-label={t("settings.restoreChanges")}>
+                  {preview.changes.map((c) => (
+                    <li key={c} className="font-mono text-xs">{c}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         </Dialog>
       )}
     </Card>

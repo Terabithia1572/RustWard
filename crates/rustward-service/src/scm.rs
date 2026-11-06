@@ -12,6 +12,7 @@ use rustward_app::BackendKind;
 use rustward_storage::Severity;
 use rustward_windows::device_notify::DeviceChangeSubscription;
 use rustward_windows::event_log::WindowsEventLog;
+use rustward_windows::eventlog_map::{EventLevel, event_id, render_message};
 use rustward_windows::service_host::{self, ServiceContext};
 
 use crate::event_mirror::EventLogMirror;
@@ -23,6 +24,24 @@ pub fn run_dispatcher() -> Result<(), String> {
 }
 
 fn run_service(ctx: ServiceContext) -> Result<(), String> {
+    let result = run_service_inner(ctx);
+    if let Err(e) = &result {
+        // The SQLite audit log may be the thing that failed, so report the
+        // start/run failure to the Event Log directly (best effort). Without
+        // this a service that cannot open its database stops silently.
+        if let Ok(log) = WindowsEventLog::open() {
+            let text = render_message("service_start_failed", e, false, "unknown", None, 0);
+            let _ = log.report(
+                EventLevel::Critical,
+                event_id("service_start_failed"),
+                &text,
+            );
+        }
+    }
+    result
+}
+
+fn run_service_inner(ctx: ServiceContext) -> Result<(), String> {
     let paths = ServicePaths::production().ok_or("ProgramData is not set")?;
     let (runtime, app) =
         crate::build_runtime(&paths, false, BackendKind::WindowsService, "program_data")?;

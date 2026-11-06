@@ -33,6 +33,16 @@ pub trait Handler {
         _error: &IpcError,
     ) {
     }
+
+    /// Called when a request fails server-side validation (before
+    /// authorization and `handle`). Must not fail or block for long.
+    fn validation_failed(&self, _request: &Request, _identity: &ClientIdentity, _error: &IpcError) {
+    }
+
+    /// Called when the transport could not establish who sent a request
+    /// (e.g. the Windows token could not be read). The request is refused
+    /// with `Unauthorized` before validation, authorization and `handle`.
+    fn identification_failed(&self, _request: &Request, _reason: &str) {}
 }
 
 /// Client-side errors.
@@ -129,6 +139,7 @@ pub fn process(
 ) -> ResponseEnvelope {
     let result = if env.version == PROTOCOL_VERSION {
         validate_request(&env.request)
+            .inspect_err(|e| handler.validation_failed(&env.request, identity, e))
             .and_then(|()| {
                 authorize(&env.request, identity).inspect_err(|e| {
                     handler.authorization_failed(&env.request, identity, e);
@@ -162,13 +173,32 @@ pub enum SessionEnd {
     ProtocolViolation(String),
     /// Transport error.
     TransportError(String),
+    /// The caller of a request could not be identified; the request was
+    /// refused and the connection closed.
+    IdentificationFailed(String),
 }
 
-/// Serve one connection until it ends. The identity is fixed for the whole
-/// connection (established by the transport before this call).
+/// Serve one connection with a fixed identity (mock transports, in-process
+/// backends and tests).
 pub fn serve_connection<T: Transport>(
     transport: &mut T,
     identity: &ClientIdentity,
+    handler: &dyn Handler,
+    idle_timeout: Duration,
+) -> SessionEnd {
+    serve_connection_identified(transport, &|_| Ok(identity.clone()), handler, idle_timeout)
+}
+
+/// Serve one connection, identifying the caller **for every request**,
+/// after its frame has been read. Windows impersonates "the security context
+/// of the last message read from the pipe", so identity is only taken once
+/// a request has actually been read. If identification fails, that request
+/// is answered with `Unauthorized`, reported through
+/// [`Handler::identification_failed`], and the connection is closed: no
+/// request is ever processed without an established identity.
+pub fn serve_connection_identified<T: Transport>(
+    transport: &mut T,
+    identify: &dyn Fn(&T) -> Result<ClientIdentity, TransportError>,
     handler: &dyn Handler,
     idle_timeout: Duration,
 ) -> SessionEnd {
@@ -196,7 +226,26 @@ pub fn serve_connection<T: Transport>(
                 return SessionEnd::ProtocolViolation(e.to_string());
             }
         };
-        let reply = process(&env, identity, handler);
+        let identity = match identify(transport) {
+            Ok(identity) => identity,
+            Err(e) => {
+                let reason = e.to_string();
+                handler.identification_failed(&env.request, &reason);
+                let reply = ResponseEnvelope {
+                    version: PROTOCOL_VERSION,
+                    request_id: env.request_id,
+                    result: Err(IpcError::new(
+                        ErrorCode::Unauthorized,
+                        "the caller could not be identified",
+                    )),
+                };
+                if let Ok(f) = frame::encode(&reply) {
+                    let _ = transport.send(&f);
+                }
+                return SessionEnd::IdentificationFailed(reason);
+            }
+        };
+        let reply = process(&env, &identity, handler);
         let encoded = frame::encode(&reply).or_else(|e| {
             frame::encode(&ResponseEnvelope {
                 version: PROTOCOL_VERSION,

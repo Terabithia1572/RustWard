@@ -37,6 +37,15 @@
         </ServiceInstall>
         <ServiceControl Id="RustWardServiceControl" Name="RustWardService"
                         Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        <!-- Event Log source. rustward-service.exe embeds the MESSAGETABLE
+             generated from rustward-windows/src/eventlog_map.rs (build.rs), so
+             Event Viewer formats every RustWard event ID. Removed with the
+             component on uninstall. Registered ONLY by this installer, never
+             by RustWard at runtime. -->
+        <util:EventSource Log="Application" Name="RustWard"
+                          EventMessageFile="[#RustWardServiceExe]"
+                          SupportsErrors="yes" SupportsWarnings="yes"
+                          SupportsInformationals="yes" />
       </Component>
     </DirectoryRef>
 

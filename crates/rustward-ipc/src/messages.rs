@@ -171,13 +171,23 @@ pub enum Request {
         /// Optimistic concurrency.
         expected_policy_version: u64,
     },
-    /// List backups in the service's backup directory.
+    /// List registered backups.
     ListBackups,
-    /// Restore a backup by file name (no paths). The current database is
-    /// first saved as a pre-restore backup, so a restore can be undone.
-    RestoreBackup {
+    /// Step 1 of a restore: verify a registered backup (name, registry,
+    /// SHA-256, integrity, schema, policy) and return a preview. Changes
+    /// nothing except the audit log.
+    PrepareRestore {
         /// `rustward-backup-<digits>.db` or `rustward-pre-restore-<digits>.db`.
         file_name: String,
+    },
+    /// Step 2: apply the prepared backup as a NEW policy version. The
+    /// current state is saved as a pre-restore backup first. Single use,
+    /// bound to the administrator who prepared it, expires.
+    ApplyRestore {
+        /// Id returned by `PrepareRestore` (32 hex characters).
+        restore_id: String,
+        /// Optimistic concurrency: the active version shown in the preview.
+        expected_policy_version: u64,
     },
 }
 
@@ -220,7 +230,8 @@ impl Request {
             | Self::LoadSyntheticInventory
             | Self::SetWorkstationId { .. }
             | Self::ListBackups
-            | Self::RestoreBackup { .. } => AccessLevel::Administrator,
+            | Self::PrepareRestore { .. }
+            | Self::ApplyRestore { .. } => AccessLevel::Administrator,
         }
     }
 
@@ -603,19 +614,60 @@ pub enum ResponseBody {
     },
     /// Backups, newest first.
     Backups(Vec<BackupView>),
+    /// Restore preview (nothing applied yet).
+    RestorePreview(RestorePreviewView),
 }
 
-/// A database backup file.
+/// A registered database backup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupView {
     /// File name inside the backup directory.
     pub file_name: String,
     /// Size in bytes.
     pub bytes: u64,
-    /// Creation time (from the file name), UTC ms.
+    /// Creation time, UTC ms.
     pub created_ms: i64,
     /// `manual` or `pre_restore`.
     pub kind: String,
+    /// Policy version captured in the backup.
+    #[serde(default)]
+    pub policy_version: u64,
+    /// SHA-256 recorded at creation.
+    #[serde(default)]
+    pub sha256: String,
+    /// Who created it.
+    #[serde(default)]
+    pub actor: String,
+    /// The file is present in the backup directory.
+    #[serde(default)]
+    pub file_present: bool,
+}
+
+/// Result of `PrepareRestore`: what applying would change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestorePreviewView {
+    /// Pass to `ApplyRestore`.
+    pub restore_id: String,
+    /// Backup file.
+    pub file_name: String,
+    /// Verified SHA-256.
+    pub sha256: String,
+    /// Backup creation time.
+    pub backup_created_ms: i64,
+    /// Policy version inside the backup.
+    pub backup_policy_version: u64,
+    /// Active policy version now (pass as `expected_policy_version`).
+    pub current_policy_version: u64,
+    /// Version the restored content would get.
+    pub resulting_policy_version: u64,
+    /// Workstation id inside the backup.
+    pub backup_workstation_id: String,
+    /// Human-readable differences (English; empty = identical content).
+    pub changes: Vec<String>,
+    /// Preview expiry, UTC ms.
+    pub expires_ms: i64,
+    /// Statement of what applying does and does not do.
+    pub notice: String,
 }
 
 /// Windows Event Log mirroring status.

@@ -37,14 +37,15 @@ use rustward_ipc::messages::{
     AdapterView, BackupView, DashboardView, DatabaseHealthView, DeviceView, DiagnosticsView,
     EnforcementView, EventLogView, EventQuery, EventView, ExplanationView, ExportFormat,
     ExportView, IdentifierView, ManufacturerView, ManufacturersView, MutationView,
-    PolicyChangeView, PolicyHealthView, ServiceStatusView, SettingsView, SimulationView,
+    PolicyChangeView, PolicyHealthView, RestorePreviewView, ServiceStatusView, SettingsView,
+    SimulationView,
 };
 use rustward_ipc::rpc::Handler;
-use rustward_ipc::validate::parse_backup_file_name;
 use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, Request, ResponseBody};
 use rustward_storage::{
-    AppSettings, ChainStatus, Clock, DeviceRow, EventFilter, EventObserver, Language, NewEvent,
-    SecurityEvent, Severity, StorageError, Store, Theme, device_key, mask_instance_id,
+    AppSettings, BackupKind, BackupRecord, ChainStatus, Clock, DeviceRow, EventFilter,
+    EventObserver, Language, NewEvent, RestoreCandidate, SecurityEvent, Severity, StorageError,
+    Store, Theme, device_key, mask_instance_id, sha256_hex,
 };
 
 pub use inventory::{EmptyInventory, FixtureInventory, InventorySource, LiveInventory};
@@ -107,7 +108,20 @@ struct Inner {
     auth_window_start_ms: i64,
     auth_recorded_in_window: u32,
     auth_suppressed: u64,
+    staged_restore: Option<StagedRestore>,
+    restore_counter: u64,
 }
+
+/// A verified backup waiting for `ApplyRestore`.
+struct StagedRestore {
+    restore_id: String,
+    account: String,
+    created_ms: i64,
+    candidate: RestoreCandidate,
+}
+
+/// A prepared restore must be applied within this time.
+pub const RESTORE_PREVIEW_TTL_MS: i64 = 10 * 60 * 1000;
 
 /// At most this many authorization failures are written to the audit log
 /// per [`AUTH_AUDIT_WINDOW_MS`]; further attempts are counted and reported
@@ -148,7 +162,16 @@ fn storage_err(e: StorageError) -> IpcError {
         ),
         StorageError::CorruptPolicy { .. } => IpcError::new(
             ErrorCode::Unavailable,
-            format!("{e}; policy changes are refused until the database is restored"),
+            format!(
+                "{e}; policy changes are refused until the database is repaired (docs/RECOVERY-PLAN.md)"
+            ),
+        ),
+        StorageError::BackupRejected(r) => IpcError::new(
+            match r {
+                rustward_storage::BackupRejection::Missing => ErrorCode::NotFound,
+                _ => ErrorCode::ValidationFailed,
+            },
+            format!("backup rejected ({}): {r}", r.code()),
         ),
         other => internal(other),
     }
@@ -455,6 +478,8 @@ impl AppService {
                 auth_window_start_ms: started_ms,
                 auth_recorded_in_window: 0,
                 auth_suppressed: 0,
+                staged_restore: None,
+                restore_counter: 0,
             }),
             clock,
             config,
@@ -525,15 +550,16 @@ impl AppService {
         g.store.set_event_observer(observer).map_err(storage_err)
     }
 
-    fn record_authorization_failure(
+    /// Write a rate-limited refusal event (authorization failures, rejected
+    /// restore attempts): at most [`AUTH_AUDIT_LIMIT`] per window; the rest
+    /// are counted and reported with the next recorded one.
+    fn record_refusal(
         &self,
-        request: &Request,
-        identity: &ClientIdentity,
-        error: &IpcError,
+        g: &mut Inner,
+        kind: &str,
+        message: String,
+        mut details: serde_json::Value,
     ) {
-        let Ok(mut g) = self.lock() else {
-            return;
-        };
         let now = self.clock.now_ms();
         if now.saturating_sub(g.auth_window_start_ms) >= AUTH_AUDIT_WINDOW_MS {
             g.auth_window_start_ms = now;
@@ -545,34 +571,75 @@ impl AppService {
         }
         g.auth_recorded_in_window += 1;
         let suppressed = std::mem::take(&mut g.auth_suppressed);
-        let mut message = format!(
-            "{} refused for {}: {}",
-            request.name(),
-            identity.actor(),
-            error.message
-        );
+        let mut message = message;
         if suppressed > 0 {
             message.push_str(&format!(
-                " ({suppressed} earlier attempts not recorded individually)"
+                " ({suppressed} earlier refusals not recorded individually)"
             ));
+        }
+        if let Some(obj) = details.as_object_mut() {
+            obj.insert("suppressed_before".into(), suppressed.into());
         }
         let _ = g.store.append_event(&NewEvent {
             severity: Severity::Warning,
-            kind: "authorization_failed".into(),
+            kind: kind.into(),
             device_key: None,
             message,
             simulated: false,
             enforcement_state: self.enforcement_state_code().into(),
             policy_version: None,
-            details: serde_json::json!({
-                "request": request.name(),
-                "account": identity.account,
-                "is_administrator": identity.is_administrator,
-                "elevated": identity.elevated,
-                "channel": identity.channel_max_access,
-                "suppressed_before": suppressed,
-            }),
+            details,
         });
+    }
+
+    fn record_authorization_failure(
+        &self,
+        request: &Request,
+        identity: &ClientIdentity,
+        error: &IpcError,
+    ) {
+        let Ok(mut g) = self.lock() else {
+            return;
+        };
+        let message = format!(
+            "{} refused for {}: {}",
+            request.name(),
+            identity.actor(),
+            error.message
+        );
+        let details = serde_json::json!({
+            "request": request.name(),
+            "account": identity.account,
+            "is_administrator": identity.is_administrator,
+            "elevated": identity.elevated,
+            "channel": identity.channel_max_access,
+        });
+        self.record_refusal(&mut g, "authorization_failed", message, details);
+    }
+
+    /// Record a failed restore attempt (any stage).
+    fn record_restore_failure(
+        &self,
+        g: &mut Inner,
+        identity: &ClientIdentity,
+        stage: &str,
+        reason: &str,
+        target: &str,
+        error: &IpcError,
+    ) {
+        let message = format!(
+            "restore {stage} refused for {} ({target}): {reason}",
+            identity.actor()
+        );
+        let details = serde_json::json!({
+            "stage": stage,
+            "reason": reason,
+            "target": target,
+            "account": identity.account,
+            "error_code": error.code,
+            "error": error.message,
+        });
+        self.record_refusal(g, "restore_failed", message, details);
     }
 
     fn backup_dir(&self) -> Result<PathBuf, IpcError> {
@@ -586,127 +653,176 @@ impl AppService {
 
     fn list_backups(&self) -> Result<Vec<BackupView>, IpcError> {
         let dir = self.backup_dir()?;
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Ok(Vec::new());
-        };
-        let mut out: Vec<BackupView> = entries
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                let (kind, created_ms) = parse_backup_file_name(&name)?;
-                let meta = e.metadata().ok().filter(std::fs::Metadata::is_file)?;
-                Some(BackupView {
-                    file_name: name,
-                    bytes: meta.len(),
-                    created_ms,
-                    kind: kind.into(),
-                })
-            })
-            .collect();
-        out.sort_by(|a, b| {
-            b.created_ms
-                .cmp(&a.created_ms)
-                .then(b.file_name.cmp(&a.file_name))
-        });
-        Ok(out)
+        let g = self.lock()?;
+        let records = g.store.list_backups().map_err(storage_err)?;
+        Ok(records.into_iter().map(|r| backup_view(&dir, r)).collect())
     }
 
-    /// `<prefix><ms>.db` that does not exist yet (the timestamp is bumped
-    /// on collision; backups are never overwritten).
-    fn unique_backup_name(&self, dir: &std::path::Path, prefix: &str) -> Result<String, IpcError> {
-        let now = self.clock.now_ms();
-        (0..1000)
-            .map(|i| format!("{prefix}{}.db", now.saturating_add(i)))
-            .find(|n| !dir.join(n).exists())
-            .ok_or_else(|| {
-                IpcError::new(
-                    ErrorCode::Conflict,
-                    "could not choose a free backup file name",
-                )
-            })
-    }
-
-    fn backup_event(g: &mut Inner, name: &str, kind: &str, actor: &str) -> Result<(), IpcError> {
-        g.store
-            .append_event(&NewEvent {
-                severity: Severity::Info,
-                kind: "backup_created".into(),
-                device_key: None,
-                message: format!("database backup {name} created by {actor}"),
-                simulated: false,
-                enforcement_state: "n/a".into(),
-                policy_version: None,
-                details: serde_json::json!({ "file_name": name, "kind": kind }),
-            })
-            .map(|_| ())
-            .map_err(storage_err)
-    }
-
-    fn restore_backup(
+    fn prepare_restore(
         &self,
         file_name: &str,
         identity: &ClientIdentity,
     ) -> Result<ResponseBody, IpcError> {
-        if parse_backup_file_name(file_name).is_none() {
-            return Err(IpcError::new(
-                ErrorCode::InvalidRequest,
-                "not a RustWard backup file name",
-            ));
-        }
         let dir = self.backup_dir()?;
-        let source = dir.join(file_name);
-        if !source.is_file() {
-            return Err(IpcError::new(
-                ErrorCode::NotFound,
-                format!("backup {file_name} not found"),
-            ));
-        }
-        let actor = identity.actor();
         let mut g = self.lock()?;
-        // Keep the current state so the restore itself can be undone.
-        let safety = self.unique_backup_name(&dir, "rustward-pre-restore-")?;
-        g.store.backup_to(&dir.join(&safety)).map_err(storage_err)?;
-        Self::backup_event(&mut g, &safety, "pre_restore", &actor)?;
-        // Restoring replaces the audit table too. Record which history was
-        // replaced and where it is kept, so the restore cannot silently
-        // erase audit records.
-        let head = g
-            .store
-            .list_events(&EventFilter {
-                limit: Some(1),
-                ..EventFilter::default()
-            })
-            .map_err(storage_err)?
-            .into_iter()
-            .next();
-        g.store.restore_from(&source, &actor).map_err(storage_err)?;
+        let candidate = match g.store.inspect_backup(&dir, file_name) {
+            Ok(c) => c,
+            Err(e) => {
+                let reason = match &e {
+                    StorageError::BackupRejected(r) => r.code().to_owned(),
+                    other => format!("error: {other}"),
+                };
+                let err = storage_err(e);
+                self.record_restore_failure(&mut g, identity, "prepare", &reason, file_name, &err);
+                return Err(err);
+            }
+        };
+        let current = Self::validated(&g.store)?;
+        let now = self.clock.now_ms();
+        g.restore_counter = g.restore_counter.wrapping_add(1);
+        let restore_id: String = sha256_hex(
+            format!(
+                "{}|{now}|{}|{}|{}",
+                candidate.record.sha256,
+                g.restore_counter,
+                identity.account,
+                std::process::id()
+            )
+            .as_bytes(),
+        )
+        .chars()
+        .take(32)
+        .collect();
+        let current_settings = g.store.settings().map_err(storage_err)?;
+        let changes = restore_changes(&current.state, &current_settings, &candidate);
+        let preview = RestorePreviewView {
+            restore_id: restore_id.clone(),
+            file_name: candidate.record.file_name.clone(),
+            sha256: candidate.record.sha256.clone(),
+            backup_created_ms: candidate.record.created_ms,
+            backup_policy_version: candidate.record.policy_version,
+            current_policy_version: current.version,
+            resulting_policy_version: current.version.saturating_add(1),
+            backup_workstation_id: candidate.state.policy.workstation_id.clone(),
+            changes,
+            expires_ms: now.saturating_add(RESTORE_PREVIEW_TTL_MS),
+            notice: format!(
+                "Nothing has been changed yet. Applying stores the backup's policy and settings as NEW policy v{}; earlier versions, the change history and the audit log are kept, a pre-restore backup is taken first, and no operating-system policy is changed (enforcement is disabled).",
+                current.version.saturating_add(1)
+            ),
+        };
         g.store
             .append_event(&NewEvent {
-                severity: Severity::Warning,
-                kind: "audit_history_replaced".into(),
+                severity: Severity::Info,
+                kind: "restore_prepared".into(),
                 device_key: None,
                 message: format!(
-                    "restore of {file_name} by {actor} replaced the audit history; the previous history (up to event {}) is preserved in {safety}",
-                    head.as_ref().map_or(0, |e| e.id)
+                    "restore of {} (backup v{}) prepared by {}; not applied",
+                    candidate.record.file_name,
+                    candidate.record.policy_version,
+                    identity.actor()
                 ),
                 simulated: false,
                 enforcement_state: "n/a".into(),
-                policy_version: None,
+                policy_version: Some(current.version),
                 details: serde_json::json!({
-                    "restored_from": file_name,
-                    "previous_history_file": safety,
-                    "previous_last_event_id": head.as_ref().map(|e| e.id),
-                    "previous_chain_head": head.as_ref().map(|e| e.hash.clone()),
+                    "restore_id": restore_id,
+                    "backup_file": candidate.record.file_name,
+                    "backup_sha256": candidate.record.sha256,
+                    "backup_policy_version": candidate.record.policy_version,
+                    "current_policy_version": current.version,
+                    "changes": preview.changes,
                 }),
             })
             .map_err(storage_err)?;
-        // The restored policy may differ: re-evaluate the inventory against it.
-        self.reevaluate_locked(&mut g)?;
-        Ok(ResponseBody::Done {
-            message: format!(
-                "database restored from {file_name}; previous state saved as {safety}"
-            ),
-        })
+        g.staged_restore = Some(StagedRestore {
+            restore_id,
+            account: identity.account.clone(),
+            created_ms: now,
+            candidate,
+        });
+        Ok(ResponseBody::RestorePreview(preview))
+    }
+
+    fn apply_restore(
+        &self,
+        restore_id: &str,
+        expected: u64,
+        identity: &ClientIdentity,
+    ) -> Result<ResponseBody, IpcError> {
+        let dir = self.backup_dir()?;
+        let mut g = self.lock()?;
+        // Single use: whatever happens next, this preview is consumed.
+        let staged = g.staged_restore.take();
+        let refusal = match &staged {
+            None => Some(("no_prepared_restore", ErrorCode::NotFound)),
+            Some(st) if st.restore_id != restore_id => {
+                Some(("unknown_restore_id", ErrorCode::NotFound))
+            }
+            Some(st) if st.account != identity.account => {
+                Some(("different_administrator", ErrorCode::Unauthorized))
+            }
+            Some(st)
+                if self.clock.now_ms().saturating_sub(st.created_ms) > RESTORE_PREVIEW_TTL_MS =>
+            {
+                Some(("preview_expired", ErrorCode::Conflict))
+            }
+            Some(_) => None,
+        };
+        if let Some((reason, code)) = refusal {
+            // Keep a valid preview for its owner if someone else tried to use it.
+            if reason == "different_administrator" || reason == "unknown_restore_id" {
+                g.staged_restore = staged;
+            }
+            let err = IpcError::new(
+                code,
+                format!("restore cannot be applied: {reason}; prepare it again"),
+            );
+            self.record_restore_failure(&mut g, identity, "apply", reason, restore_id, &err);
+            return Err(err);
+        }
+        let Some(staged) = staged else {
+            return Err(IpcError::new(ErrorCode::NotFound, "no prepared restore"));
+        };
+        let actor = identity.actor();
+        let target = staged.candidate.record.file_name.clone();
+        let attempt = (|| -> Result<(BackupRecord, u64), IpcError> {
+            let active = Self::validated(&g.store)?.version;
+            if active != expected {
+                return Err(storage_err(StorageError::VersionConflict {
+                    expected,
+                    active,
+                }));
+            }
+            let pre = g
+                .store
+                .create_backup(&dir, BackupKind::PreRestore, &actor)
+                .map_err(storage_err)?;
+            let v = g
+                .store
+                .apply_restored_state(&staged.candidate, expected, &staged.restore_id, &actor)
+                .map_err(storage_err)?;
+            Ok((pre, v))
+        })();
+        match attempt {
+            Ok((pre, version)) => {
+                self.reevaluate_locked(&mut g)?;
+                Ok(ResponseBody::Mutation(MutationView {
+                    policy_version: version,
+                    catalog_version: staged.candidate.state.catalog.catalog_version.clone(),
+                    summary: format!(
+                        "backup {target} applied as policy v{version}; previous state saved as {}",
+                        pre.file_name
+                    ),
+                    warnings: Vec::new(),
+                }))
+            }
+            Err(err) => {
+                let reason = format!("{:?}", err.code).to_lowercase();
+                self.record_restore_failure(&mut g, identity, "apply", &reason, &target, &err);
+                Err(err)
+            }
+        }
     }
 
     /// Apply audit retention (scheduled by the service).
@@ -1390,6 +1506,42 @@ impl Handler for AppService {
         self.record_authorization_failure(request, identity, error);
     }
 
+    fn identification_failed(&self, request: &Request, reason: &str) {
+        let Ok(mut g) = self.lock() else {
+            return;
+        };
+        // Bounded: the reason comes from the OS but is not trusted text.
+        let reason: String = reason.chars().take(200).collect();
+        let message = format!(
+            "{} refused: the caller could not be identified ({reason})",
+            request.name()
+        );
+        let details = serde_json::json!({
+            "request": request.name(),
+            "account": serde_json::Value::Null,
+            "identification_error": reason,
+        });
+        self.record_refusal(&mut g, "authorization_failed", message, details);
+    }
+
+    fn validation_failed(&self, request: &Request, identity: &ClientIdentity, error: &IpcError) {
+        let target = match request {
+            Request::PrepareRestore { file_name } => file_name.as_str(),
+            Request::ApplyRestore { restore_id, .. } => restore_id.as_str(),
+            _ => return,
+        };
+        let stage = if matches!(request, Request::PrepareRestore { .. }) {
+            "prepare"
+        } else {
+            "apply"
+        };
+        // Bounded: the target is attacker-chosen text.
+        let target: String = target.chars().take(80).collect();
+        if let Ok(mut g) = self.lock() {
+            self.record_restore_failure(&mut g, identity, stage, "invalid_request", &target, error);
+        }
+    }
+
     fn handle(
         &self,
         request: &Request,
@@ -1578,17 +1730,21 @@ impl Handler for AppService {
             }
             Request::CreateBackup => {
                 let dir = self.backup_dir()?;
-                std::fs::create_dir_all(&dir).map_err(internal)?;
-                let name = self.unique_backup_name(&dir, "rustward-backup-")?;
                 let mut g = self.lock()?;
-                g.store.backup_to(&dir.join(&name)).map_err(storage_err)?;
-                Self::backup_event(&mut g, &name, "manual", &identity.actor())?;
+                let rec = g
+                    .store
+                    .create_backup(&dir, BackupKind::Manual, &identity.actor())
+                    .map_err(storage_err)?;
                 Ok(ResponseBody::Done {
-                    message: format!("backup created: {name}"),
+                    message: format!("backup created: {}", rec.file_name),
                 })
             }
             Request::ListBackups => Ok(ResponseBody::Backups(self.list_backups()?)),
-            Request::RestoreBackup { file_name } => self.restore_backup(file_name, identity),
+            Request::PrepareRestore { file_name } => self.prepare_restore(file_name, identity),
+            Request::ApplyRestore {
+                restore_id,
+                expected_policy_version,
+            } => self.apply_restore(restore_id, *expected_policy_version, identity),
             Request::SetWorkstationId {
                 workstation_id,
                 expected_policy_version,
@@ -1616,6 +1772,80 @@ impl Handler for AppService {
             }
         }
     }
+}
+
+fn backup_view(dir: &std::path::Path, r: BackupRecord) -> BackupView {
+    let file_present =
+        std::fs::symlink_metadata(dir.join(&r.file_name)).is_ok_and(|m| m.file_type().is_file());
+    BackupView {
+        file_name: r.file_name,
+        bytes: r.bytes,
+        created_ms: r.created_ms,
+        kind: r.kind.as_str().into(),
+        policy_version: r.policy_version,
+        sha256: r.sha256,
+        actor: r.actor,
+        file_present,
+    }
+}
+
+/// Human-readable differences between the live state and a backup.
+fn restore_changes(
+    current: &PolicyState,
+    current_settings: &AppSettings,
+    candidate: &RestoreCandidate,
+) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut out = Vec::new();
+    let next = &candidate.state;
+    if current.policy.workstation_id != next.policy.workstation_id {
+        out.push(format!(
+            "workstation id: {} -> {}",
+            current.policy.workstation_id, next.policy.workstation_id
+        ));
+    }
+    if current.policy.mode != next.policy.mode {
+        out.push(format!(
+            "policy mode: {:?} -> {:?}",
+            current.policy.mode, next.policy.mode
+        ));
+    }
+    let brands = |s: &PolicyState| -> BTreeSet<String> {
+        s.catalog.brands.iter().map(|b| b.id.clone()).collect()
+    };
+    let (a, b) = (brands(current), brands(next));
+    for id in b.difference(&a) {
+        out.push(format!("manufacturer added to catalog: {id}"));
+    }
+    for id in a.difference(&b) {
+        out.push(format!("manufacturer removed from catalog: {id}"));
+    }
+    for id in a.intersection(&b) {
+        let x = current.catalog.brands.iter().find(|m| &m.id == id);
+        let y = next.catalog.brands.iter().find(|m| &m.id == id);
+        if x != y {
+            out.push(format!("manufacturer definition changed: {id}"));
+        }
+    }
+    let allowed = |s: &PolicyState| -> BTreeSet<String> {
+        s.policy
+            .allowed_brands
+            .iter()
+            .filter(|r| r.enabled)
+            .map(|r| r.brand_id.clone())
+            .collect()
+    };
+    let (a, b) = (allowed(current), allowed(next));
+    for id in b.difference(&a) {
+        out.push(format!("would be ALLOWED: {id}"));
+    }
+    for id in a.difference(&b) {
+        out.push(format!("would no longer be allowed: {id}"));
+    }
+    if current_settings != &candidate.settings {
+        out.push("application settings differ (theme, language, notifications, retention or refresh interval)".into());
+    }
+    out
 }
 
 /// The shipped default policy state (catalog + PC-01 example policy).

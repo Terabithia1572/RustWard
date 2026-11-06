@@ -14,6 +14,7 @@ import type {
   MutationView,
   PolicyChangeView,
   Request,
+  RestorePreviewView,
   ResponseBody,
   SettingsView,
   SimulationView,
@@ -155,8 +156,14 @@ export class Api {
   async backups(): Promise<BackupView[]> {
     return expect(await this.call({ type: "list_backups" }), "backups");
   }
-  async restoreBackup(fileName: string): Promise<string> {
-    return expect(await this.call({ type: "restore_backup", file_name: fileName }), "done").message;
+  async prepareRestore(fileName: string): Promise<RestorePreviewView> {
+    return expect(await this.call({ type: "prepare_restore", file_name: fileName }), "restore_preview");
+  }
+  async applyRestore(restoreId: string, version: number): Promise<MutationView> {
+    return expect(
+      await this.call({ type: "apply_restore", restore_id: restoreId, expected_policy_version: version }),
+      "mutation",
+    );
   }
   async action(type: "apply_retention" | "create_backup" | "refresh_inventory" | "load_synthetic_inventory"): Promise<string> {
     return expect(await this.call({ type }), "done").message;

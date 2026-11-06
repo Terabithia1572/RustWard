@@ -10,10 +10,22 @@
 //! - The client identity comes from the client's Windows token
 //!   (`ImpersonateNamedPipeClient` → `OpenThreadToken`), checked with
 //!   `CheckTokenMembership(BUILTIN\Administrators)` and `TokenElevation`.
+//!   It is taken **per request, after the request frame was read**
+//!   ([`PipeConnection::client_identity`] via
+//!   `rpc::serve_connection_identified`): Windows impersonates "the security
+//!   context of the last message read from the pipe", and identifying before
+//!   any read could fail (`ERROR_CANNOT_IMPERSONATE`) or describe a stale
+//!   context (Phase 9A finding F-04). A failed identification refuses the
+//!   request and closes the connection.
 //!   Impersonation is always reverted; failure to revert aborts the process.
 //! - Clients connect with `SECURITY_IDENTIFICATION` (the server can identify
-//!   but not act as the user) and verify that the server process runs in
-//!   session 0 (services), rejecting user-session impostors.
+//!   but not act as the user) and verify the server before sending anything:
+//!   the pipe object must be **owned by LocalSystem** (the server sets
+//!   `O:SY` in its SDDL; a standard user cannot assign SYSTEM as owner) and
+//!   the server process must run in session 0. The session check alone is
+//!   not sufficient: a standard user can run code in session 0 through a
+//!   scheduled task ("run whether user is logged on or not") and squat the
+//!   pipe name while the service is stopped (Phase 9A finding F-03).
 //! - Reads never block indefinitely: data availability is polled with
 //!   `PeekNamedPipe` against a deadline.
 
@@ -26,12 +38,14 @@ use windows_sys::Win32::Foundation::{
     GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, LookupAccountSidW,
-    PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES, SID_NAME_USE, TOKEN_ELEVATION,
-    TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser, WinBuiltinAdministratorsSid,
+    CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, IsWellKnownSid,
+    LookupAccountSidW, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf,
+    SECURITY_ATTRIBUTES, SID_NAME_USE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation,
+    TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
@@ -272,8 +286,10 @@ impl PipeListener {
         }
     }
 
-    /// Create a pipe instance, wait for one client and identify it.
-    pub fn accept(&self) -> Result<(PipeConnection, ClientIdentity), TransportError> {
+    /// Create a pipe instance and wait for one client. The caller is
+    /// identified per request with [`PipeConnection::client_identity`] after
+    /// its frame has been read (see `rpc::serve_connection_identified`).
+    pub fn accept(&self) -> Result<PipeConnection, TransportError> {
         let sd = security_descriptor(&self.sddl)?;
         let sa = SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(24),
@@ -304,14 +320,11 @@ impl PipeListener {
         {
             return Err(os_err("ConnectNamedPipe"));
         }
-        let identity = client_identity(handle.0, self.max_access)?;
-        Ok((
-            PipeConnection {
-                handle,
-                server_side: true,
-            },
-            identity,
-        ))
+        Ok(PipeConnection {
+            handle,
+            server_side: true,
+            max_access: self.max_access,
+        })
     }
 }
 
@@ -320,9 +333,22 @@ impl PipeListener {
 pub struct PipeConnection {
     handle: OwnedHandle,
     server_side: bool,
+    /// Channel of the listener (server side only).
+    max_access: AccessLevel,
 }
 
 impl PipeConnection {
+    /// Identity of the client, from the security context of the last
+    /// message read (server side only). Call after each request frame.
+    pub fn client_identity(&self) -> Result<ClientIdentity, TransportError> {
+        if !self.server_side {
+            return Err(TransportError::Io(
+                "client_identity is only available on the server end".into(),
+            ));
+        }
+        client_identity(self.handle.0, self.max_access)
+    }
+
     /// Connect to a RustWard pipe as a client, verifying the server runs in
     /// session 0.
     pub fn connect(name: &str, timeout: Duration) -> Result<Self, TransportError> {
@@ -346,6 +372,7 @@ impl PipeConnection {
                 let conn = Self {
                     handle: OwnedHandle(h),
                     server_side: false,
+                    max_access: AccessLevel::ReadOnly,
                 };
                 conn.verify_server()?;
                 return Ok(conn);
@@ -362,6 +389,7 @@ impl PipeConnection {
     }
 
     fn verify_server(&self) -> Result<(), TransportError> {
+        self.verify_server_owner()?;
         let mut session = u32::MAX;
         // SAFETY: valid client pipe handle and out-pointer.
         if unsafe { GetNamedPipeServerSessionId(self.handle.0, &mut session) } == 0 {
@@ -373,6 +401,45 @@ impl PipeConnection {
             Err(TransportError::PeerRejected(format!(
                 "pipe server runs in session {session}, expected the service session 0"
             )))
+        }
+    }
+
+    /// The pipe object must be owned by LocalSystem.
+    fn verify_server_owner(&self) -> Result<(), TransportError> {
+        let mut owner: PSID = ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        // SAFETY: valid pipe handle opened with GENERIC_READ (includes
+        // READ_CONTROL); `owner` and `sd` are valid out-pointers; the other
+        // out-pointers may be null. On success `sd` must be freed with
+        // LocalFree and `owner` points into it.
+        let rc = unsafe {
+            GetSecurityInfo(
+                self.handle.0,
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        if rc != 0 {
+            return Err(TransportError::Io(format!(
+                "GetSecurityInfo failed with Win32 error {rc}"
+            )));
+        }
+        let sd = LocalSecurityDescriptor(sd);
+        // SAFETY: `owner` points into `sd`, which is alive here.
+        let is_system =
+            !owner.is_null() && unsafe { IsWellKnownSid(owner, WinLocalSystemSid) } != 0;
+        drop(sd);
+        if is_system {
+            Ok(())
+        } else {
+            Err(TransportError::PeerRejected(
+                "pipe is not owned by LocalSystem; refusing to talk to a possible impostor".into(),
+            ))
         }
     }
 

@@ -17,7 +17,8 @@
     3. npm ci (optionally offline from ./.npm-offline-cache), typecheck, tests.
     4. tauri build --bundles msi. With -WithService the draft WiX fragment
        packaging/wix/rustward-service.wxs is merged (service + data directory).
-    5. Copies artifacts to .\release-out and writes SHA256SUMS.txt.
+    5. Copies artifacts, BUILD-INFO.txt and DEPENDENCY-INVENTORY.md to
+       .\release-out and writes SHA256SUMS.txt over all of them.
 
   Network: with webviewInstallMode=offlineInstaller, tauri-bundler 2.10.x
   resolves the WebView2 installer URL with a HEAD request and downloads WiX 3.14
@@ -114,6 +115,20 @@ $artifacts = @(
     (Join-Path $Root 'target\release\rustward-inventory.exe')
 ) + (Get-ChildItem (Join-Path $App 'src-tauri\target\release\bundle\msi\*.msi') | ForEach-Object FullName)
 foreach ($a in $artifacts) { Copy-Item $a $Out -Force }
+# Build provenance (no secrets, no workstation data).
+@(
+    "RustWard $((Get-Content (Join-Path $App 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version)",
+    "git commit: $(git -C $Root rev-parse HEAD)",
+    "git dirty: $([bool](git -C $Root status --porcelain))",
+    "rustc: $(rustc --version)",
+    "cargo: $(cargo --version)",
+    "node: $(node --version)",
+    "target: x86_64-pc-windows-msvc",
+    "with service fragment: $([bool]$WithService)",
+    "offline build: $([bool]$Offline)",
+    "ACTIVATION_ENABLED: false (dry-run build)"
+) | Set-Content -Encoding ascii (Join-Path $Out 'BUILD-INFO.txt')
+Copy-Item (Join-Path $Root 'docs\DEPENDENCY-INVENTORY.md') $Out -Force
 Get-ChildItem $Out -File | Where-Object Name -ne 'SHA256SUMS.txt' |
     ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } |
     Set-Content -Encoding ascii (Join-Path $Out 'SHA256SUMS.txt')

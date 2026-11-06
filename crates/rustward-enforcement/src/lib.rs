@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod activation;
 pub mod device_install;
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,10 @@ pub const ACTIVATION_ENABLED: bool = false;
 
 /// Opaque proof that the security property was observed at runtime.
 /// No public constructor; nothing in this build creates one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deliberately **not** `Deserialize`: evidence must never be forged from
+/// JSON received over IPC or read from a file (Phase 9A finding F-09).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VerificationEvidence {
     evidence_id: String,
     observed_property: String,
@@ -59,7 +63,10 @@ impl VerificationEvidence {
 }
 
 /// Workstation enforcement state shown to operators.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Deserialize` for the same reason as [`VerificationEvidence`]: a
+/// `VerifiedProtected` state can only be produced inside the process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum EnforcementState {
     /// No enforcement provider configured.
@@ -550,7 +557,11 @@ mod tests {
     /// state-changing API reference.
     #[test]
     fn no_system_modification_apis_in_this_crate() {
-        let src = concat!(include_str!("lib.rs"), include_str!("device_install.rs"));
+        let src = concat!(
+            include_str!("lib.rs"),
+            include_str!("device_install.rs"),
+            include_str!("activation.rs")
+        );
         let forbidden = [
             ["Reg", "SetValueEx"].concat(),
             ["Reg", "CreateKey"].concat(),

@@ -88,6 +88,7 @@ export interface FakeState {
   devices: DeviceView[];
   workstationId: string;
   backups: BackupView[];
+  preparedRestore: string | null;
   calls: Request[];
   /** Force the next call (optionally only of type `only`) to fail with this IPC error. */
   failNext: { code: string; message: string; only?: Request["type"] } | null;
@@ -101,7 +102,19 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     events: [event()],
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
     workstationId: "PC-TEST",
-    backups: [{ file_name: "rustward-backup-1700000000000.db", bytes: 40960, created_ms: 1_700_000_000_000, kind: "manual" }],
+    backups: [
+      {
+        file_name: "rustward-backup-1700000000000.db",
+        bytes: 40960,
+        created_ms: 1_700_000_000_000,
+        kind: "manual",
+        policy_version: 2,
+        sha256: "cd".repeat(32),
+        actor: "PC-TEST\\admin",
+        file_present: true,
+      },
+    ],
+    preparedRestore: null,
     calls: [],
     failNext: null,
     ...init,
@@ -265,11 +278,37 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
         return mutation(`workstation ${r.workstation_id}`);
       case "list_backups":
         return { type: "backups", data: state.backups };
-      case "restore_backup": {
-        if (!state.backups.some((b) => b.file_name === r.file_name)) throw { code: "not_found", message: "backup not found" };
+      case "prepare_restore": {
+        const b = state.backups.find((x) => x.file_name === r.file_name);
+        if (!b) throw { code: "validation_failed", message: "backup rejected (not_registered)" };
+        state.preparedRestore = "0123456789abcdef0123456789abcdef";
+        return {
+          type: "restore_preview",
+          data: {
+            restore_id: state.preparedRestore,
+            file_name: b.file_name,
+            sha256: b.sha256,
+            backup_created_ms: b.created_ms,
+            backup_policy_version: b.policy_version,
+            current_policy_version: state.version,
+            resulting_policy_version: state.version + 1,
+            backup_workstation_id: state.workstationId,
+            changes: ["would no longer be allowed: examplex"],
+            expires_ms: b.created_ms + 600_000,
+            notice: "Nothing has been changed yet.",
+          },
+        };
+      }
+      case "apply_restore": {
+        if (r.restore_id !== state.preparedRestore) throw { code: "not_found", message: "no prepared restore" };
+        state.preparedRestore = null;
+        checkVersion(r.expected_policy_version);
         const pre = `rustward-pre-restore-${1_700_000_000_000 + state.backups.length}.db`;
-        state.backups = [{ file_name: pre, bytes: 40960, created_ms: 1_700_000_000_000 + state.backups.length, kind: "pre_restore" }, ...state.backups];
-        return { type: "done", data: { message: `restored ${r.file_name}; previous state saved as ${pre}` } };
+        state.backups = [
+          { file_name: pre, bytes: 40960, created_ms: 1_700_000_000_000 + state.backups.length, kind: "pre_restore", policy_version: state.version, sha256: "ab".repeat(32), actor: "PC-TEST\\admin", file_present: true },
+          ...state.backups,
+        ];
+        return mutation(`backup applied; previous state saved as ${pre}`);
       }
       case "apply_retention":
       case "create_backup":

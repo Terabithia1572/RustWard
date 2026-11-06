@@ -95,7 +95,11 @@
     },
     {
       "access": "administrator",
-      "type": "restore_backup"
+      "type": "prepare_restore"
+    },
+    {
+      "access": "administrator",
+      "type": "apply_restore"
     }
   ]
 }

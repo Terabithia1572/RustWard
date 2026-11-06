@@ -590,7 +590,8 @@ fn rusqlite_tamper(db: &std::path::Path) {
     let store = Store::open(db, Arc::new(ManualClock::new(0))).unwrap();
     store
         .connection_for_tests()
-        .execute("UPDATE policy_states SET state_json = replace(state_json, '\"enabled\":true', '\"enabled\":false') WHERE active = 1", [])
+        // A privileged attacker drops the guard trigger, then edits the row.
+        .execute_batch("DROP TRIGGER policy_states_immutable; UPDATE policy_states SET state_json = replace(state_json, '\"enabled\":true', '\"enabled\":false') WHERE active = 1;")
         .unwrap();
 }
 
@@ -673,15 +674,46 @@ fn workstation_id_is_a_versioned_audited_policy_edit() {
     assert_eq!(stale.code, ErrorCode::Conflict);
 }
 
+fn prepare(s: &AppService, file: &str) -> rustward_ipc::messages::RestorePreviewView {
+    match call(
+        s,
+        Request::PrepareRestore {
+            file_name: file.into(),
+        },
+    ) {
+        ResponseBody::RestorePreview(p) => p,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn kinds_of(s: &AppService, kind: &str) -> Vec<rustward_ipc::messages::EventView> {
+    match call(
+        s,
+        Request::ListEvents {
+            query: EventQuery {
+                kind: Some(kind.into()),
+                ..EventQuery::default()
+            },
+        },
+    ) {
+        ResponseBody::Events(e) => e,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn create_backup(s: &AppService) -> String {
+    let ResponseBody::Done { message } = call(s, Request::CreateBackup) else {
+        panic!()
+    };
+    message.trim_start_matches("backup created: ").to_owned()
+}
+
 #[test]
-fn restore_saves_current_state_first_and_reverts_policy() {
+fn restore_is_two_step_and_never_rolls_back_versions_history_or_audit() {
     let dir = TempDir::new("restore");
     let clock = Arc::new(ManualClock::new(1_793_836_800_000));
     let s = file_service(&dir, clock.clone());
-    let ResponseBody::Done { message } = call(&s, Request::CreateBackup) else {
-        panic!()
-    };
-    let backup = message.trim_start_matches("backup created: ").to_owned();
+    let backup = create_backup(&s);
     let v1 = policy_version(&s);
     clock.advance(1_000);
     call(
@@ -692,95 +724,224 @@ fn restore_saves_current_state_first_and_reverts_policy() {
             expected_policy_version: v1,
         },
     );
-    assert_eq!(policy_version(&s), v1 + 1);
+    let events_before = event_kinds(&s).len();
 
-    let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
-        panic!()
-    };
-    assert_eq!(list.len(), 1);
-    assert_eq!(
-        (list[0].file_name.as_str(), list[0].kind.as_str()),
-        (backup.as_str(), "manual")
-    );
-
-    clock.advance(1_000);
-    let ResponseBody::Done { message } = call(
-        &s,
-        Request::RestoreBackup {
-            file_name: backup.clone(),
-        },
-    ) else {
-        panic!()
-    };
-    assert!(message.contains("rustward-pre-restore-"));
-    assert_eq!(policy_version(&s), v1, "policy reverted to the backup");
-    let ResponseBody::Events(ev) = call(
-        &s,
-        Request::ListEvents {
-            query: EventQuery::default(),
-        },
-    ) else {
-        panic!()
-    };
-    assert_eq!(ev[0].kind, "audit_history_replaced");
+    // Step 1: preview only.
+    let p = prepare(&s, &backup);
+    assert_eq!(p.backup_policy_version, v1);
+    assert_eq!(p.current_policy_version, v1 + 1);
+    assert_eq!(p.resulting_policy_version, v1 + 2);
     assert!(
-        ev[0].message.contains("rustward-pre-restore-"),
-        "{}",
-        ev[0].message
+        p.changes
+            .iter()
+            .any(|c| c == "would no longer be allowed: kingston"),
+        "{:?}",
+        p.changes
     );
-    assert_eq!(ev[1].kind, "database_restored");
+    assert!(p.notice.contains("Nothing has been changed yet"));
+    assert_eq!(policy_version(&s), v1 + 1, "prepare changes no policy");
+    assert_eq!(kinds_of(&s, "restore_prepared").len(), 1);
 
-    // The pre-restore copy is listed and can undo the restore.
+    // Step 2: apply as a NEW version.
+    clock.advance(1_000);
+    let ResponseBody::Mutation(m) = call(
+        &s,
+        Request::ApplyRestore {
+            restore_id: p.restore_id.clone(),
+            expected_policy_version: p.current_policy_version,
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(m.policy_version, v1 + 2, "versions only increase");
+    assert!(m.summary.contains("rustward-pre-restore-"));
+    let ResponseBody::Manufacturers(mv) = call(&s, Request::ListManufacturers) else {
+        panic!()
+    };
+    assert!(
+        !mv.manufacturers
+            .iter()
+            .find(|b| b.id == "kingston")
+            .unwrap()
+            .allowed
+    );
+    // History and audit are kept and extended, never replaced.
+    let ResponseBody::PolicyChanges(h) = call(&s, Request::ListPolicyChanges { limit: 10 }) else {
+        panic!()
+    };
+    assert_eq!(h[0].action, "policy_restored");
+    assert!(
+        h.iter().any(|c| c.action == "allowlist_changed"),
+        "earlier change still listed"
+    );
+    assert!(event_kinds(&s).len() > events_before);
+    let restored = kinds_of(&s, "policy_restored");
+    assert_eq!(restored.len(), 1);
+    assert!(restored[0].message.contains("PC-01\\securityadmin"));
+    let ResponseBody::Diagnostics(d) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    assert!(d.database.chain_ok, "hash chain intact after restore");
+
+    // The pre-restore backup is registered and can itself be restored.
     let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
         panic!()
     };
-    assert_eq!(list.len(), 2);
-    let pre = list
-        .iter()
-        .find(|b| b.kind == "pre_restore")
-        .unwrap()
-        .file_name
-        .clone();
-    call(&s, Request::RestoreBackup { file_name: pre });
-    assert_eq!(policy_version(&s), v1 + 1, "restore undone");
+    let pre = list.iter().find(|b| b.kind == "pre_restore").unwrap();
+    assert!(pre.file_present && pre.policy_version == v1 + 1 && !pre.sha256.is_empty());
+    let p2 = prepare(&s, &pre.file_name.clone());
+    call(
+        &s,
+        Request::ApplyRestore {
+            restore_id: p2.restore_id,
+            expected_policy_version: p2.current_policy_version,
+        },
+    );
+    let ResponseBody::Manufacturers(mv) = call(&s, Request::ListManufacturers) else {
+        panic!()
+    };
+    assert!(
+        mv.manufacturers
+            .iter()
+            .find(|b| b.id == "kingston")
+            .unwrap()
+            .allowed,
+        "restore undone"
+    );
+    assert_eq!(policy_version(&s), v1 + 3);
 }
 
 #[test]
-fn restore_rejects_missing_files_and_non_backup_names() {
+fn prepared_restores_are_single_use_bound_to_the_admin_and_expire() {
+    let dir = TempDir::new("restore-guard");
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = file_service(&dir, clock.clone());
+    let backup = create_backup(&s);
+    let apply = |id: &str, v: u64, who: &ClientIdentity| {
+        s.handle(
+            &Request::ApplyRestore {
+                restore_id: id.into(),
+                expected_policy_version: v,
+            },
+            who,
+        )
+    };
+
+    // Another administrator cannot use someone else's preview.
+    let p = prepare(&s, &backup);
+    let other = ClientIdentity {
+        account: "PC-01\\otheradmin".into(),
+        ..admin()
+    };
+    assert_eq!(
+        apply(&p.restore_id, p.current_policy_version, &other)
+            .unwrap_err()
+            .code,
+        ErrorCode::Unauthorized
+    );
+    // The owner still can, exactly once (replay is refused).
+    assert!(apply(&p.restore_id, p.current_policy_version, &admin()).is_ok());
+    let replay = apply(&p.restore_id, p.current_policy_version, &admin()).unwrap_err();
+    assert_eq!(replay.code, ErrorCode::NotFound);
+
+    // Stale version: refused, preview consumed, nothing changed.
+    let v = policy_version(&s);
+    let p = prepare(&s, &backup);
+    assert_eq!(
+        apply(&p.restore_id, v - 1, &admin()).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(policy_version(&s), v);
+    assert_eq!(
+        apply(&p.restore_id, v, &admin()).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+
+    // Expired preview.
+    let p = prepare(&s, &backup);
+    clock.advance(rustward_app::RESTORE_PREVIEW_TTL_MS + 1);
+    assert_eq!(
+        apply(&p.restore_id, v, &admin()).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(policy_version(&s), v);
+
+    let failures = kinds_of(&s, "restore_failed");
+    let reasons: Vec<String> = failures.iter().map(|e| e.message.clone()).collect();
+    for r in [
+        "different_administrator",
+        "no_prepared_restore",
+        "conflict",
+        "preview_expired",
+    ] {
+        assert!(
+            reasons.iter().any(|m| m.contains(r)),
+            "missing {r} in {reasons:?}"
+        );
+    }
+}
+
+#[test]
+fn foreign_altered_and_traversal_restores_are_refused_and_audited() {
+    use rustward_ipc::rpc::process;
+    use rustward_ipc::{PROTOCOL_VERSION, RequestEnvelope};
     let dir = TempDir::new("restore-bad");
     let s = file_service(&dir, Arc::new(ManualClock::new(1_793_836_800_000)));
-    let missing = s
-        .handle(
-            &Request::RestoreBackup {
-                file_name: "rustward-backup-42.db".into(),
-            },
-            &admin(),
-        )
-        .unwrap_err();
-    assert_eq!(missing.code, ErrorCode::NotFound);
-    std::fs::create_dir_all(dir.0.join("backups")).unwrap();
-    std::fs::write(
+    let v = policy_version(&s);
+    let backup = create_backup(&s);
+    let err = |r: Request| s.handle(&r, &admin()).unwrap_err();
+
+    assert_eq!(
+        err(Request::PrepareRestore {
+            file_name: "rustward-backup-42.db".into()
+        })
+        .code,
+        ErrorCode::ValidationFailed
+    );
+    // A copy dropped into the directory under a new name is not registered.
+    std::fs::copy(
+        dir.0.join("backups").join(&backup),
         dir.0.join("backups").join("rustward-backup-7.db"),
-        b"not sqlite",
     )
     .unwrap();
-    let v = policy_version(&s);
+    let e = err(Request::PrepareRestore {
+        file_name: "rustward-backup-7.db".into(),
+    });
+    assert!(e.message.contains("not_registered"), "{}", e.message);
+    // Altered content.
+    let path = dir.0.join("backups").join(&backup);
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[100] ^= 0xFF;
+    std::fs::write(&path, &bytes).unwrap();
     assert!(
-        s.handle(
-            &Request::RestoreBackup {
-                file_name: "rustward-backup-7.db".into(),
-            },
-            &admin(),
-        )
-        .is_err()
+        err(Request::PrepareRestore {
+            file_name: backup.clone()
+        })
+        .message
+        .contains("hash_mismatch")
     );
-    assert_eq!(policy_version(&s), v, "a failed restore changes nothing");
-    // Unrelated files in the directory are not listed.
-    std::fs::write(dir.0.join("backups").join("notes.txt"), b"x").unwrap();
-    let ResponseBody::Backups(list) = call(&s, Request::ListBackups) else {
-        panic!()
+    // Path traversal never reaches the handler but is audited.
+    let env = RequestEnvelope {
+        version: PROTOCOL_VERSION,
+        request_id: 9,
+        request: Request::PrepareRestore {
+            file_name: "..\\..\\Windows\\System32\\config\\SAM".into(),
+        },
     };
-    assert!(list.iter().all(|b| b.file_name.starts_with("rustward-")));
+    let reply = process(&env, &admin(), &s);
+    assert_eq!(reply.result.unwrap_err().code, ErrorCode::InvalidRequest);
+    assert_eq!(policy_version(&s), v, "nothing applied");
+    let reasons: Vec<String> = kinds_of(&s, "restore_failed")
+        .into_iter()
+        .map(|e| e.message)
+        .collect();
+    for r in ["not_registered", "hash_mismatch", "invalid_request"] {
+        assert!(
+            reasons.iter().any(|m| m.contains(r)),
+            "missing {r} in {reasons:?}"
+        );
+    }
+    assert!(reasons.iter().any(|m| m.contains("SAM")));
 }
 
 #[test]
@@ -858,7 +1019,7 @@ fn refused_privileged_requests_are_audited_and_rate_limited() {
         panic!()
     };
     assert!(
-        ev[0].message.contains("15 earlier attempts"),
+        ev[0].message.contains("15 earlier refusals"),
         "{}",
         ev[0].message
     );

@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use rustward_ipc::frame;
 use rustward_ipc::messages::{AccessLevel, Request, ResponseBody};
-use rustward_ipc::rpc::{Client, ClientError, Handler, SessionEnd, serve_connection};
+use rustward_ipc::rpc::{
+    Client, ClientError, Handler, SessionEnd, serve_connection, serve_connection_identified,
+};
 use rustward_ipc::transport::{Transport, TransportError, mock_pair};
 use rustward_ipc::{
     ClientIdentity, ErrorCode, IdentitySource, IpcError, PROTOCOL_VERSION, RequestEnvelope,
@@ -20,6 +22,7 @@ use rustward_ipc::{
 struct CountingHandler {
     calls: AtomicUsize,
     rejected: std::sync::Mutex<Vec<String>>,
+    unidentified: std::sync::Mutex<Vec<String>>,
 }
 
 impl Handler for CountingHandler {
@@ -43,6 +46,13 @@ impl Handler for CountingHandler {
             .lock()
             .unwrap()
             .push(format!("{} by {}", request.name(), identity.actor()));
+    }
+
+    fn identification_failed(&self, request: &Request, reason: &str) {
+        self.unidentified
+            .lock()
+            .unwrap()
+            .push(format!("{}: {reason}", request.name()));
     }
 }
 
@@ -120,7 +130,7 @@ fn invalid_requests_are_not_reported_as_authorization_failures() {
     let handler = Arc::new(CountingHandler::default());
     let (end, _server) = spawn_server(identity(false, AccessLevel::ReadOnly), handler.clone());
     let mut client = Client::new(end, Duration::from_secs(2));
-    let _ = client.call(Request::RestoreBackup {
+    let _ = client.call(Request::PrepareRestore {
         file_name: "..\\..\\evil.db".into(),
     });
     let _ = client.call(Request::GetDashboard);
@@ -266,4 +276,95 @@ fn mismatched_response_id_is_a_protocol_violation() {
         Err(ClientError::Protocol(_))
     ));
     let _ = t.join();
+}
+
+#[test]
+fn caller_is_identified_for_every_request_after_it_is_read() {
+    // The identity source changes between requests (e.g. a different token
+    // context on the same pipe): each request must be judged on its own.
+    let handler = Arc::new(CountingHandler::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (client_end, mut server_end) = mock_pair();
+    let server = {
+        let handler = Arc::clone(&handler);
+        let calls = Arc::clone(&calls);
+        thread::spawn(move || {
+            let identify = move |_: &rustward_ipc::transport::MockEnd| {
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                Ok(identity(n == 1, AccessLevel::Administrator))
+            };
+            serve_connection_identified(
+                &mut server_end,
+                &identify,
+                handler.as_ref(),
+                Duration::from_secs(2),
+            )
+        })
+    };
+    let mut client = Client::new(client_end, Duration::from_secs(2));
+    let privileged = || Request::RemoveManufacturer {
+        id: "kingston".into(),
+        expected_policy_version: 1,
+    };
+    assert!(matches!(
+        client.call(privileged()),
+        Err(ClientError::Server(e)) if e.code == ErrorCode::Unauthorized
+    ));
+    assert!(
+        client.call(privileged()).is_ok(),
+        "second request by an admin"
+    );
+    assert!(matches!(
+        client.call(privileged()),
+        Err(ClientError::Server(e)) if e.code == ErrorCode::Unauthorized
+    ));
+    drop(client);
+    assert_eq!(server.join().unwrap(), SessionEnd::Disconnected);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "one identification per request"
+    );
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(handler.rejected.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn a_caller_that_cannot_be_identified_is_refused_and_disconnected() {
+    let handler = Arc::new(CountingHandler::default());
+    let (client_end, mut server_end) = mock_pair();
+    let server = {
+        let handler = Arc::clone(&handler);
+        thread::spawn(move || {
+            let identify = |_: &rustward_ipc::transport::MockEnd| {
+                Err(TransportError::Io(
+                    "OpenThreadToken failed with Win32 error 1368".into(),
+                ))
+            };
+            serve_connection_identified(
+                &mut server_end,
+                &identify,
+                handler.as_ref(),
+                Duration::from_secs(2),
+            )
+        })
+    };
+    let mut client = Client::new(client_end, Duration::from_secs(2));
+    // Even a read-only request is refused without an identity.
+    match client.call(Request::GetDashboard) {
+        Err(ClientError::Server(e)) => assert_eq!(e.code, ErrorCode::Unauthorized),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        server.join().unwrap(),
+        SessionEnd::IdentificationFailed(r) if r.contains("1368")
+    ));
+    assert_eq!(
+        handler.calls.load(Ordering::SeqCst),
+        0,
+        "handler never reached"
+    );
+    let unidentified = handler.unidentified.lock().unwrap();
+    assert_eq!(unidentified.len(), 1);
+    assert!(unidentified[0].starts_with("get_dashboard"));
 }

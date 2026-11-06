@@ -38,6 +38,13 @@ else
   skip "src-tauri checks" "needs webkit2gtk-4.1 dev libraries and a built dist/"
 fi
 
+if command -v cargo-deny >/dev/null 2>&1; then
+  run "cargo deny (workspace, windows target)"   cargo deny check
+  run "cargo deny (src-tauri, windows target)"   cargo deny --manifest-path apps/rustward-desktop/src-tauri/Cargo.toml check
+else
+  skip "cargo deny" "cargo install cargo-deny --locked"
+fi
+
 skip "Windows build / MSI bundling"      "requires Windows 10 Pro x64 acceptance VM"
 skip "named-pipe + service runtime tests" "requires Windows"
 skip "native SetupAPI inventory"          "requires Windows"

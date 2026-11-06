@@ -32,8 +32,8 @@ use rustward_core::policy_edit::{ChangeRecord, EditOutcome, PolicyState};
 use sha2::{Digest, Sha256};
 
 pub use model::{
-    AppSettings, ChainStatus, DeviceRow, EventFilter, Language, NewEvent, PolicyChangeRow,
-    SecurityEvent, Severity, Theme,
+    AppSettings, BackupKind, BackupRecord, BackupRejection, ChainStatus, DeviceRow, EventFilter,
+    Language, NewEvent, PolicyChangeRow, RestoreCandidate, SecurityEvent, Severity, Theme,
 };
 
 /// Genesis value of the event hash chain.
@@ -82,6 +82,12 @@ pub enum StorageError {
         /// Active version.
         active: u64,
     },
+    /// A backup was rejected for restore.
+    #[error("backup rejected: {0}")]
+    BackupRejected(BackupRejection),
+    /// File-system error (backups).
+    #[error("file error: {0}")]
+    Io(String),
 }
 
 /// Time source (injectable for tests).
@@ -885,10 +891,15 @@ impl Store {
         let Some((last_id, anchor)) = last_purged else {
             return Ok(0);
         };
+        tx.execute(
+            "INSERT INTO retention_guard (cutoff_id) VALUES (?1)",
+            params![last_id],
+        )?;
         let n = tx.execute(
             "DELETE FROM security_events WHERE id <= ?1",
             params![last_id],
         )?;
+        tx.execute("DELETE FROM retention_guard", [])?;
         tx.execute(
             "INSERT INTO settings (key, value, updated_ms) VALUES (?1, ?2, ?3)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ms = excluded.updated_ms",
@@ -916,6 +927,8 @@ impl Store {
     // ----------------------------------------------------------- backup/restore
 
     /// Write a consistent copy of the database to `path` (must not exist).
+    /// Low-level: the copy is NOT registered and therefore cannot be
+    /// restored through RustWard. Use [`Self::create_backup`].
     pub fn backup_to(&self, path: &Path) -> Result<(), StorageError> {
         if path.exists() {
             return Err(StorageError::Invalid(format!(
@@ -931,29 +944,194 @@ impl Store {
         Ok(())
     }
 
-    /// Replace the database content with a verified backup. The backup must
-    /// pass `integrity_check`, carry a supported schema and a valid active
-    /// policy; otherwise nothing is changed.
-    pub fn restore_from(&mut self, path: &Path, actor: &str) -> Result<(), StorageError> {
+    /// Create, hash and register a backup in `dir`. The file name is
+    /// `<prefix><ms>.db`, never reused; an existing file is never
+    /// overwritten. The registry row and the `backup_created` audit event are
+    /// written in one transaction; if that fails the file is removed again.
+    pub fn create_backup(
+        &mut self,
+        dir: &Path,
+        kind: BackupKind,
+        actor: &str,
+    ) -> Result<BackupRecord, StorageError> {
+        std::fs::create_dir_all(dir).map_err(|e| StorageError::Io(e.to_string()))?;
+        let policy_version = self.active_policy()?.map_or(0, |p| p.version);
+        let now = self.clock.now_ms();
+        let mut chosen = None;
+        for i in 0..1000i64 {
+            let name = format!("{}{}.db", kind.file_prefix(), now.saturating_add(i));
+            let registered: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM backups WHERE file_name = ?1",
+                params![name],
+                |r| r.get(0),
+            )?;
+            if registered == 0 && !dir.join(&name).exists() {
+                chosen = Some(name);
+                break;
+            }
+        }
+        let name = chosen.ok_or_else(|| StorageError::Io("no free backup file name".into()))?;
+        let path = dir.join(&name);
+        self.backup_to(&path)?;
+        let result = (|| {
+            let bytes = std::fs::read(&path).map_err(|e| StorageError::Io(e.to_string()))?;
+            let record = BackupRecord {
+                file_name: name.clone(),
+                sha256: sha256_hex(&bytes),
+                bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                created_ms: now,
+                policy_version,
+                kind,
+                actor: actor.to_owned(),
+            };
+            let tx = self.conn.transaction()?;
+            tx.execute(
+                "INSERT INTO backups (file_name, sha256, bytes, created_ms, policy_version, kind, actor)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    record.file_name,
+                    record.sha256,
+                    to_i64(record.bytes)?,
+                    record.created_ms,
+                    to_i64(record.policy_version)?,
+                    kind.as_str(),
+                    record.actor
+                ],
+            )?;
+            Self::append_event_tx(
+                &tx,
+                now,
+                &NewEvent {
+                    severity: Severity::Info,
+                    kind: "backup_created".into(),
+                    device_key: None,
+                    message: format!("{} backup {name} created by {actor}", kind.as_str()),
+                    simulated: false,
+                    enforcement_state: "n/a".into(),
+                    policy_version: Some(policy_version),
+                    details: serde_json::json!({
+                        "file_name": record.file_name,
+                        "sha256": record.sha256,
+                        "bytes": record.bytes,
+                        "kind": kind.as_str(),
+                    }),
+                },
+            )?;
+            tx.commit()?;
+            Ok(record)
+        })();
+        match result {
+            Ok(record) => {
+                self.mirror_new_events();
+                Ok(record)
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                Err(e)
+            }
+        }
+    }
+
+    /// Registered backups, newest first.
+    pub fn list_backups(&self) -> Result<Vec<BackupRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT file_name, sha256, bytes, created_ms, policy_version, kind, actor
+             FROM backups ORDER BY created_ms DESC, file_name DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let kind: String = r.get(5)?;
+            Ok(BackupRecord {
+                file_name: r.get(0)?,
+                sha256: r.get(1)?,
+                bytes: u64::try_from(r.get::<_, i64>(2)?).unwrap_or(0),
+                created_ms: r.get(3)?,
+                policy_version: u64::try_from(r.get::<_, i64>(4)?).unwrap_or(0),
+                kind: if kind == "pre_restore" {
+                    BackupKind::PreRestore
+                } else {
+                    BackupKind::Manual
+                },
+                actor: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Verify a registered backup and read its policy and settings into
+    /// memory. Checks, in order: plain file name, registry entry, regular
+    /// file (not a link), SHA-256 against the registry, SQLite
+    /// `integrity_check`, RustWard schema not newer than this build, policy
+    /// checksum and validation, settings validation. The file is copied
+    /// into memory first, so what was hashed is exactly what is parsed.
+    /// Nothing in the live database changes.
+    pub fn inspect_backup(
+        &self,
+        dir: &Path,
+        file_name: &str,
+    ) -> Result<RestoreCandidate, StorageError> {
+        let reject = |r| StorageError::BackupRejected(r);
+        let plain = Path::new(file_name)
+            .file_name()
+            .is_some_and(|n| n == std::ffi::OsStr::new(file_name))
+            && !file_name.contains(['/', '\\', ':'])
+            && file_name.starts_with("rustward-");
+        if !plain {
+            return Err(reject(BackupRejection::InvalidName));
+        }
+        let record = self
+            .list_backups()?
+            .into_iter()
+            .find(|b| b.file_name == file_name)
+            .ok_or_else(|| reject(BackupRejection::NotRegistered))?;
+        let path = dir.join(file_name);
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(reject(BackupRejection::Missing));
+            }
+            Err(e) => return Err(StorageError::Io(e.to_string())),
+        };
+        if !meta.file_type().is_file() {
+            return Err(reject(BackupRejection::NotRegularFile));
+        }
+        let bytes = std::fs::read(&path).map_err(|e| StorageError::Io(e.to_string()))?;
+        if sha256_hex(&bytes) != record.sha256 {
+            return Err(reject(BackupRejection::HashMismatch));
+        }
+        // Parse the verified bytes from a private copy (never the original).
+        let tmp_path = dir.join(format!(
+            ".inspect-{}-{}.tmp",
+            std::process::id(),
+            self.clock.now_ms()
+        ));
         {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)
+                .map_err(|e| StorageError::Io(e.to_string()))?;
+            f.write_all(&bytes)
+                .map_err(|e| StorageError::Io(e.to_string()))?;
+        }
+        let parsed = (|| {
             let candidate =
-                Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-            let check: String = candidate.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+                Connection::open_with_flags(&tmp_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(|_| reject(BackupRejection::Corrupt))?;
+            let check: String = candidate
+                .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+                .map_err(|_| reject(BackupRejection::Corrupt))?;
             if check != "ok" {
-                return Err(StorageError::Integrity(check));
+                return Err(reject(BackupRejection::Corrupt));
             }
             let v: Option<u32> = candidate
                 .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                     r.get(0)
                 })
-                .optional()?
-                .flatten();
-            let v = v.ok_or_else(|| StorageError::Invalid("not a RustWard database".into()))?;
+                .map_err(|_| reject(BackupRejection::NotRustWard))?;
+            let v = v.ok_or_else(|| reject(BackupRejection::NotRustWard))?;
             if v > migrations::latest_version() {
-                return Err(StorageError::SchemaTooNew {
-                    found: v,
-                    supported: migrations::latest_version(),
-                });
+                return Err(reject(BackupRejection::SchemaTooNew));
             }
             let tmp = Self {
                 conn: candidate,
@@ -962,28 +1140,108 @@ impl Store {
                 last_mirrored_id: 0,
                 mirror: MirrorStatus::default(),
             };
-            tmp.active_policy()?
-                .ok_or_else(|| StorageError::Invalid("backup has no active policy".into()))?;
+            let policy = tmp
+                .active_policy()
+                .map_err(|_| reject(BackupRejection::InvalidPolicy))?
+                .ok_or_else(|| reject(BackupRejection::InvalidPolicy))?;
+            let settings = tmp
+                .settings()
+                .map_err(|_| reject(BackupRejection::InvalidPolicy))?;
+            settings
+                .validate()
+                .map_err(|_| reject(BackupRejection::InvalidPolicy))?;
+            Ok((policy.state, settings))
+        })();
+        let _ = std::fs::remove_file(&tmp_path);
+        let (state, settings) = parsed?;
+        Ok(RestoreCandidate {
+            record,
+            state,
+            settings,
+        })
+    }
+
+    /// Apply a verified backup as a NEW policy version (`active + 1`)
+    /// together with its settings, in one transaction. Nothing is rolled
+    /// back: older policy versions, the policy change history and the audit
+    /// log stay intact. Fails with [`StorageError::VersionConflict`] if the
+    /// active version is not `expected_active`.
+    pub fn apply_restored_state(
+        &mut self,
+        candidate: &RestoreCandidate,
+        expected_active: u64,
+        restore_id: &str,
+        actor: &str,
+    ) -> Result<u64, StorageError> {
+        let now = self.clock.now_ms();
+        let tx = self.conn.transaction()?;
+        let active: Option<i64> = tx
+            .query_row(
+                "SELECT version FROM policy_states WHERE active = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let active = active.and_then(|v| u64::try_from(v).ok()).unwrap_or(0);
+        if active != expected_active {
+            return Err(StorageError::VersionConflict {
+                expected: expected_active,
+                active,
+            });
         }
-        self.conn.restore(
-            rusqlite::MAIN_DB,
-            path,
-            None::<fn(rusqlite::backup::Progress)>,
+        let mut state = candidate.state.clone();
+        state.policy.policy_version = active.saturating_add(1);
+        state
+            .validate()
+            .map_err(|e| StorageError::Invalid(e.to_string()))?;
+        candidate
+            .settings
+            .validate()
+            .map_err(StorageError::Invalid)?;
+        Self::insert_state_tx(&tx, &state, now)?;
+        let to = state.policy.policy_version;
+        let summary = format!(
+            "policy restored from backup {} (backup v{}) as v{to}",
+            candidate.record.file_name, candidate.record.policy_version
+        );
+        let details = serde_json::json!({
+            "restore_id": restore_id,
+            "backup_file": candidate.record.file_name,
+            "backup_sha256": candidate.record.sha256,
+            "backup_created_ms": candidate.record.created_ms,
+            "backup_policy_version": candidate.record.policy_version,
+            "from_policy_version": active,
+            "to_policy_version": to,
+            "workstation_id": state.policy.workstation_id,
+            "catalog_version": state.catalog.catalog_version,
+        });
+        tx.execute(
+            "INSERT INTO policy_changes (utc_ms, actor, action, brand_id, summary, from_version, to_version, change_json)
+             VALUES (?1, ?2, 'policy_restored', '', ?3, ?4, ?5, ?6)",
+            params![now, actor, summary, to_i64(active)?, to_i64(to)?, details.to_string()],
         )?;
-        migrations::migrate(&mut self.conn, self.clock.now_ms())?;
-        // The restored history was mirrored when it was first written.
-        self.last_mirrored_id = self.max_event_id()?;
-        self.append_event(&NewEvent {
-            severity: Severity::Warning,
-            kind: "database_restored".into(),
-            device_key: None,
-            message: format!("database restored from backup by {actor}"),
-            simulated: false,
-            enforcement_state: "n/a".into(),
-            policy_version: None,
-            details: serde_json::json!({}),
-        })?;
-        Ok(())
+        tx.execute(
+            "INSERT INTO settings (key, value, updated_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_ms = excluded.updated_ms",
+            params![SETTINGS_KEY, serde_json::to_string(&candidate.settings)?, now],
+        )?;
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Warning,
+                kind: "policy_restored".into(),
+                device_key: None,
+                message: format!("{summary} by {actor}"),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: Some(to),
+                details,
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(to)
     }
 
     /// Raw connection for tests of corruption handling.

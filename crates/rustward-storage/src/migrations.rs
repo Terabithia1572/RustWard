@@ -6,9 +6,10 @@ use rusqlite::{Connection, params};
 use crate::StorageError;
 
 /// (version, SQL). Applied in order inside one transaction each.
-pub const MIGRATIONS: &[(u32, &str)] = &[(
-    1,
-    r"
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        r"
 CREATE TABLE settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
@@ -71,7 +72,48 @@ CREATE TABLE security_events (
 CREATE INDEX security_events_time ON security_events(utc_ms);
 CREATE INDEX security_events_device ON security_events(device_key);
 ",
-)];
+    ),
+    (
+        2,
+        r"
+-- Registry of backups created by the service. Only registered backups whose
+-- SHA-256 still matches can be restored (rejects foreign or altered files).
+CREATE TABLE backups (
+    file_name      TEXT PRIMARY KEY,
+    sha256         TEXT NOT NULL,
+    bytes          INTEGER NOT NULL,
+    created_ms     INTEGER NOT NULL,
+    policy_version INTEGER NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind IN ('manual', 'pre_restore')),
+    actor          TEXT NOT NULL
+);
+
+-- Retention writes the highest purgeable id here inside its transaction.
+CREATE TABLE retention_guard (cutoff_id INTEGER NOT NULL);
+
+-- Append-only guards. They stop software defects from rewriting history;
+-- they do NOT stop an administrator with direct database access, who can
+-- drop them (the hash chain and the Event Log mirror make that evident).
+CREATE TRIGGER security_events_no_update BEFORE UPDATE ON security_events
+BEGIN SELECT RAISE(ABORT, 'security_events is append-only'); END;
+CREATE TRIGGER security_events_retention_only_delete BEFORE DELETE ON security_events
+WHEN OLD.id > COALESCE((SELECT MAX(cutoff_id) FROM retention_guard), 0)
+BEGIN SELECT RAISE(ABORT, 'security_events rows are removed only by retention'); END;
+CREATE TRIGGER policy_changes_no_update BEFORE UPDATE ON policy_changes
+BEGIN SELECT RAISE(ABORT, 'policy_changes is append-only'); END;
+CREATE TRIGGER policy_changes_no_delete BEFORE DELETE ON policy_changes
+BEGIN SELECT RAISE(ABORT, 'policy_changes is append-only'); END;
+CREATE TRIGGER policy_states_immutable BEFORE UPDATE OF version, catalog_version, state_json, sha256, created_ms ON policy_states
+BEGIN SELECT RAISE(ABORT, 'stored policy states are immutable'); END;
+CREATE TRIGGER policy_states_no_delete BEFORE DELETE ON policy_states
+BEGIN SELECT RAISE(ABORT, 'stored policy states are never deleted'); END;
+CREATE TRIGGER backups_no_update BEFORE UPDATE ON backups
+BEGIN SELECT RAISE(ABORT, 'backup registry is append-only'); END;
+CREATE TRIGGER backups_no_delete BEFORE DELETE ON backups
+BEGIN SELECT RAISE(ABORT, 'backup registry is append-only'); END;
+",
+    ),
+];
 
 /// Latest schema version known to this build.
 #[must_use]

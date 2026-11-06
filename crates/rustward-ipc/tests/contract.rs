@@ -90,8 +90,12 @@ fn all_requests() -> Vec<Request> {
             expected_policy_version: 1,
         },
         Request::ListBackups,
-        Request::RestoreBackup {
+        Request::PrepareRestore {
             file_name: "rustward-backup-1.db".into(),
+        },
+        Request::ApplyRestore {
+            restore_id: "0123456789abcdef0123456789abcdef".into(),
+            expected_policy_version: 1,
         },
     ];
     for r in &all {
@@ -120,7 +124,8 @@ fn all_requests() -> Vec<Request> {
             | Request::LoadSyntheticInventory
             | Request::SetWorkstationId { .. }
             | Request::ListBackups
-            | Request::RestoreBackup { .. } => {}
+            | Request::PrepareRestore { .. }
+            | Request::ApplyRestore { .. } => {}
         }
     }
     all

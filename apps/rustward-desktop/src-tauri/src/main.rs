@@ -8,8 +8,10 @@
 //! * debug builds with `dev-backend`: an in-process backend over a temporary
 //!   development database, using the same validation and authorization code.
 //!
-//! STATUS: NOT COMPILED in the development container (no WebView2/webkit2gtk);
-//! must be built and verified on Windows 10 Pro x64.
+//! STATUS: compiled, clippy-checked and tested (Tauri mock runtime) on Linux
+//! with webkit2gtk in the development container (`scripts/verify-all.sh`).
+//! The Windows build (WebView2, MSI) is NOT VERIFIED and must be done on
+//! Windows 10 Pro x64.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;

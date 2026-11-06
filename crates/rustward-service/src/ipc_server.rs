@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use rustward_app::AppService;
 use rustward_ipc::messages::AccessLevel;
+use rustward_ipc::pipe::PipeConnection;
 use rustward_ipc::pipe::PipeListener;
-use rustward_ipc::rpc::serve_connection;
+use rustward_ipc::rpc::serve_connection_identified;
 use rustward_ipc::{PIPE_NAME_ADMIN, PIPE_NAME_STATUS, SDDL_ADMIN, SDDL_STATUS};
 use rustward_storage::Severity;
 
@@ -22,9 +23,14 @@ fn serve_pipe(app: &AppService, stop: &AtomicBool, name: &str, sddl: &str, level
     let mut errors = 0u64;
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
-            Ok((mut conn, identity)) => {
+            Ok(mut conn) => {
                 errors = 0;
-                let _ = serve_connection(&mut conn, &identity, app, CONNECTION_IDLE_TIMEOUT);
+                let _ = serve_connection_identified(
+                    &mut conn,
+                    &PipeConnection::client_identity,
+                    app,
+                    CONNECTION_IDLE_TIMEOUT,
+                );
             }
             Err(e) => {
                 errors += 1;

@@ -37,12 +37,14 @@ pub const PIPE_NAME_STATUS: &str = r"\\.\pipe\RustWard.Status.v1";
 /// Administrative pipe (SYSTEM + Administrators only).
 pub const PIPE_NAME_ADMIN: &str = r"\\.\pipe\RustWard.Admin.v1";
 
-/// SDDL for the read-only pipe: SYSTEM and Administrators full access,
-/// Authenticated Users read/write (needed to send requests; the server
-/// still accepts only read-only requests on this pipe).
-pub const SDDL_STATUS: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)";
-/// SDDL for the admin pipe: SYSTEM and Administrators only.
-pub const SDDL_ADMIN: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)";
+/// SDDL for the read-only pipe: owner LocalSystem (clients verify it),
+/// SYSTEM and Administrators full access, Authenticated Users read/write
+/// (needed to send requests; the server still accepts only read-only
+/// requests on this pipe).
+pub const SDDL_STATUS: &str = "O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)";
+/// SDDL for the admin pipe: owner LocalSystem, SYSTEM and Administrators
+/// only. Standard users cannot open it at all.
+pub const SDDL_ADMIN: &str = "O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)";
 
 /// Request envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +187,47 @@ mod tests {
             source: IdentitySource::Test,
             channel_max_access: channel,
         }
+    }
+
+    /// Parse `(A;;RIGHTS;;;SID)` ACEs from an SDDL DACL.
+    fn aces(sddl: &str) -> Vec<(String, String)> {
+        let dacl = &sddl[sddl.find("D:").expect("dacl")..];
+        dacl.split('(')
+            .skip(1)
+            .map(|ace| {
+                let f: Vec<&str> = ace.trim_end_matches(')').split(';').collect();
+                assert_eq!(f.len(), 6, "{ace}");
+                assert_eq!(f[0], "A", "only allow ACEs: {ace}");
+                (f[2].to_string(), f[5].to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pipe_sddl_owner_is_system_and_dacls_are_minimal() {
+        for sddl in [SDDL_ADMIN, SDDL_STATUS] {
+            assert!(
+                sddl.starts_with("O:SYD:P("),
+                "owner SYSTEM + protected DACL: {sddl}"
+            );
+            for (_, sid) in aces(sddl) {
+                assert!(
+                    !["WD", "AN", "NU", "BG", "IU"].contains(&sid.as_str()),
+                    "{sid}"
+                );
+            }
+        }
+        assert_eq!(
+            aces(SDDL_ADMIN),
+            [("GA".into(), "SY".into()), ("GA".into(), "BA".into())],
+            "only SYSTEM and Administrators may open the admin pipe"
+        );
+        let status = aces(SDDL_STATUS);
+        assert!(status.contains(&("GRGW".into(), "AU".into())));
+        assert!(
+            !status.iter().any(|(r, s)| s == "AU" && r.contains("GA")),
+            "authenticated users never get full control"
+        );
     }
 
     #[test]

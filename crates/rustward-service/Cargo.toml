@@ -22,5 +22,13 @@ rustward-storage.workspace = true
 rustward-windows.workspace = true
 serde_json.workspace = true
 
+[build-dependencies]
+# Generates the Event Log message table (single source of event IDs).
+rustward-windows.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+# Compiles the message table into the executable (rc.exe from the Windows SDK).
+embed-resource = "3.0.12"
+
 [lints]
 workspace = true

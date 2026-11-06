@@ -261,3 +261,115 @@ pub enum ChainStatus {
         first_bad_id: i64,
     },
 }
+
+/// Why a backup was created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    /// Requested by an administrator.
+    Manual,
+    /// Taken automatically before a restore is applied.
+    PreRestore,
+}
+
+impl BackupKind {
+    /// Stable code (also the file-name prefix selector).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::PreRestore => "pre_restore",
+        }
+    }
+
+    /// File-name prefix.
+    #[must_use]
+    pub const fn file_prefix(self) -> &'static str {
+        match self {
+            Self::Manual => "rustward-backup-",
+            Self::PreRestore => "rustward-pre-restore-",
+        }
+    }
+}
+
+/// A registered backup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupRecord {
+    /// File name inside the backup directory.
+    pub file_name: String,
+    /// SHA-256 of the file as written.
+    pub sha256: String,
+    /// Size in bytes.
+    pub bytes: u64,
+    /// Creation time, UTC ms.
+    pub created_ms: i64,
+    /// Active policy version captured in the backup.
+    pub policy_version: u64,
+    /// Kind.
+    pub kind: BackupKind,
+    /// Who created it.
+    pub actor: String,
+}
+
+/// Why a backup cannot be restored. Every rejection is audited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupRejection {
+    /// Not a plain file name.
+    #[error("not a plain backup file name")]
+    InvalidName,
+    /// Not created and registered by this RustWard installation.
+    #[error("not a backup registered by this installation")]
+    NotRegistered,
+    /// The registered file is missing.
+    #[error("backup file is missing")]
+    Missing,
+    /// Not a regular file (directory, link, device).
+    #[error("backup is not a regular file")]
+    NotRegularFile,
+    /// Content differs from the registered SHA-256.
+    #[error("backup content does not match its registered SHA-256")]
+    HashMismatch,
+    /// Not a valid SQLite database or `integrity_check` failed.
+    #[error("backup failed the database integrity check")]
+    Corrupt,
+    /// Not a RustWard database.
+    #[error("backup is not a RustWard database")]
+    NotRustWard,
+    /// Created by a newer RustWard.
+    #[error("backup schema is newer than this build supports")]
+    SchemaTooNew,
+    /// No valid active policy inside (checksum or validation failure).
+    #[error("backup contains no valid policy")]
+    InvalidPolicy,
+}
+
+impl BackupRejection {
+    /// Stable code for audit records.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::InvalidName => "invalid_name",
+            Self::NotRegistered => "not_registered",
+            Self::Missing => "missing",
+            Self::NotRegularFile => "not_regular_file",
+            Self::HashMismatch => "hash_mismatch",
+            Self::Corrupt => "corrupt",
+            Self::NotRustWard => "not_rustward",
+            Self::SchemaTooNew => "schema_too_new",
+            Self::InvalidPolicy => "invalid_policy",
+        }
+    }
+}
+
+/// A verified backup, read into memory. Applying it never reads the file
+/// again, so the file cannot change between verification and use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreCandidate {
+    /// Registry entry.
+    pub record: BackupRecord,
+    /// Policy state stored in the backup (checksum-verified, validated).
+    pub state: rustward_core::policy_edit::PolicyState,
+    /// Settings stored in the backup (validated).
+    pub settings: AppSettings,
+}

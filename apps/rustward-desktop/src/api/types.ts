@@ -65,7 +65,8 @@ export type Request =
   | { type: "load_synthetic_inventory" }
   | { type: "set_workstation_id"; workstation_id: string; expected_policy_version: number }
   | { type: "list_backups" }
-  | { type: "restore_backup"; file_name: string };
+  | { type: "prepare_restore"; file_name: string }
+  | { type: "apply_restore"; restore_id: string; expected_policy_version: number };
 
 export type RequestType = Request["type"];
 
@@ -94,7 +95,8 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "load_synthetic_inventory",
   "set_workstation_id",
   "list_backups",
-  "restore_backup",
+  "prepare_restore",
+  "apply_restore",
 ];
 
 /** Requests that require an elevated administrator (server-enforced). */
@@ -112,7 +114,8 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "load_synthetic_inventory",
   "set_workstation_id",
   "list_backups",
-  "restore_backup",
+  "prepare_restore",
+  "apply_restore",
 ]);
 
 export interface ServiceStatusView {
@@ -285,6 +288,24 @@ export interface BackupView {
   bytes: number;
   created_ms: number;
   kind: "manual" | "pre_restore" | string;
+  policy_version: number;
+  sha256: string;
+  actor: string;
+  file_present: boolean;
+}
+
+export interface RestorePreviewView {
+  restore_id: string;
+  file_name: string;
+  sha256: string;
+  backup_created_ms: number;
+  backup_policy_version: number;
+  current_policy_version: number;
+  resulting_policy_version: number;
+  backup_workstation_id: string;
+  changes: string[];
+  expires_ms: number;
+  notice: string;
 }
 
 export interface MutationView {
@@ -323,7 +344,8 @@ export type ResponseBody =
   | { type: "mutation"; data: MutationView }
   | { type: "export"; data: ExportView }
   | { type: "done"; data: { message: string } }
-  | { type: "backups"; data: BackupView[] };
+  | { type: "backups"; data: BackupView[] }
+  | { type: "restore_preview"; data: RestorePreviewView };
 
 export type ErrorCode =
   | "invalid_request"
