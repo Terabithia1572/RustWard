@@ -105,6 +105,20 @@ pub enum Request {
     /// conflicts, prerequisites, recovery, installed-device assessment and
     /// the actual (inactive) enforcement status.
     GetEnforcementReadiness,
+    /// Read-only Windows enforcement observer: live Device Installation
+    /// Restriction policy correlated with the inventory's problem codes and
+    /// RustWard's simulated decisions. Records a deduplicated audit event
+    /// when an installation denial is newly observed (append-only, no
+    /// Windows writes).
+    GetEnforcementObservation,
+    /// Generate a reviewable Group Policy checklist that would prevent the
+    /// installation of one USB storage device. Nothing is applied.
+    GetPolicyChecklist {
+        /// Device key (32 hex).
+        device_key: String,
+        /// Include the "also apply to installed devices" option.
+        retroactive: bool,
+    },
     /// Settings.
     GetSettings,
     /// Re-evaluate the current inventory under the current policy (no writes).
@@ -225,6 +239,8 @@ impl Request {
             | Self::ListPolicyChanges { .. }
             | Self::GetDiagnostics
             | Self::GetEnforcementReadiness
+            | Self::GetEnforcementObservation
+            | Self::GetPolicyChecklist { .. }
             | Self::GetSettings
             | Self::RunSimulation => AccessLevel::ReadOnly,
             Self::AddManufacturer { .. }
@@ -611,6 +627,10 @@ pub enum ResponseBody {
     Diagnostics(DiagnosticsView),
     /// Enforcement readiness (read-only).
     EnforcementReadiness(Box<EnforcementReadinessView>),
+    /// Windows enforcement observation (read-only).
+    EnforcementObservation(Box<EnforcementObservationView>),
+    /// Administrator Group Policy checklist (generated, never applied).
+    PolicyChecklist(Box<PolicyChecklistView>),
     /// Settings.
     Settings(SettingsView),
     /// Simulation.
@@ -776,4 +796,46 @@ pub struct EnforcementReadinessView {
     pub recovery: RecoveryReadinessView,
     /// Already-installed storage assessment (sanitised).
     pub installed: InstalledAssessment,
+}
+
+/// One observed USB storage device (instance ID masked).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedDeviceView {
+    /// Device key.
+    pub device_key: String,
+    /// Observation (its `instance_id` is masked).
+    pub observed: rustward_enforcement::observer::ObservedDevice,
+}
+
+/// Windows enforcement observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnforcementObservationView {
+    /// Policy source (`windows_registry_readonly`, ...) or `unavailable`.
+    pub policy_source: String,
+    /// Policy read error, when the policy could not be read.
+    pub policy_error: Option<String>,
+    /// Policy capture time (UTC ms).
+    pub policy_captured_ms: i64,
+    /// The Restrictions key exists.
+    pub policy_key_present: bool,
+    /// Any Device Installation Restriction rule is configured.
+    pub windows_restrictions_configured: bool,
+    /// Inventory capture time, if an inventory exists.
+    pub inventory_collected_unix_seconds: Option<i64>,
+    /// USB storage devices.
+    pub devices: Vec<ObservedDeviceView>,
+    /// Devices whose installation denial was newly observed (and audited)
+    /// by this call.
+    pub newly_observed_denials: Vec<String>,
+    /// Always true: RustWard itself applies no restriction.
+    pub rustward_applies_nothing: bool,
+}
+
+/// Group Policy checklist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyChecklistView {
+    /// Structured checklist.
+    pub checklist: rustward_enforcement::checklist::PolicyChecklist,
+    /// Plain-text rendering for copying.
+    pub text: String,
 }

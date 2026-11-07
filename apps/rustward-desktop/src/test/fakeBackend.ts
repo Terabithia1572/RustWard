@@ -7,8 +7,10 @@ import type {
   DashboardView,
   DeviceView,
   DiagnosticsView,
+  EnforcementObservationView,
   EnforcementReadinessView,
   EventView,
+  ObservedDevice,
   ManufacturerView,
   Request,
   ResponseBody,
@@ -95,6 +97,63 @@ export interface FakeState {
   failNext: { code: string; message: string; only?: Request["type"] } | null;
   /** Readiness view includes a policy inspection (otherwise "unavailable"). */
   readinessInspection: boolean;
+  /** Windows observation returned by get_enforcement_observation. */
+  observation: EnforcementObservationView;
+}
+
+/** Observed device as the VM showed it after the rollback (accessible). */
+export function observed(over: Partial<ObservedDevice> = {}): ObservedDevice {
+  return {
+    instance_id: "USBSTOR\\DISK&VEN_KINGSTON&****",
+    name: "Kingston DataTraveler 3.0 USB Device",
+    vid_pid: "0951:1666",
+    reported_vendor: "Kingston",
+    reported_product: "DataTraveler_3.0",
+    hardware_id: "USBSTOR\\DiskKingstonDataTraveler_3.0____",
+    rustward_verdict: "deny",
+    rustward_reason: "brand_not_allowed",
+    windows_rule: { outcome: "not_restricted" },
+    present: true,
+    problem_code: null,
+    driver_installed: true,
+    states: ["SIMULATED_DENY", "NO_WINDOWS_RESTRICTION"],
+    evidence: "none",
+    label_rustward_tr: "Simülasyonda ret",
+    label_policy_tr: "Kural uygulanmamış",
+    label_status_tr: "Erişilebilir (sürücü kurulu)",
+    explanation_tr: "RustWard kararı yalnızca simülasyondur; Windows bu cihazı engellemiyor.",
+    history: null,
+    ...over,
+  };
+}
+
+/** The observed Kingston while Windows denied its installation. */
+export function deniedKingston(): ObservedDevice {
+  return observed({
+    windows_rule: { outcome: "prevented", rule: { layer: "device_id", list: "DenyDeviceIDs", entry: "USBSTOR\\DiskKingstonDataTraveler_3.0____" } },
+    problem_code: 28,
+    driver_installed: false,
+    states: ["SIMULATED_DENY", "WINDOWS_INSTALL_DENIED", "WINDOWS_ACCESS_NOT_VERIFIED"],
+    evidence: "install_denied",
+    label_policy_tr: "Engelleme kuralı eşleşiyor (DenyDeviceIDs: USBSTOR\\DiskKingstonDataTraveler_3.0____)",
+    label_status_tr: "Windows kurulumu engelledi (Kod 28)",
+    explanation_tr: "Windows bu cihazın sürücü kurulumunu reddetti; disk ve birim nesnesi oluşmaz. Okuma/yazma yolları ayrıca test edilmedi.",
+  });
+}
+
+export function observation(devices: ObservedDevice[], over: Partial<EnforcementObservationView> = {}): EnforcementObservationView {
+  return {
+    policy_source: "windows_registry_read_only",
+    policy_error: null,
+    policy_captured_ms: 1_794_048_315_000,
+    policy_key_present: false,
+    windows_restrictions_configured: false,
+    inventory_collected_unix_seconds: 1_794_048_300,
+    devices: devices.map((o, i) => ({ device_key: i === 0 ? "k-deny" : `k-obs-${i}`, observed: o })),
+    newly_observed_denials: [],
+    rustward_applies_nothing: true,
+    ...over,
+  };
 }
 
 export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; state: FakeState } {
@@ -106,6 +165,18 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
     workstationId: "PC-TEST",
     readinessInspection: true,
+    observation: observation([
+      observed(),
+      observed({
+        instance_id: "USBSTOR\\DISK&VEN_VENDORC&****",
+        name: "VendorC ProductCode USB Device",
+        vid_pid: "346D:5678",
+        reported_vendor: "VendorC",
+        reported_product: "ProductCode",
+        hardware_id: "USBSTOR\\DiskVendorC_ProductCode_____3.20",
+        rustward_reason: "unknown_manufacturer",
+      }),
+    ]),
     backups: [
       {
         file_name: "rustward-backup-1700000000000.db",
@@ -302,6 +373,37 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       }
       case "get_diagnostics":
         return { type: "diagnostics", data: diagnostics() };
+      case "get_enforcement_observation":
+        return { type: "enforcement_observation", data: state.observation };
+      case "get_policy_checklist": {
+        const d = state.observation.devices.find((x) => x.device_key === r.device_key);
+        if (!d) throw { code: "not_found", message: "device not in the current inventory" };
+        const text = `RustWard - Yönetici Grup İlkesi kontrol listesi (RustWard bu değişikliği UYGULAMAZ)\nDonanım kimliği: ${d.observed.hardware_id}\nGeriye dönük: ${r.retroactive ? "evet" : "hayır"}\n`;
+        return {
+          type: "policy_checklist",
+          data: {
+            text,
+            checklist: {
+              device_name: d.observed.name,
+              vid_pid: d.observed.vid_pid,
+              hardware_id: d.observed.hardware_id ?? "",
+              policy_name_en: "Prevent installation of devices that match any of these device IDs",
+              policy_name_tr: "Bu aygıt kimliklerinden herhangi biriyle eşleşen aygıtların yüklenmesini engelle",
+              policy_path_en: "Computer Configuration > ...",
+              policy_path_tr: "Bilgisayar Yapılandırması > ...",
+              retroactive: r.retroactive,
+              device_installed: true,
+              existing: ["DenyDeviceIDs: yapılandırılmamış"],
+              expected_registry: ["DenyDeviceIDs = 1 (REG_DWORD)"],
+              affected_devices: [d.observed.name],
+              steps: ["gpedit.msc açın"],
+              risks: ["Bu kimlik bu modelin TÜM birimleriyle eşleşir"],
+              rollback: ["İlkeyi açın ve \"Yapılandırılmadı\" seçin."],
+              verification: ["Kod 1 / Kod 28"],
+            },
+          },
+        };
+      }
       case "get_enforcement_readiness":
         return { type: "enforcement_readiness", data: readiness() };
       case "get_settings":

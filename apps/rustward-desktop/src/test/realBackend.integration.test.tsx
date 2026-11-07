@@ -75,10 +75,15 @@ describe("real backend: dashboard and devices", () => {
     await user.click(denied!);
     const panel = (await screen.findByText("Karar açıklaması")).closest("section") ?? document.body;
     await waitFor(() => expect(panel.textContent).toMatch(/SİMÜLE RET/));
-    // Every row says enforcement is not verified (the explanation panel may
-    // say it once more).
-    expect(screen.getAllByText("Doğrulanmadı").length).toBeGreaterThanOrEqual(rows.length);
-    for (const r of rows) expect(r.textContent).toContain("Doğrulanmadı");
+    // Real Windows status column: off Windows the policy cannot be read, so
+    // USB storage rows say exactly that (never "no rule", never "blocked");
+    // rows the observer does not cover show "—".
+    await waitFor(() => expect(document.querySelectorAll("[data-testid=windows-status]").length).toBeGreaterThan(0));
+    for (const c of document.querySelectorAll("[data-testid=windows-status]")) {
+      expect(c.textContent).toContain("Windows politikası okunamadı");
+      expect(c.textContent).not.toContain("Kural uygulanmamış");
+    }
+    for (const r of rows) expect(r.textContent).not.toMatch(FORBIDDEN_BLOCKED_CLAIM);
   });
 });
 

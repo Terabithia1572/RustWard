@@ -4,6 +4,7 @@ import type { DeviceView, ExplanationView } from "../api/types";
 import { Badge, Button, Card, DecisionBadge, Empty, ErrorNotice, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
+import { WindowsStatusCell, useObservation } from "../components/WindowsObservation";
 
 const STORAGE = new Set(["usb_storage_disk", "usb_storage_other_type", "usb_portable_device", "storage_attachment_unknown"]);
 
@@ -50,6 +51,12 @@ export function DevicesPage() {
   );
   const action = useAction();
   const [notice, setNotice] = useState<string | null>(null);
+  // Real Windows state per device (read-only observer), re-read with the list.
+  const obs = useObservation(`observation-${r.data?.length ?? 0}-${r.loading}`);
+  const observed = useMemo(
+    () => new Map((obs.data?.devices ?? []).map((d) => [d.device_key, d.observed])),
+    [obs.data],
+  );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -135,7 +142,7 @@ export function DevicesPage() {
                     <th className="px-3 py-2">{t("devices.col.identity")}</th>
                     <th className="px-3 py-2">{t("devices.col.connection")}</th>
                     <th className="px-3 py-2">{t("devices.col.decision")}</th>
-                    <th className="px-3 py-2">{t("devices.col.enforcement")}</th>
+                    <th className="px-3 py-2">{t("devices.col.windows")}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -178,8 +185,12 @@ export function DevicesPage() {
                           <div className="mt-1 text-[11px] text-slate-500">{tx("reason", d.reason)}</div>
                         )}
                       </td>
-                      <td className="px-3 py-2">
-                        <Badge tone="warning">{d.enforcement_verified ? "✓" : t("badge.notVerified")}</Badge>
+                      <td className="max-w-xs px-3 py-2">
+                        {STORAGE.has(d.category) ? (
+                          <WindowsStatusCell o={observed.get(d.device_key)} />
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}

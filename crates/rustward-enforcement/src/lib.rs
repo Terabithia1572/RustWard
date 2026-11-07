@@ -20,8 +20,10 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+pub mod checklist;
 pub mod device_install;
 pub mod installed_assessment;
+pub mod observer;
 pub mod policy_eval;
 pub mod policy_inspect;
 pub mod policy_state;

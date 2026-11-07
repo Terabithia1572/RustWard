@@ -24,11 +24,16 @@ describe("i18n", () => {
     expect(tr["banner.notActivated"]).toBe("USB koruması henüz etkinleştirilmemiştir.");
   });
 
-  it("never claims that a device was actually blocked", () => {
+  it("never claims that a device was actually blocked (except the evidence-gated notice)", () => {
+    // notify.realBlocked is shown only by the notifier, for a connected device
+    // whose installation Windows currently denies (see observation.test.tsx).
+    const EVIDENCE_GATED = new Set(["notify.realBlocked"]);
     const forbidden = [/engellendi/i, /engellenmiştir/i, /\bblocked by rustward\b/i, /\bwas blocked\b/i, /\bprotected\b(?! by)/i];
     for (const [k, v] of [...Object.entries(tr), ...Object.entries(en)]) {
+      if (EVIDENCE_GATED.has(k)) continue;
       for (const f of forbidden) expect(f.test(v), `${k}: ${v}`).toBe(false);
     }
+    expect(tr["notify.realBlocked"]).toBe("USB engellenmiştir. İşlem kayıt altına alınmıştır.");
   });
 
   it("interpolates parameters", () => {

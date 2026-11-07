@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod inventory;
+mod observation;
 mod policy_source;
 
 use std::collections::HashMap;
@@ -1773,6 +1774,21 @@ impl Handler for AppService {
             Request::GetDiagnostics => {
                 let g = self.lock()?;
                 Ok(ResponseBody::Diagnostics(self.diagnostics(&g)))
+            }
+            Request::GetEnforcementObservation => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementObservation(Box::new(
+                    self.enforcement_observation(&mut g)?,
+                )))
+            }
+            Request::GetPolicyChecklist {
+                device_key,
+                retroactive,
+            } => {
+                let g = self.lock()?;
+                Ok(ResponseBody::PolicyChecklist(Box::new(
+                    self.policy_checklist(&g, device_key, *retroactive)?,
+                )))
             }
             Request::GetEnforcementReadiness => {
                 let g = self.lock()?;

@@ -12,6 +12,8 @@ export const MAX_NOTICES = 3;
 interface Notice {
   key: string;
   label: string;
+  /** Real Windows installation denial (current evidence), not a simulation. */
+  real?: { code: number };
 }
 
 function label(d: DeviceView): string {
@@ -23,24 +25,27 @@ function label(d: DeviceView): string {
  * In-app notices for NEW simulated denials. The first poll only records a
  * baseline, so devices seen before the window opened do not pop up.
  *
- * The wording never claims that access was blocked: RustWard enforcement is
- * not active, and the verified "USB engellenmiştir" message may only be shown
- * with real enforcement evidence.
+ * Simulated notices never claim that access was blocked. The
+ * "USB engellenmiştir" notice is shown only for a connected device whose
+ * installation Windows currently denies (observer evidence), and its detail
+ * says that read/write paths were not tested separately.
  */
 export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: boolean; pollMs?: number }) {
   const { t } = useI18n();
   const api = useApi();
   const seen = useRef<Set<string> | null>(null);
+  const seenReal = useRef<Set<string> | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
 
   useEffect(() => {
     if (!enabled) {
       seen.current = null;
+      seenReal.current = null;
       setNotices([]);
       return;
     }
     let alive = true;
-    const poll = async () => {
+    const pollSimulated = async () => {
       try {
         const denied = (await api.dashboard()).recent_denied.filter((d) => d.simulated_decision === "deny");
         if (!alive) return;
@@ -56,6 +61,39 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
       } catch {
         /* Service errors are shown on the pages; notices simply pause. */
       }
+    };
+    const pollReal = async () => {
+      // Real Windows evidence: only a CONNECTED device whose installation
+      // Windows currently denies. History, disconnected devices and
+      // simulations never produce this notice.
+      try {
+        const o = await api.enforcementObservation();
+        if (!alive) return;
+        const current = o.devices.filter((d) => d.observed.evidence === "install_denied" && d.observed.present === true);
+        const before = seenReal.current;
+        const fresh = current.filter((d) =>
+          before === null ? o.newly_observed_denials.includes(d.device_key) : !before.has(d.device_key),
+        );
+        seenReal.current = new Set(current.map((d) => d.device_key));
+        if (fresh.length > 0) {
+          setNotices((n) =>
+            [
+              ...fresh.map((d) => ({
+                key: `real-${d.device_key}`,
+                label: d.observed.name,
+                real: { code: d.observed.problem_code ?? 0 },
+              })),
+              ...n.filter((x) => !fresh.some((d) => x.key === `real-${d.device_key}`)),
+            ].slice(0, MAX_NOTICES),
+          );
+        }
+      } catch {
+        /* Observation unavailable: no real notice is ever guessed. */
+      }
+    };
+    const poll = async () => {
+      await pollSimulated();
+      await pollReal();
     };
     void poll();
     const id = window.setInterval(() => void poll(), pollMs);
@@ -80,8 +118,19 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
         >
           <TriangleAlert className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
           <div className="min-w-0 flex-1">
-            <p className="font-medium text-slate-900 dark:text-slate-50">{t("notify.simulatedDenial", { device: n.label })}</p>
-            <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">{t("notify.simulatedDenialDetail")}</p>
+            {n.real ? (
+              <>
+                <p className="font-medium text-slate-900 dark:text-slate-50">{t("notify.realBlocked")}</p>
+                <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
+                  {t("notify.realBlockedDetail", { device: n.label, code: n.real.code })}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-slate-900 dark:text-slate-50">{t("notify.simulatedDenial", { device: n.label })}</p>
+                <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">{t("notify.simulatedDenialDetail")}</p>
+              </>
+            )}
           </div>
           <button
             type="button"

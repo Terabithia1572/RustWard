@@ -39,6 +39,14 @@
     },
     {
       "access": "read_only",
+      "type": "get_enforcement_observation"
+    },
+    {
+      "access": "read_only",
+      "type": "get_policy_checklist"
+    },
+    {
+      "access": "read_only",
       "type": "get_settings"
     },
     {

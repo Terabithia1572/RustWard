@@ -3,7 +3,9 @@ import type {
   DashboardView,
   DeviceView,
   DiagnosticsView,
+  EnforcementObservationView,
   EnforcementReadinessView,
+  PolicyChecklistView,
   ErrorCode,
   EventQuery,
   EventView,
@@ -111,6 +113,15 @@ export class Api {
   }
   async enforcementReadiness(): Promise<EnforcementReadinessView> {
     return expect(await this.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
+  }
+  async enforcementObservation(): Promise<EnforcementObservationView> {
+    return expect(await this.call({ type: "get_enforcement_observation" }), "enforcement_observation");
+  }
+  async policyChecklist(deviceKey: string, retroactive: boolean): Promise<PolicyChecklistView> {
+    return expect(
+      await this.call({ type: "get_policy_checklist", device_key: deviceKey, retroactive }),
+      "policy_checklist",
+    );
   }
   async settings(): Promise<SettingsView> {
     return expect(await this.call({ type: "get_settings" }), "settings");

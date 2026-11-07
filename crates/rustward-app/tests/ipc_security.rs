@@ -177,6 +177,8 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::ListPolicyChanges { .. }
             | Request::GetDiagnostics
             | Request::GetEnforcementReadiness
+            | Request::GetEnforcementObservation
+            | Request::GetPolicyChecklist { .. }
             | Request::GetSettings
             | Request::RunSimulation => unreachable!("read-only request in privileged list"),
         }
@@ -348,6 +350,7 @@ fn read_only_requests_work_for_standard_users_and_change_nothing() {
         Request::ListPolicyChanges { limit: 10 },
         Request::GetDiagnostics,
         Request::GetEnforcementReadiness,
+        Request::GetEnforcementObservation,
         Request::GetSettings,
         Request::RunSimulation,
     ] {

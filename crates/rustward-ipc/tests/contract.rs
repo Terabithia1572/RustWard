@@ -49,6 +49,11 @@ fn all_requests() -> Vec<Request> {
         Request::ListPolicyChanges { limit: 1 },
         Request::GetDiagnostics,
         Request::GetEnforcementReadiness,
+        Request::GetEnforcementObservation,
+        Request::GetPolicyChecklist {
+            device_key: "k".into(),
+            retroactive: true,
+        },
         Request::GetSettings,
         Request::RunSimulation,
         Request::AddManufacturer {
@@ -111,6 +116,8 @@ fn all_requests() -> Vec<Request> {
             | Request::ListPolicyChanges { .. }
             | Request::GetDiagnostics
             | Request::GetEnforcementReadiness
+            | Request::GetEnforcementObservation
+            | Request::GetPolicyChecklist { .. }
             | Request::GetSettings
             | Request::RunSimulation
             | Request::AddManufacturer { .. }

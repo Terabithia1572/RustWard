@@ -51,6 +51,8 @@ export type Request =
   | { type: "list_policy_changes"; limit: number }
   | { type: "get_diagnostics" }
   | { type: "get_enforcement_readiness" }
+  | { type: "get_enforcement_observation" }
+  | { type: "get_policy_checklist"; device_key: string; retroactive: boolean }
   | { type: "get_settings" }
   | { type: "run_simulation" }
   | { type: "add_manufacturer"; input: ManufacturerInput; allowed: boolean; expected_policy_version: number }
@@ -82,6 +84,8 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "list_policy_changes",
   "get_diagnostics",
   "get_enforcement_readiness",
+  "get_enforcement_observation",
+  "get_policy_checklist",
   "get_settings",
   "run_simulation",
   "add_manufacturer",
@@ -342,6 +346,8 @@ export type ResponseBody =
   | { type: "policy_changes"; data: PolicyChangeView[] }
   | { type: "diagnostics"; data: DiagnosticsView }
   | { type: "enforcement_readiness"; data: EnforcementReadinessView }
+  | { type: "enforcement_observation"; data: EnforcementObservationView }
+  | { type: "policy_checklist"; data: PolicyChecklistView }
   | { type: "settings"; data: SettingsView }
   | { type: "simulation"; data: SimulationView }
   | { type: "mutation"; data: MutationView }
@@ -525,4 +531,98 @@ export interface EnforcementReadinessView {
     suspend_operations: number;
   };
   installed: InstalledAssessment;
+}
+
+// ---- Real Windows enforcement observation (read-only) ----------------------
+// Mirrors rustward-enforcement observer/checklist and rustward-ipc views.
+
+export type ObservedState =
+  | "SIMULATED_DENY"
+  | "NO_WINDOWS_RESTRICTION"
+  | "WINDOWS_RULE_CONFIGURED"
+  | "WINDOWS_INSTALL_DENIED"
+  | "WINDOWS_ACCESS_NOT_VERIFIED"
+  | "STATUS_UNKNOWN"
+  | "POLICY_MISMATCH";
+
+export type EvidenceLevel = "none" | "policy_only" | "install_denied";
+
+export interface MatchedRuleView {
+  layer: string;
+  list: string;
+  entry: string;
+}
+
+export type WindowsInstallOutcome =
+  | { outcome: "allowed"; rule: MatchedRuleView }
+  | { outcome: "prevented"; rule: MatchedRuleView }
+  | { outcome: "not_restricted" };
+
+export interface HistoricalDenial {
+  observed_ms: number;
+  problem_code: number;
+  rule_entry: string;
+}
+
+export interface ObservedDevice {
+  instance_id: string;
+  name: string;
+  vid_pid: string | null;
+  reported_vendor: string | null;
+  reported_product: string | null;
+  hardware_id: string | null;
+  rustward_verdict: string;
+  rustward_reason: string;
+  windows_rule: WindowsInstallOutcome;
+  present: boolean | null;
+  problem_code: number | null;
+  driver_installed: boolean | null;
+  states: ObservedState[];
+  evidence: EvidenceLevel;
+  label_rustward_tr: string;
+  label_policy_tr: string;
+  label_status_tr: string;
+  explanation_tr: string;
+  history: HistoricalDenial | null;
+}
+
+export interface ObservedDeviceView {
+  device_key: string;
+  observed: ObservedDevice;
+}
+
+export interface EnforcementObservationView {
+  policy_source: string;
+  policy_error: string | null;
+  policy_captured_ms: number;
+  policy_key_present: boolean;
+  windows_restrictions_configured: boolean;
+  inventory_collected_unix_seconds: number | null;
+  devices: ObservedDeviceView[];
+  newly_observed_denials: string[];
+  rustward_applies_nothing: boolean;
+}
+
+export interface PolicyChecklist {
+  device_name: string;
+  vid_pid: string | null;
+  hardware_id: string;
+  policy_name_en: string;
+  policy_name_tr: string;
+  policy_path_en: string;
+  policy_path_tr: string;
+  retroactive: boolean;
+  device_installed: boolean;
+  existing: string[];
+  expected_registry: string[];
+  affected_devices: string[];
+  steps: string[];
+  risks: string[];
+  rollback: string[];
+  verification: string[];
+}
+
+export interface PolicyChecklistView {
+  checklist: PolicyChecklist;
+  text: string;
 }

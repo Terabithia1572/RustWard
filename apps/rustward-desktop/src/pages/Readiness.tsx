@@ -3,6 +3,7 @@
 // request is `get_enforcement_readiness`, and the activation button is
 // permanently disabled in this build.
 import type { ReactNode } from "react";
+import { ObservationCard } from "../components/WindowsObservation";
 import { Lock } from "lucide-react";
 import type {
   EnforcementReadinessView,
@@ -274,6 +275,8 @@ export function ReadinessPage() {
               {t("readiness.activationDisabled")}
             </p>
           </Card>
+
+          <ObservationCard />
 
           <InspectionCard v={v} />
 
