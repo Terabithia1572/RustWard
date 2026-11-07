@@ -1,107 +1,270 @@
 # RustWard
 
-Offline, brand-based USB storage access control for standalone Windows 10 Pro x64
-workstations.
+**Offline USB storage access-control assessment and administrator-guided
+Windows enforcement for Windows 10/11 Pro.**
 
-> **Current state (2026-11-06): development build, simulation only.**
-> RustWard does **not** block any USB device. Every decision is a simulation
-> (`SİMÜLE İZİN` / `SİMÜLE RET`) and the dashboard shows
-> **"Koruma henüz gerçek Windows ortamında doğrulanmadı."** Native Windows and physical USB
-> testing are deferred to the final acceptance stage. Not production-ready.
+[Türkçe](README_TR.md) · Developer: **Yunus İNAN**
 
-## What exists
+> **Status (Phase 6, November 2026): pre-release, VM-tested.**
+>
+> - RustWard **observes and verifies** real Windows USB state.
+> - It **does not apply** Windows policy automatically. Automatic application
+>   is **BLOCKED** by design.
+> - Manufacturer identity is **self-reported** by the device and is never
+>   authenticated.
+> - An administrator applies Windows Group Policy changes. RustWard saves the
+>   baseline, verifies the change exactly, observes the outcome, audits it and
+>   verifies the rollback.
+> - Do not deploy it to production workstations.
 
-| Part | Path | Status |
-|---|---|---|
-| Policy engine | `crates/rustward-core` | Tested |
-| SQLite storage, hash-chained audit | `crates/rustward-storage` | Tested |
-| Application service (all requests) | `crates/rustward-app` | Tested |
-| Windows service | `crates/rustward-service` | Console mode + runtime tested; SCM host, Event Log mirror and device-change wake-up type-checked only (never run) |
-| Dry-run enforcement providers, activation gates, policy inspection + installed-device assessment | `crates/rustward-enforcement` | Tested as a model; activation always refused; **no enforcement**, no registry writes |
-| Local IPC (mock + named pipes) | `crates/rustward-ipc` | Protocol tested; pipes type-checked only |
-| Windows adapters (read-only SetupAPI inventory, read-only Device Installation policy reader, device-change notifications, Event Log, SCM host) | `crates/rustward-windows`, `crates/rustward-inventory` | Logic tested; native NOT RUN |
-| Desktop app (Tauri 2, React, TS, Tailwind) | `apps/rustward-desktop` | UI tested; Tauri shell tested on Linux only |
-| Backend selection for the app | `crates/rustward-ui-bridge` | Tested |
-| Offline packaging preparation | `scripts/`, `packaging/` | Vendoring tested on Linux; MSI NOT RUN |
+## Contents
 
-Details and classification: [`docs/PHASE-STATUS.md`](docs/PHASE-STATUS.md).
-Test evidence: [`docs/TEST-RESULTS.md`](docs/TEST-RESULTS.md).
+- [Overview](#overview)
+- [Features](#features)
+- [Security model](#security-model)
+- [Architecture](#architecture)
+- [Technology stack](#technology-stack)
+- [Supported Windows versions](#supported-windows-versions)
+- [Installation](#installation)
+- [VM testing guidance](#vm-testing-guidance)
+- [Build](#build)
+- [Testing](#testing)
+- [Screenshots](#screenshots)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [Documentation](#documentation)
 
-## Windows build (desktop application)
+## Overview
 
-Double-click `BUILD-RUSTWARD.cmd` (no administrator rights; installs nothing). It checks Rust (MSVC),
-Visual Studio C++ tools, the Windows SDK, Node.js and WebView2, builds with Tauri and writes:
+RustWard targets standalone, air-gapped Windows workstations where USB mass
+storage must follow a manufacturer policy:
 
-| File | What it is |
+| Manufacturer | Target policy |
 |---|---|
-| `dist\RustWard.exe` (+ `START-RUSTWARD.cmd`) | The real application. It talks to the RustWard Windows service; without the service it says so. |
-| `dist\RustWard-Onizleme.exe` (+ `START-RUSTWARD-ONIZLEME.cmd`) | Preview: same UI with the in-process development backend (temporary SQLite database, read-only device inventory, labelled synthetic data). |
-| `dist\installer\*.msi` | UI-only MSI (no service). Built, never installed by the script. |
+| SanDisk | Allow |
+| TÜBİTAK / BİLGEM / SIR II | Allow |
+| Kingston, Seagate | Deny |
+| Any other or unknown USB storage | Deny |
+| Keyboards, mice, printers | Unaffected |
 
-Logs go to `build-logs\`. First built and launched natively on 2026-11-06 (Windows 11 Pro 23H2, MSVC 14.51).
-**A running application does not mean USB enforcement works: USB protection is not activated.**
+This is a **target policy, not a claim of achieved enforcement.** RustWard
+evaluates every device against it. It also shows **separately** what Windows
+really does with the device. The dashboard says "protected" only when Windows
+is observed denying a device under a policy the administrator verified.
 
-## Development
+## Features
+
+- **Real device inventory.** Read-only SetupAPI enumeration of USB storage,
+  peripherals and internal disks. It records VID/PID, hardware IDs, SCSI
+  INQUIRY vendor/product/revision, the parent chain, the connection state, the
+  Windows problem code and the last real event. Inventory reads never block
+  other requests.
+- **Default-deny policy engine.**
+  - Explicit allow and deny lists per manufacturer, with default deny for
+    everything else.
+  - Every in-scope device gets one policy category: `ALLOW_CANDIDATE`,
+    `DENY_CANDIDATE`, `UNVERIFIED_IDENTITY`, `UNSUPPORTED_DEVICE` or
+    `OUT_OF_SCOPE`.
+  - It also gets one enforcement category: `WINDOWS_DENIAL_VERIFIED` or
+    `ENFORCEMENT_NOT_ACTIVE`.
+- **Identity grading.** The INQUIRY vendor and the USB VID are compared. The
+  result is corroborated, single source, ambiguous, conflicting, generic or
+  missing. An allow needs two agreeing sources, and nothing is ever marked
+  authenticated.
+- **Real Windows observation.**
+  - It re-reads the Device Installation Restrictions and Removable Storage
+    Access policies (read-only).
+  - It correlates them with each device's problem code. The protection states
+    are `unknown`, `inactive`, `configured_unverified`, `denial_observed` and
+    `verified_active`.
+- **Administrator-guided enforcement sessions:**
+  - **Device deny.** One exact USB disk, by device ID, optionally retroactive.
+    Verified in a VM.
+  - **Default-deny profile.** Layered Device Installation Restrictions: prevent
+    the DiskDrive class (never retroactive), allow the allowed manufacturers'
+    IDs and the internal disks.
+
+  Each session saves a baseline, shows a gpedit checklist in Turkish and
+  English, verifies the change exactly, observes devices and verifies the
+  rollback.
+- **Real-time monitoring.** Device-change wake-up in the service, plus a UI
+  watcher that refreshes only on real changes. There are no duplicate notices.
+  "USB engellenmiştir. İşlem kayıt altına alınmıştır." appears **only** for a
+  verified real Windows denial.
+- **Audit.** SQLite (WAL), hash-chained and append-only, mirrored to the
+  Windows Event Log. Denial episodes are deduplicated.
+- **Readiness.** An ordered list of every condition that keeps the system out
+  of a verified protection state.
+- **Interface.** Complete Turkish localization (English available), with a dark
+  theme.
+
+## Security model
+
+- **Privilege separation.**
+  - The service runs as LocalSystem.
+  - The desktop UI is unelevated and never opens the database.
+  - A read-only status pipe serves any authenticated user.
+  - An admin pipe accepts SYSTEM and Administrators with an elevated token;
+    refusals are audited and rate-limited.
+- **No Windows writes.** Registry access is `KEY_READ` only, and a test
+  forbids write APIs in the policy reader. No device, driver or service
+  configuration API is used.
+- **Simulation is labelled.** Simulated decisions never trigger the
+  real-block notice and never count as protection.
+- **Honest identity.** USB descriptors and INQUIRY data can be cloned; RustWard
+  says "reports SanDisk", not "is SanDisk".
+- **Local administrators.** A local administrator can change Windows policy.
+  RustWard detects and audits the change but cannot prevent it.
+
+Details: [Phase 6 security review](docs/PHASE6-SECURITY-REVIEW.md) ·
+[threat model](docs/THREAT-MODEL.md).
+
+## Architecture
+
+```
+Tauri 2 app (React, TypeScript, Tailwind) ──named pipes──► rustward-service (LocalSystem)
+                                                             ├─ rustward-app      requests, sessions, observation
+                                                             ├─ rustward-core     catalog, policy, classification, decisions
+                                                             ├─ rustward-enforcement  assessment, observer, plans, checklists
+                                                             ├─ rustward-windows  read-only SetupAPI + registry, Event Log, SCM
+                                                             ├─ rustward-ipc      contract, validation, authorization
+                                                             └─ rustward-storage  SQLite, hash-chained audit
+```
+
+See [docs/PHASE6-ARCHITECTURE.md](docs/PHASE6-ARCHITECTURE.md).
+
+## Technology stack
+
+Rust (stable, 2024 edition), `windows-sys`, `windows-service`, SQLite
+(`rusqlite`), Tauri 2, React 19, TypeScript, Tailwind CSS 4, Vitest and WiX
+(MSI). Everything is bundled offline: no CDN and no runtime network access.
+
+## Supported Windows versions
+
+| Item | Requirement |
+|---|---|
+| OS | Windows 10 Pro/Enterprise/Education x64. Tested on 22H2 build 19045 (VM). Windows 11 builds; not acceptance-tested. |
+| Layered evaluation (default-deny profile) | Windows 10 2004–22H2 build 19041.1151 or later, or Windows 11 |
+| Runtime | WebView2 Runtime (bundled installer), VC++ runtime |
+| Network | None |
+
+## Installation
+
+> Test it in a disposable virtual machine first.
+
+1. Build the MSI (see [Build](#build)) and copy
+   `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` to the target. Check its
+   SHA-256.
+2. Install it as an administrator. The MSI installs the application, the
+   `RustWard USB Depolama Denetimi` service and the Event Log source.
+3. Start **RustWard**. Run it as administrator for policy edits and guided
+   sessions.
+4. To uninstall, use Apps & features. The audit database is kept unless it is
+   removed deliberately.
+
+RustWard changes no Windows security setting during installation.
+
+## VM testing guidance
+
+1. Use a dedicated Windows 10 Pro VM. Take a **named snapshot** before any
+   experiment.
+2. Pass USB sticks through to the VM (VMware: VM › Removable Devices).
+   Use disposable sticks only.
+3. Record the Windows version and the current policy state on the RustWard
+   *Readiness* page.
+4. Prepare a guided session. Apply the checklist **yourself** in `gpedit.msc`,
+   then run `gpupdate /force` and **Uygulamayı doğrula**.
+5. Check the outcome independently in Device Manager and Explorer.
+   Keyboard and mouse must keep working.
+6. Roll back: set the settings to *Not Configured*, run `gpupdate /force`,
+   then **Geri almayı doğrula**. Revert to the snapshot if anything differs.
+7. Never treat an installation denial as proof of read/write denial.
+
+Never run policy experiments on a development host or a production
+workstation.
+
+## Build
+
+On Windows, with Rust (MSVC), Visual Studio C++ tools, the Windows SDK,
+Node.js and WebView2: double-click `BUILD-RUSTWARD.cmd`. It installs nothing
+and needs no administrator rights.
+
+| Output | Purpose |
+|---|---|
+| `dist\RustWard.exe` | Desktop application (talks to the service) |
+| `dist\service\rustward-service.exe` | Windows service |
+| `dist\service\rustward-inventory.exe` | Read-only inventory tool |
+| `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` | Complete installer (Turkish UI) |
+
+Build logs are written to `build-logs\`, which is not committed.
+
+## Testing
 
 ```bash
-./scripts/verify-all.sh                       # fmt, clippy, all tests, UI typecheck/tests/build,
-                                              # offline-asset check, UI ↔ real-backend integration, cargo deny
-
-cd apps/rustward-desktop && npm ci
-npm test                                      # Vitest
-npx tauri dev                                 # debug build: in-process dev backend, temp DB
+./scripts/verify-all.sh    # fmt, clippy (default + all features), Rust tests, Vitest,
+                           # UI ↔ real-backend integration, cargo deny, offline-asset check
+cd apps/rustward-desktop && npm ci && npm test
 ```
 
-The debug app uses a development backend (temporary database, synthetic administrator,
-same validation and authorization code as the service). Release builds always talk to the
-Windows service; the development backend cannot be compiled into them.
+Optional checks:
 
-Windows (MSVC toolchain), read-only:
+- `RUSTWARD_WINDOWS_TARGET_CHECK=1` cross-checks the Windows target on Linux.
+- Native Windows tests: `cargo test -p rustward-windows --test native_windows`
+  (run on Windows only).
 
-```powershell
-cargo test --workspace
-cargo run -p rustward-inventory -- scan
-cargo run -p rustward-service -- console      # temp database, synthetic inventory, no install
-```
+Test evidence is in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) and
+[docs/PHASE6-VM-TEST-REPORT.md](docs/PHASE6-VM-TEST-REPORT.md).
 
-Never install or register the service on a development machine. Packaging:
-[`docs/OFFLINE-DEPLOYMENT.md`](docs/OFFLINE-DEPLOYMENT.md).
+## Screenshots
 
-## Feasibility in one paragraph
+Rendered from the automated-test fixtures (**synthetic data**, development
+backend), so no real machine or device data is shown.
 
-The only brand-level identifier Windows can enforce is the SCSI INQUIRY vendor string,
-exposed as a vendor-level hardware ID such as `USBSTOR\DiskSanDisk_`. The candidate
-mechanism is Windows Device Installation Restrictions with layered evaluation. It is not
-spoof-proof, does not re-evaluate already-installed devices, and cannot help products that
-report a generic controller vendor. TÜBİTAK SIR II identifiers are still unknown. See
-[`docs/ENFORCEMENT-FEASIBILITY.md`](docs/ENFORCEMENT-FEASIBILITY.md).
+| Dashboard (Turkish) | Blocked devices |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard-tr.png) | ![Blocked devices](docs/screenshots/blocked-tr.png) |
+| **Readiness** | **Allowed manufacturers (English)** |
+| ![Readiness](docs/screenshots/readiness-tr.png) | ![Manufacturers](docs/screenshots/manufacturers-en.png) |
+
+## Known limitations
+
+- Automatic Windows policy application is **BLOCKED**.
+- Manufacturer identity is self-reported (cloneable). VID-only rules don't
+  exist for USB disks.
+- Install-time rules do not affect already-installed devices. The default-deny
+  profile is never retroactive.
+- Read/write denial is not verified by an installation denial. Removable
+  Storage Access is class-wide and cannot allow one brand while denying
+  another.
+- TÜBİTAK SIR II identifiers are unknown, so its devices are denied.
+- No genuine SanDisk device has been tested.
+- Local administrators can change or remove Windows policy.
+
+Full list: [docs/PHASE6-KNOWN-LIMITATIONS.md](docs/PHASE6-KNOWN-LIMITATIONS.md).
+
+## Roadmap
+
+1. VM acceptance of the default-deny profile and of Removable Storage Access
+   on the current patch level.
+2. Physical identification of TÜBİTAK SIR II, before and after unlock, on at
+   least two units.
+3. Validation on genuine SanDisk devices across several models.
+4. Code signing of the service, application and MSI.
+5. A decision on any automated application path. It needs a separate security
+   review and is currently BLOCKED.
 
 ## Documentation
 
 | Document | Content |
 |---|---|
-| [PHASE-STATUS](docs/PHASE-STATUS.md) | Milestones, classification, gaps, commits |
-| [TEST-RESULTS](docs/TEST-RESULTS.md) | What was tested where, and what is DEFERRED |
-| [ARCHITECTURE](docs/ARCHITECTURE.md) | Crates, trust boundaries, IPC contract |
-| [SECURITY-MODEL](docs/SECURITY-MODEL.md) / [THREAT-MODEL](docs/THREAT-MODEL.md) | Privilege separation, pipes, Tauri hardening |
-| [KNOWN-LIMITATIONS](docs/KNOWN-LIMITATIONS.md) | Residual risks L-01…L-31 |
-| [OFFLINE-DEPLOYMENT](docs/OFFLINE-DEPLOYMENT.md) | Vendoring, MSI, WebView2, install/uninstall |
-| [ENFORCEMENT-FEASIBILITY](docs/ENFORCEMENT-FEASIBILITY.md) | Mechanism comparison and decision |
-| [BRAND-IDENTIFICATION](docs/BRAND-IDENTIFICATION.md) / [DEVICE-CLASSIFICATION](docs/DEVICE-CLASSIFICATION.md) | Identifiers, categories |
-| [TEST-PLAN](docs/TEST-PLAN.md) / [RECOVERY-PLAN](docs/RECOVERY-PLAN.md) | Acceptance tests, rollback |
-| [SECURITY-AUDIT-PHASE-9A](docs/SECURITY-AUDIT-PHASE-9A.md) | Phase 9A findings by severity, fixes, open items |
-| [SECURITY-AUDIT-PHASE-9B](docs/SECURITY-AUDIT-PHASE-9B.md) | Disposition of F-12…F-16, new findings F-18…F-21, regression checklist |
-| [ENFORCEMENT-PLANNING](docs/ENFORCEMENT-PLANNING.md) | Stages, existing-policy comparison, merge, rollback, staleness; read-only policy inspection, installed-device assessment, mock policy backend (Phase 10); what is unimplemented |
-| [WINDOWS-ACCEPTANCE-CHECKLIST](docs/WINDOWS-ACCEPTANCE-CHECKLIST.md) | Tickable Stage A–F checklist (Phase 10: A compile, B device inspection, C service/IPC, D MSI/recovery, E read-only policy inspection; F not executed) |
-| [AUDIT-INTEGRITY](docs/AUDIT-INTEGRITY.md) | Non-destructive restore, backup verification, tamper-resistance limits |
-| [WINDOWS-VM-TEST-2026-11-06](docs/WINDOWS-VM-TEST-2026-11-06.md) | First native test with the service installed in a VM: results, artifacts and hashes |
-| [PHASE-11-NATIVE-VALIDATION](docs/PHASE-11-NATIVE-VALIDATION.md) | Phase 11: what was (and was not) validated, Windows-target check, defects fixed, packaging review, boot-disk safety, scripts for the owner |
-| [WINDOWS-VM-ACCEPTANCE](docs/WINDOWS-VM-ACCEPTANCE.md) | Stages A–F on a disposable Windows 10 Pro VM; Hyper-V USB limits |
-| [RELEASE-READINESS](docs/RELEASE-READINESS.md) | Target config, installer design, hashes, dependencies, readiness classification |
-| [DEPENDENCY-INVENTORY](docs/DEPENDENCY-INVENTORY.md) | Generated crate/npm inventory (Windows target) |
+| [PHASE6-ARCHITECTURE](docs/PHASE6-ARCHITECTURE.md) | Components, data flow, protection states |
+| [PHASE6-DEFAULT-DENY-POLICY](docs/PHASE6-DEFAULT-DENY-POLICY.md) | Policy model and categories |
+| [PHASE6-MANUFACTURER-VALIDATION](docs/PHASE6-MANUFACTURER-VALIDATION.md) | Identity evidence and grades |
+| [PHASE6-WINDOWS-ENFORCEMENT-FEASIBILITY](docs/PHASE6-WINDOWS-ENFORCEMENT-FEASIBILITY.md) | Feasibility matrix |
+| [PHASE6-VM-TEST-REPORT](docs/PHASE6-VM-TEST-REPORT.md) | VM acceptance results |
+| [PHASE6-SECURITY-REVIEW](docs/PHASE6-SECURITY-REVIEW.md) | Security review |
+| [PHASE6-KNOWN-LIMITATIONS](docs/PHASE6-KNOWN-LIMITATIONS.md) | Limitations |
+| [TEST-RESULTS](docs/TEST-RESULTS.md) | Test history |
+| [OFFLINE-DEPLOYMENT](docs/OFFLINE-DEPLOYMENT.md) | Offline build and installation |
 
-## Safety rules for contributors
-
-Do not modify Windows security policy, install drivers, disable devices or register the
-service on the development machine or any production workstation. Enforcement experiments
-run only on an isolated, imaged acceptance VM with written approval.
+Earlier phase documents remain in [`docs/`](docs/).

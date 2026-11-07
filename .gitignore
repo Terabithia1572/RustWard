@@ -42,3 +42,8 @@ Thumbs.db
 /release-out/
 # Local Windows build logs (scripts/windows/Build-RustWard.ps1)
 /build-logs/
+
+# Local transfer artifacts
+*.bundle
+*.iso
+*.msi
