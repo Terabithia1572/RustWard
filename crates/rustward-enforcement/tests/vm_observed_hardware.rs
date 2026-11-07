@@ -28,7 +28,7 @@ const CATALOG: &str = include_str!("../../../config/manufacturer-catalog.json");
 const TEST_POLICY: &str = include_str!("../../../config/vm-enforcement-test-policy.json");
 
 const KINGSTON: &str = "USBSTOR\\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0";
-const SANDISK_LABELLED: &str = "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE";
+const ASELSAN_LABELLED: &str = "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE";
 const INTERNAL_NVME: &str = "SCSI\\DISK&VEN_NVME";
 
 struct Ctx {
@@ -145,11 +145,13 @@ fn kingston_receives_a_simulated_deny() {
 }
 
 #[test]
-fn sandisk_labelled_stick_reports_unknown_vendor_and_is_denied() {
-    // Physically labelled SanDisk, but it reports INQUIRY vendor "VendorC"
-    // and VID 346D: the SanDisk rule must not match it.
+fn aselsan_labelled_stick_reports_unknown_vendor_and_is_denied() {
+    // Physically labelled ASELSAN; it reports INQUIRY vendor "VendorC" and
+    // VID 346D. That identity is what this one stick reports, not an
+    // authenticated ASELSAN identity. It is not in the catalog, so the model
+    // denies it (simulated), and the SanDisk rule must not match it.
     let c = ctx();
-    let s = decision(&c, SANDISK_LABELLED);
+    let s = decision(&c, ASELSAN_LABELLED);
     assert_eq!(s.verdict, Verdict::Deny);
     assert_eq!(
         s.reason,
@@ -167,7 +169,7 @@ fn sandisk_labelled_stick_reports_unknown_vendor_and_is_denied() {
         .snapshot
         .devices
         .iter()
-        .find(|d| d.instance_id.starts_with(SANDISK_LABELLED))
+        .find(|d| d.instance_id.starts_with(ASELSAN_LABELLED))
         .unwrap();
     for hw in &rec.hardware_ids {
         assert!(

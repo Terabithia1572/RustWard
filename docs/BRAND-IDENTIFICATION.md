@@ -61,13 +61,14 @@ read from RustWard's inventory and Device Manager. Sanitized evidence:
 | Stick (label) | USB VID:PID | INQUIRY vendor / product / rev | Transport | Matches catalog |
 |---|---|---|---|---|
 | Kingston DataTraveler 3.0 | 0951:1666 | `Kingston` / `DataTraveler_3.0` / blank | USBSTOR (bulk-only) | Kingston (VID and vendor agree) |
-| **SanDisk-labelled** | **346D:5678** | **`VendorC` / `ProductCode` / `3.20`** | USBSTOR (bulk-only) | **No**: neither SanDisk VID nor vendor |
+| **ASELSAN-labelled** | **346D:5678** | **`VendorC` / `ProductCode` / `3.20`** | USBSTOR (bulk-only) | **No**: neither SanDisk VID nor vendor |
 
-The SanDisk-labelled stick does not report SanDisk identifiers, so it does
-not confirm the catalog's `SanDisk` INQUIRY vendor. That still needs a stick
-that reports SanDisk's VID (0781/0871). Under the dry-run VM test policy the
-"SanDisk" stick is denied as an unknown manufacturer, which is the intended
-default-deny behaviour for a mislabelled or rebranded device.
+The ASELSAN-labelled stick reports `VendorC` / 346D:5678. That is what this
+one device reports, not an authenticated ASELSAN identity, and it is not in
+the catalog, so the dry-run model denies it as an unknown manufacturer. No
+SanDisk stick is available, so the catalog's `SanDisk` INQUIRY vendor remains
+unverified. (Corrected 2026-11-07: an earlier note called this stick
+SanDisk-labelled.)
 
 ## TÜBİTAK BİLGEM SIR II: DEFERRED, physical workplace validation required
 

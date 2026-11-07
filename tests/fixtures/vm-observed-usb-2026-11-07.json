@@ -40,7 +40,7 @@
       "present": true
     },
     {
-      "instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-SANDISK-LABELLED",
+      "instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-ASELSAN-LABELLED",
       "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
       "class_name": "USB",
       "service": "USBSTOR",
@@ -48,11 +48,11 @@
       "present": true
     },
     {
-      "instance_id": "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE&REV_3.20\\SERIAL-REDACTED-SANDISK-LABELLED&0",
+      "instance_id": "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE&REV_3.20\\SERIAL-REDACTED-ASELSAN-LABELLED&0",
       "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
       "class_name": "DiskDrive",
       "service": "disk",
-      "parent_instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-SANDISK-LABELLED",
+      "parent_instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-ASELSAN-LABELLED",
       "hardware_ids": [
         "USBSTOR\\DiskVendorC_ProductCode_____3.20",
         "USBSTOR\\DiskVendorC_ProductCode_____",

@@ -33,6 +33,6 @@ written to either stick and no file on them was read.
   installed and working under "Disk drives"; the Driver tab was not opened.
 - The keyboard/mouse entries carry only their observed instance-ID prefixes
   (class names were not recorded). No printer was attached to the VM.
-- The stick physically labelled **SanDisk** reports vendor `VendorC` and
-  VID:PID `346D:5678`, not SanDisk identifiers (owner confirmed which stick
-  it was).
+- The stick physically labelled **ASELSAN** reports vendor `VendorC` and
+  VID:PID `346D:5678`. (An earlier note called it SanDisk-labelled; the
+  owner corrected this on 2026-11-07. No SanDisk stick is available.)
