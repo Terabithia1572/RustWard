@@ -4,6 +4,7 @@ import type { PageId } from "../App";
 import { Badge, Card, DecisionBadge, Empty, ErrorNotice, Loading, NotValidatedBanner, PageHeader, Stat, Button, type Tone } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useResource } from "../lib/hooks";
+import { useDeviceEpoch } from "../lib/watch";
 import { EventRow } from "./Audit";
 
 const protectionTone: Record<string, Tone> = {
@@ -61,7 +62,8 @@ export function ProtectionPanel({ p }: { p: WindowsProtectionView | undefined })
 
 export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void }) {
   const { t, lang, formatTime, tx, pick, pickList } = useI18n();
-  const r = useResource((api) => api.dashboard(), "dashboard");
+  const epoch = useDeviceEpoch();
+  const r = useResource((api) => api.dashboard(), `dashboard-${epoch}`);
   const d = r.data;
 
   return (

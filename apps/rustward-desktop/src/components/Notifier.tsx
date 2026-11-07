@@ -3,6 +3,7 @@ import { TriangleAlert, X } from "lucide-react";
 import type { DeviceView } from "../api/types";
 import { useI18n } from "../i18n";
 import { useApi } from "../lib/hooks";
+import { useDeviceEpoch } from "../lib/watch";
 
 /** Poll interval while the window is open. */
 export const NOTIFY_POLL_MS = 15_000;
@@ -36,6 +37,13 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
   const seen = useRef<Set<string> | null>(null);
   const seenReal = useRef<Set<string> | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
+  // A real Windows change triggers an immediate poll instead of waiting
+  // for the next interval.
+  const epoch = useDeviceEpoch();
+  const pollNow = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    if (epoch > 0) void pollNow.current?.();
+  }, [epoch]);
 
   useEffect(() => {
     if (!enabled) {
@@ -91,14 +99,25 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
         /* Observation unavailable: no real notice is ever guessed. */
       }
     };
+    // One poll at a time: an event-triggered poll and the interval must
+    // never both announce the same device.
+    let running = false;
     const poll = async () => {
-      await pollSimulated();
-      await pollReal();
+      if (running) return;
+      running = true;
+      try {
+        await pollSimulated();
+        await pollReal();
+      } finally {
+        running = false;
+      }
     };
     void poll();
+    pollNow.current = poll;
     const id = window.setInterval(() => void poll(), pollMs);
     return () => {
       alive = false;
+      pollNow.current = null;
       window.clearInterval(id);
     };
   }, [api, enabled, pollMs]);

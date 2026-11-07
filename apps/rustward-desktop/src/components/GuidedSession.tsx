@@ -5,6 +5,7 @@ import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
 import { Badge, Button, Card, ErrorNotice, Loading, type Tone } from "./ui";
 import { useObservation } from "./WindowsObservation";
+import { useDeviceEpoch } from "../lib/watch";
 
 function stepTone(s: LadderStepView): Tone {
   if (s.status === "not_verified") return "warning";
@@ -32,7 +33,8 @@ export function GuidedSessionCard() {
   const { t, lang, formatTime, pick } = useI18n();
   const api = useApi();
   const r = useResource((a) => a.enforcementSession(), "enforcement-session");
-  const obs = useObservation("observation-guided");
+  const epoch = useDeviceEpoch();
+  const obs = useObservation(`observation-guided-${epoch}`);
   const action = useAction();
   const [view, setView] = useState<EnforcementSessionView | null>(null);
   const [device, setDevice] = useState("");

@@ -1,5 +1,5 @@
 // Phase 5: the primary UI reflects real Windows state only.
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Api } from "../api/client";
 import { App, type PageId } from "../App";
@@ -125,5 +125,30 @@ describe("Diagnostics performance", () => {
     expect(perf).toHaveTextContent("1830 ms");
     expect(perf).toHaveTextContent("455 ms");
     expect(perf).toHaveTextContent(/IPC gidiş-dönüş \(arayüz\)\d+ ms \([a-z_]+\) · max \d+ ms/);
+  });
+});
+
+describe("Real-time updates from Windows events", () => {
+  it("re-renders the Devices page when the service reports a removal, without a manual refresh", async () => {
+    const { backend, state } = fakeBackend();
+    render(<App api={new Api(backend)} initialPage="devices" watchMs={30} />);
+    expect((await screen.findAllByText("Bağlı")).length).toBeGreaterThan(0);
+    const listCalls = () => state.calls.filter((c) => c.type === "list_devices").length;
+    const before = listCalls();
+    // Windows removed the Kingston: the service's observation and inventory change.
+    state.devices = state.devices.map((d) => (d.device_key === "k-deny" ? { ...d, present: false } : d));
+    state.observation = observation([observed({ present: false })]);
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    expect(await screen.findByText("Önceden algılandı")).toBeInTheDocument();
+  });
+
+  it("does not reload while nothing changes", async () => {
+    const { backend, state } = fakeBackend();
+    render(<App api={new Api(backend)} initialPage="devices" watchMs={20} />);
+    await screen.findAllByText("Bağlı");
+    const obs = () => state.calls.filter((c) => c.type === "get_enforcement_observation").length;
+    const start = obs();
+    await waitFor(() => expect(obs()).toBeGreaterThan(start + 4));
+    expect(state.calls.filter((c) => c.type === "list_devices").length).toBeLessThanOrEqual(2);
   });
 });

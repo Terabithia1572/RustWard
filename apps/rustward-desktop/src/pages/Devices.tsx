@@ -5,6 +5,7 @@ import { Badge, Button, Card, DecisionBadge, Empty, ErrorNotice, Loading, PageHe
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
 import { WindowsStatusCell, useObservation } from "../components/WindowsObservation";
+import { useDeviceEpoch } from "../lib/watch";
 
 const STORAGE = new Set(["usb_storage_disk", "usb_storage_other_type", "usb_portable_device", "storage_attachment_unknown"]);
 
@@ -44,7 +45,9 @@ export function DevicesPage() {
   const [filter, setFilter] = useState<Filter>("storage");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-  const r = useResource((a) => a.devices(includeAbsent), `devices-${includeAbsent}`);
+  // Re-read when Windows reports a device or policy change.
+  const epoch = useDeviceEpoch();
+  const r = useResource((a) => a.devices(includeAbsent), `devices-${includeAbsent}-${epoch}`);
   const explain = useResource(
     (a) => (selected ? a.explain(selected) : Promise.resolve(null)),
     `explain-${selected ?? ""}-${r.data?.length ?? 0}`,

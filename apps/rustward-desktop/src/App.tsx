@@ -19,6 +19,7 @@ import { DenialNotifier } from "./components/Notifier";
 import { I18nProvider, translate, useI18n, type Lang } from "./i18n";
 import type { TKey } from "./i18n/tr";
 import { ApiProvider } from "./lib/hooks";
+import { DeviceWatchProvider, WATCH_POLL_MS } from "./lib/watch";
 import { applyTheme, readCachedPrefs, writeCachedPrefs } from "./lib/prefs";
 import { AuditPage } from "./pages/Audit";
 import { BlockedPage } from "./pages/Blocked";
@@ -127,7 +128,7 @@ function Shell({
   );
 }
 
-export function App({ api, initialPage = "dashboard" }: { api: Api; initialPage?: PageId }) {
+export function App({ api, initialPage = "dashboard", watchMs = WATCH_POLL_MS }: { api: Api; initialPage?: PageId; watchMs?: number }) {
   const cached = readCachedPrefs();
   const [lang, setLang] = useState<Lang>(cached.language);
   const [settings, setSettings] = useState<SettingsView | null>(null);
@@ -157,9 +158,11 @@ export function App({ api, initialPage = "dashboard" }: { api: Api; initialPage?
 
   return (
     <ApiProvider api={api}>
-      <I18nProvider lang={lang}>
-        <Shell page={page} setPage={setPage} settings={settings} onSettings={onSettings} />
-      </I18nProvider>
+      <DeviceWatchProvider pollMs={watchMs}>
+        <I18nProvider lang={lang}>
+          <Shell page={page} setPage={setPage} settings={settings} onSettings={onSettings} />
+        </I18nProvider>
+      </DeviceWatchProvider>
     </ApiProvider>
   );
 }

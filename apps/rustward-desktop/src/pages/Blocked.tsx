@@ -2,6 +2,7 @@ import { Badge, Card, DecisionBadge, Empty, ErrorNotice, Loading, PageHeader } f
 import { EvidenceBadge, useObservation } from "../components/WindowsObservation";
 import { useI18n } from "../i18n";
 import { useResource } from "../lib/hooks";
+import { useDeviceEpoch } from "../lib/watch";
 import { deviceName } from "./Devices";
 
 /** Devices Windows actually denies (real evidence), then simulated
@@ -9,8 +10,9 @@ import { deviceName } from "./Devices";
  * is never presented as an enforced block. */
 export function BlockedPage() {
   const { t, tx, formatTime } = useI18n();
-  const r = useResource((a) => a.blocked(500), "blocked");
-  const obs = useObservation("observation-blocked");
+  const epoch = useDeviceEpoch();
+  const r = useResource((a) => a.blocked(500), `blocked-${epoch}`);
+  const obs = useObservation(`observation-blocked-${epoch}`);
   const all = obs.data?.devices ?? [];
   const current = all.filter((d) => d.observed.present === true && d.observed.evidence === "install_denied");
   const history = all.filter((d) => d.observed.evidence !== "install_denied" && d.observed.history);
