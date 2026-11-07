@@ -262,6 +262,7 @@ Full list: [docs/PHASE6-KNOWN-LIMITATIONS.md](docs/PHASE6-KNOWN-LIMITATIONS.md).
 | [PHASE6-MANUFACTURER-VALIDATION](docs/PHASE6-MANUFACTURER-VALIDATION.md) | Identity evidence and grades |
 | [PHASE6-WINDOWS-ENFORCEMENT-FEASIBILITY](docs/PHASE6-WINDOWS-ENFORCEMENT-FEASIBILITY.md) | Feasibility matrix |
 | [PHASE6-VM-TEST-REPORT](docs/PHASE6-VM-TEST-REPORT.md) | VM acceptance results |
+| [PHASE6-PREFLIGHT-SAFETY](docs/PHASE6-PREFLIGHT-SAFETY.md) | Storage inventory, precedence, identity, rollback, blockers |
 | [PHASE6-SECURITY-REVIEW](docs/PHASE6-SECURITY-REVIEW.md) | Security review |
 | [PHASE6-KNOWN-LIMITATIONS](docs/PHASE6-KNOWN-LIMITATIONS.md) | Limitations |
 | [TEST-RESULTS](docs/TEST-RESULTS.md) | Test history |
