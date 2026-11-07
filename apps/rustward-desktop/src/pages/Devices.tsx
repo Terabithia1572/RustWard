@@ -5,6 +5,7 @@ import { Badge, Button, Card, DecisionBadge, Empty, ErrorNotice, Loading, PageHe
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
 import { WindowsStatusCell, useObservation } from "../components/WindowsObservation";
+import { AssessmentCell } from "../components/Assessment";
 import { useDeviceEpoch } from "../lib/watch";
 
 const STORAGE = new Set(["usb_storage_disk", "usb_storage_other_type", "usb_portable_device", "storage_attachment_unknown"]);
@@ -197,6 +198,11 @@ export function DevicesPage() {
                         <DecisionBadge decision={d.simulated_decision} />
                         {d.simulated_decision !== "not_applicable" && (
                           <div className="mt-1 text-[11px] text-slate-500">{tx("reason", d.reason)}</div>
+                        )}
+                        {STORAGE.has(d.category) && (
+                          <div className="mt-2 min-w-48">
+                            <AssessmentCell a={observed.get(d.device_key)?.observed.assessment} />
+                          </div>
                         )}
                       </td>
                       <td className="max-w-xs px-3 py-2">

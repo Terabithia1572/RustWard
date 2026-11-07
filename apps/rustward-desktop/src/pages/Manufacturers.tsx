@@ -228,6 +228,7 @@ function ManufacturerCard({
           {m.display_name}
           <span className="font-mono text-xs font-normal text-slate-500">{m.id}</span>
           {m.allowed && m.enabled && <Badge tone="success">{t("manufacturers.allowed")}</Badge>}
+          {m.denied && <Badge tone="danger">{t("manufacturers.denied")}</Badge>}
           {!m.enforceable && (
             <Badge tone="warning" title={t("manufacturers.notEnforceable")}>
               <AlertTriangle className="size-3" aria-hidden />
@@ -266,6 +267,15 @@ function ManufacturerCard({
               onChange={(v) => void toggle(() => api.setEnabled(m.id, v, view.policy_version))}
             />
             {t("manufacturers.enabled")}
+          </label>
+          <label className="flex items-center gap-2">
+            <Toggle
+              checked={!!m.denied}
+              disabled={action.busy}
+              label={`${t("manufacturers.denyToggle")}: ${m.display_name}`}
+              onChange={(v) => void toggle(() => api.setDenied(m.id, v, view.policy_version))}
+            />
+            {t("manufacturers.denyToggle")}
           </label>
         </div>
         {action.error && <ErrorNotice error={action.error} />}
@@ -335,6 +345,10 @@ export function ManufacturersPage() {
           </Button>
         }
       />
+      <div className="rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900 dark:border-cyan-900 dark:bg-cyan-950/40 dark:text-cyan-200" data-testid="configured-note">
+        <p className="font-medium">{t("manufacturers.target")}</p>
+        <p className="mt-1">{t("manufacturers.configuredNote")}</p>
+      </div>
       {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
       {r.error && <ErrorNotice error={r.error} onRetry={r.reload} />}
       {r.loading && !v && <Loading />}

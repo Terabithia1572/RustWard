@@ -193,6 +193,12 @@ export class Api {
       "mutation",
     );
   }
+  async setDenied(id: string, denied: boolean, version: number): Promise<MutationView> {
+    return expect(
+      await this.call({ type: "set_manufacturer_denied", id, denied, expected_policy_version: version }),
+      "mutation",
+    );
+  }
   async setEnabled(id: string, enabled: boolean, version: number): Promise<MutationView> {
     return expect(
       await this.call({ type: "set_rule_enabled", id, enabled, expected_policy_version: version }),

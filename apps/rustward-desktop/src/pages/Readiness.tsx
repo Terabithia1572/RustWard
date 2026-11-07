@@ -4,6 +4,8 @@
 // permanently disabled in this build.
 import type { ReactNode } from "react";
 import { GuidedSessionCard } from "../components/GuidedSession";
+import { BlockerList, SummaryTiles } from "../components/Assessment";
+import { useDeviceEpoch } from "../lib/watch";
 import { ObservationCard } from "../components/WindowsObservation";
 import { Lock } from "lucide-react";
 import type {
@@ -247,6 +249,9 @@ function InstalledCard({ v }: { v: EnforcementReadinessView }) {
 export function ReadinessPage() {
   const { t, tx, lang } = useI18n();
   const r = useResource((a) => a.enforcementReadiness(), "readiness");
+  const epoch = useDeviceEpoch();
+  const dash = useResource((a) => a.dashboard(), `readiness-protection-${epoch}`);
+  const prot = dash.data?.windows_protection;
   const v = r.data;
   return (
     <div className="space-y-4">
@@ -256,6 +261,15 @@ export function ReadinessPage() {
         !r.error && <Loading />
       ) : (
         <>
+          <Card title={t("blocker.title")}>
+            {prot?.summary && (
+              <div className="mb-3">
+                <SummaryTiles s={prot.summary} />
+              </div>
+            )}
+            {prot?.blockers ? <BlockerList blockers={prot.blockers} /> : <Loading />}
+          </Card>
+
           <Card title={t("readiness.actual")}>
             <dl className="divide-y divide-slate-100 dark:divide-slate-800" data-testid="actual-enforcement">
               <Row label={t("readiness.actual")}>

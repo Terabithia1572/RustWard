@@ -1,5 +1,6 @@
 import { Clock, Factory, FlaskConical, HardDrive, Server, ShieldAlert, ShieldCheck, ShieldOff, ShieldQuestion } from "lucide-react";
 import type { WindowsProtectionView } from "../api/types";
+import { BlockerList, SummaryTiles } from "../components/Assessment";
 import type { PageId } from "../App";
 import { Badge, Card, DecisionBadge, Empty, ErrorNotice, Loading, NotValidatedBanner, PageHeader, Stat, Button, type Tone } from "../components/ui";
 import { useI18n } from "../i18n";
@@ -86,6 +87,15 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
       {d && (
         <>
           <ProtectionPanel p={d.windows_protection} />
+          {d.windows_protection?.summary && <SummaryTiles s={d.windows_protection.summary} />}
+          {d.windows_protection?.blockers && d.windows_protection.blockers.length > 0 && (
+            <Card
+              title={t("blocker.title")}
+              actions={<Button variant="ghost" onClick={() => onNavigate("readiness")}>{t("nav.readiness")}</Button>}
+            >
+              <BlockerList blockers={d.windows_protection.blockers} limit={4} />
+            </Card>
+          )}
           {/* The content area is the window minus the sidebar, so five columns only
               from 2xl; at the default 1280 px window three columns keep the
               cards readable. */}

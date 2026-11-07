@@ -19,6 +19,7 @@ import type {
   ResponseBody,
   SettingsView,
   WindowsProtectionView,
+  DeviceAssessment,
 } from "../api/types";
 
 export const BANNER_TR = "Koruma henüz gerçek Windows ortamında doğrulanmadı.";
@@ -82,6 +83,7 @@ function manufacturer(over: Partial<ManufacturerView> = {}): ManufacturerView {
     notes: null,
     allowed: true,
     enabled: true,
+    denied: false,
     enforceable: true,
     issues: [],
     ...over,
@@ -172,6 +174,27 @@ export function observed(over: Partial<ObservedDevice> = {}): ObservedDevice {
     label_status_tr: "Erişilebilir (sürücü kurulu)",
     explanation_tr: "RustWard kararı yalnızca simülasyondur; Windows bu cihazı engellemiyor.",
     history: null,
+    assessment: assessment(),
+    ...over,
+  };
+}
+
+/** Phase 6 assessment of the observed Kingston (deny candidate, not enforced). */
+export function assessment(over: Partial<DeviceAssessment> = {}): DeviceAssessment {
+  return {
+    policy_category: "DENY_CANDIDATE",
+    enforcement_category: "ENFORCEMENT_NOT_ACTIVE",
+    identity: "corroborated",
+    reported_brand: "kingston",
+    authenticated: false,
+    signals: [
+      { source: "scsi_inquiry_vendor", value: "Kingston", brands: ["kingston"], strength: "enforceable" },
+      { source: "usb_vid", value: "0951", brands: ["kingston"], strength: "corroborating" },
+    ],
+    present: true,
+    previously_installed: true,
+    summary_tr: "Ret adayı: politika bu cihazı reddediyor. Windows bu cihaz için engel uygulamıyor (koruma etkin değil).",
+    summary_en: "Deny candidate: the policy denies this device. Windows enforces no denial for this device (protection not active).",
     ...over,
   };
 }
@@ -187,6 +210,11 @@ export function deniedKingston(): ObservedDevice {
     label_policy_tr: "Engelleme kuralı eşleşiyor (DenyDeviceIDs: USBSTOR\\DiskKingstonDataTraveler_3.0____)",
     label_status_tr: "Windows kurulumu engelledi (Kod 28)",
     explanation_tr: "Windows bu cihazın sürücü kurulumunu reddetti; disk ve birim nesnesi oluşmaz. Okuma/yazma yolları ayrıca test edilmedi.",
+    assessment: assessment({
+      enforcement_category: "WINDOWS_DENIAL_VERIFIED",
+      previously_installed: false,
+      summary_tr: "Ret adayı. Gerçek Windows kanıtı: Windows kurulumu reddetti; okuma/yazma ayrıca test edilmedi.",
+    }),
   });
 }
 
@@ -263,6 +291,26 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     const o = state.observation;
     const denied = o.devices.filter((d) => d.observed.present === true && d.observed.evidence === "install_denied");
     const names = denied.map((d) => d.observed.name).join(", ");
+    const present = o.devices.filter((d) => d.observed.present === true);
+    const cat = (c: string) => present.filter((d) => d.observed.assessment?.policy_category === c).length;
+    const summary = {
+      connected: present.length,
+      allow_candidates: cat("ALLOW_CANDIDATE"),
+      deny_candidates: cat("DENY_CANDIDATE"),
+      unverified_identity: cat("UNVERIFIED_IDENTITY"),
+      unsupported: cat("UNSUPPORTED_DEVICE"),
+      windows_denied: denied.length,
+      denied_by_policy_only: present.length - denied.length - cat("ALLOW_CANDIDATE"),
+      disconnected: o.devices.length - present.length,
+    };
+    const blockers = [
+      { code: "automatic_apply_blocked", kind: "blocked", tr: "Otomatik politika uygulama ENGELLİ.", en: "Automatic policy application is BLOCKED." },
+      ...(o.windows_restrictions_configured
+        ? []
+        : [{ code: "no_windows_rule", kind: "action", tr: "Windows'ta hiçbir Aygıt Yükleme Kısıtlaması kuralı yok.", en: "No Device Installation Restriction rule exists in Windows." }]),
+      { code: "manufacturer_default_deny_unverified", kind: "limitation", tr: "Üretici genelinde varsayılan ret Windows'ta doğrulanmadı.", en: "Manufacturer-wide default deny is not verified in Windows." },
+      { code: "read_write_unverified", kind: "limitation", tr: "Okuma/yazma engeli doğrulanmadı.", en: "Read/write denial is not verified." },
+    ];
     const mk = (st: string, tr: string, en: string, dtr: string, den: string): WindowsProtectionView => ({
       state: st,
       label_tr: tr,
@@ -271,6 +319,8 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       detail_en: den,
       denied_now: denied.length,
       automated_apply_available: false,
+      summary,
+      blockers,
     });
     if (o.policy_error) return mk("unknown", "Durum bilinmiyor", "State unknown", "Windows politikası okunamadı.", "The Windows policy could not be read.");
     if (!o.windows_restrictions_configured)
@@ -553,6 +603,13 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
         checkVersion(r.expected_policy_version);
         find(r.id).allowed = r.allowed;
         return mutation(`allowed=${r.allowed}`);
+      case "set_manufacturer_denied": {
+        checkVersion(r.expected_policy_version);
+        const m = find(r.id);
+        m.denied = r.denied;
+        if (r.denied) m.allowed = false;
+        return mutation(`denied=${r.denied}`);
+      }
       case "set_rule_enabled":
         checkVersion(r.expected_policy_version);
         find(r.id).enabled = r.enabled;

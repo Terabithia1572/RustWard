@@ -228,6 +228,27 @@ export interface WindowsProtectionView {
   detail_en: string;
   denied_now: number;
   automated_apply_available: boolean;
+  summary?: StorageSummaryView;
+  blockers?: ProtectionBlockerView[];
+}
+
+export interface StorageSummaryView {
+  connected: number;
+  allow_candidates: number;
+  deny_candidates: number;
+  unverified_identity: number;
+  unsupported: number;
+  windows_denied: number;
+  denied_by_policy_only: number;
+  disconnected: number;
+}
+
+export interface ProtectionBlockerView {
+  code: string;
+  /** blocked | action | limitation */
+  kind: string;
+  tr: string;
+  en: string;
 }
 
 /** Service-side timings in milliseconds (absent from older services). */
@@ -259,6 +280,8 @@ export interface ManufacturerView {
   notes: string | null;
   allowed: boolean;
   enabled: boolean;
+  /** Explicitly denied (Phase 6). */
+  denied?: boolean;
   enforceable: boolean;
   issues: string[];
   issues_tr?: string[];
@@ -651,6 +674,48 @@ export interface ObservedDevice {
   label_status_tr: string;
   explanation_tr: string;
   history: HistoricalDenial | null;
+  /** Phase 6 assessment (absent from older services). */
+  assessment?: DeviceAssessment | null;
+}
+
+/** Phase 6 result categories. */
+export type AssessmentCategory =
+  | "ALLOW_CANDIDATE"
+  | "DENY_CANDIDATE"
+  | "UNVERIFIED_IDENTITY"
+  | "UNSUPPORTED_DEVICE"
+  | "OUT_OF_SCOPE"
+  | "WINDOWS_DENIAL_VERIFIED"
+  | "ENFORCEMENT_NOT_ACTIVE";
+
+export type IdentityConfidence =
+  | "corroborated"
+  | "single_source"
+  | "ambiguous"
+  | "conflicting"
+  | "generic"
+  | "missing"
+  | "not_evaluated";
+
+export interface IdentitySignal {
+  source: string;
+  value: string;
+  brands: string[];
+  strength: string;
+}
+
+export interface DeviceAssessment {
+  policy_category: AssessmentCategory;
+  enforcement_category: AssessmentCategory | null;
+  identity: IdentityConfidence;
+  reported_brand: string | null;
+  /** Always false: nothing a USB device reports is authenticated. */
+  authenticated: boolean;
+  signals: IdentitySignal[];
+  present: boolean | null;
+  previously_installed: boolean;
+  summary_tr: string;
+  summary_en: string;
 }
 
 export interface ObservedDeviceView {
