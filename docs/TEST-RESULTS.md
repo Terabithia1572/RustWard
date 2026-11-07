@@ -1,5 +1,44 @@
 # Test Results
 
+**Phase 5 — native build and VM, 2026-11-07 (`77b7794`).**
+
+The native build ran on the Windows 11 host (build only; nothing installed there).
+
+| Artifact | Size (bytes) | SHA-256 |
+|---|---|---|
+| `dist\RustWard.exe` | 4,082,176 | `1324dccd211b3baa7e9e9cdb9e5f85ef175fbb0d04e44910263d82281856eaf2` |
+| `dist\service\rustward-service.exe` | 3,358,208 | `542913a45c50a0774e58f62eb0bfbbc4fda9ee995f52b535c49ff7d0440da4af` |
+| `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` | 219,127,808 | `b1fa823f51c5df928de2c23aba50b38c551f8c4bf8034f5ef366ea55572973de` |
+
+The MSI was delivered on `dist\vm\rustward-test-6.iso`, SHA-256 `2d914f4e…62e4`.
+
+**VM setup.** The VM is Windows 10 19045. Snapshot `rustward-before-phase5-8dfecd1` was taken at 20:50:01 before the upgrades. Two MSI upgrades were run: `8dfecd1`, then `77b7794`. Both PASS: the service restarted, and policy v6 and the audit chain were kept (186, then 208 entries intact).
+
+**VM observations:**
+- Dashboard "Koruma durumu": "Windows koruması etkin değil", "Gerçek engel kanıtı yok", "Otomatik uygulama: kullanılamıyor". This matches the real state: no Restrictions key.
+- Devices page:
+  - Kingston 0951:1666 and the VendorC/ASELSAN-labelled 346D:5678 are shown as "Bildirilen (doğrulanmamış)" with "Kriptografik kimlik doğrulaması yok".
+  - The hardware ID and "Son olay" are shown.
+  - The Kingston's 19:58 denial is shown as history only.
+- Performance (Diagnostics, VM):
+  - SetupAPI enumeration of 217 devices: 51–52 ms, longest 69 ms.
+  - Processing and storage: 1 ms.
+  - Service start to first inventory: 371 ms and 549 ms (after the two upgrades).
+  - Windows observation: 1 ms.
+  - UI IPC round trip: 26 ms (`get_diagnostics`), max 59 ms over 6 calls. On the second install it was 617 ms (`get_diagnostics`, which includes the integrity check), the maximum over 50 calls.
+  - Page render: 29 ms and 620 ms.
+  - The 15–40 s delays of the previous build were not reproduced. Policy verification time was not measured (no guided session run on this build).
+- Detection: Kingston disconnect/reconnect through VMware.
+  - Audit `device_removed` 20:56:55 and 21:09:49; `device_detected` 20:59:28 and 21:10:35. Each was within about 1–2 s of the VMware action (clock-level comparison, 1 s resolution).
+  - With `77b7794`, the Devices page updated by itself (no manual refresh) 3–9 s after the reconnect. That time includes the VM's USB re-enumeration.
+  - No duplicate notices.
+- Not re-run on this build: a real Windows denial. It is unchanged from the guided Kingston run at 19:50–20:02, build `66ed480`.
+
+**Side effects.**
+- While disconnected from the VM, the Kingston was attached to the host. Windows AutoPlay offered to scan it; this was not acted on.
+- Nothing was written to either stick, and no policy was changed.
+- The VM CD setting was restored afterwards to its previous (missing) Acronis ISO path, not connected.
+
 **Phase 5 — real Windows status, performance, terminology, 2026-11-07 (Linux, automated).**
 - **Backend:**
   - The inventory is collected outside the application lock (SetupAPI enumeration no longer blocks IPC).
@@ -20,7 +59,7 @@
   - `a_slow_windows_enumeration_does_not_block_other_requests`: 1.5 s fake enumeration, dashboard and observation answered in under 700 ms.
   - `dashboard_protection_state_follows_real_windows_evidence_only`.
   - `realStatus.test.tsx` (9 tests).
-- **Result:** 317 Rust tests, 72 Vitest, 16 integration; `verify-all` 18 PASS, 0 FAIL.
+- **Result:** 317 Rust tests, 72 Vitest, 16 integration; `verify-all` 18 PASS, 0 FAIL. At `77b7794` (live device watcher): 74 Vitest, `verify-all` 18 PASS.
 - **Not run:** native Windows checks (see the VM entry, when recorded).
 
 **Turkish localization + administrator-guided Windows enforcement, 2026-11-07 (`66ed480`, native build + VM).** Native build (Windows 11 23H2 host, build only): `dist\RustWard.exe` 4,044,800 B `a7946f2bebeaf3f5e0542cdb38713e493f6119ff51e0149f66164070a870b02f`; `dist\service\rustward-service.exe` 3,339,776 B `2c05b87c30f16d24cc7568c0721f861ab6ff7616403559e9920ae1a8b0f82bc9`; `dist\service\rustward-inventory.exe` `a112ed03a4b3d8823f5176c7af5a709d6d5e3d0a0a8813b051fea3bdaeaea7f2`; `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` 219,099,136 B `ce836b65350d2813e5804b65556ebae245a3bc422d9e39a5dff5e07ecf982311` (Turkish installer UI). VM (Windows 10 19045, snapshot `rustward-observer-before-guided-test` taken first): MSI upgrade PASS, policy v5 and audit chain kept; backend text (service status, audit messages, errors) shown in Turkish. Guided session (elevated app): prepare 19:50:27 (baseline: no Restrictions key) → owner applied the Kingston-only device-ID policy (retroactive) in gpedit → RustWard "Uygulamayı doğrula" 19:58:15: policy equal to the expected values, Kingston Code 1 "forbidden by system policy", state "Windows cihaz kurulumu engellendi", read/write "Doğrulanmadı"; notice "USB engellenmiştir. İşlem kayıt altına alınmıştır." shown once with the evidence qualifier; independently: Device Manager Code 1, E:/F: gone, ASELSAN G: readable. Owner rolled back → "Geri almayı doğrula" 20:02:22: policy equal to the baseline, session closed; Kingston reinstalled (E:/F: back), shown as history only. Audit: prepared, windows_install_denied_observed (once), apply_verified, windows_install_denial_ended, rollback_verified. RustWard wrote no policy: the change was made by the administrator. Slow: first requests after a service start and the verify actions took 15–40 s. Linux suite: 308 workspace + 3 + 4 Rust, 63 Vitest, 16 integration; `verify-all` 18 PASS.
