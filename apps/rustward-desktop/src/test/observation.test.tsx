@@ -70,9 +70,9 @@ describe("Real Windows observation (Readiness)", () => {
 
   it("generates a checklist for the selected device and applies nothing", async () => {
     const { state, user } = page("readiness");
-    await screen.findByTestId("checklist");
-    await user.click(screen.getByLabelText("Kurulu cihazlara da uygula (geriye dönük)"));
-    await user.click(screen.getByRole("button", { name: "Kontrol listesi oluştur" }));
+    const section = await screen.findByTestId("checklist");
+    await user.click(within(section).getByLabelText("Kurulu cihazlara da uygula (geriye dönük)"));
+    await user.click(within(section).getByRole("button", { name: "Kontrol listesi oluştur" }));
     const text = await screen.findByTestId("checklist-text");
     expect(text).toHaveTextContent("UYGULAMAZ");
     expect(text).toHaveTextContent("USBSTOR\\DiskKingstonDataTraveler_3.0____");

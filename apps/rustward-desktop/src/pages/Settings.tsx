@@ -70,7 +70,7 @@ function WorkstationCard() {
 }
 
 function BackupsCard() {
-  const { t, formatTime } = useI18n();
+  const { t, formatTime, pick, pickList } = useI18n();
   const api = useApi();
   const [tick, setTick] = useState(0);
   const list = useResource((a) => a.backups(), `backups-${tick}`);
@@ -82,7 +82,7 @@ function BackupsCard() {
   const doCreate = async () => {
     const msg = await create.run(() => api.action("create_backup"));
     if (msg !== undefined) {
-      setNotice(msg);
+      setNotice(pick(msg.message, msg.message_tr));
       setTick((n) => n + 1);
     }
   };
@@ -97,7 +97,7 @@ function BackupsCard() {
     const res = await restore.run(() => api.applyRestore(p.restore_id, p.current_policy_version));
     setPreview(null);
     if (res) {
-      setNotice(`${t("settings.restoreDone")} ${res.summary}`);
+      setNotice(`${t("settings.restoreDone")} ${pick(res.summary, res.summary_tr)}`);
       setTick((n) => n + 1);
     }
   };
@@ -184,7 +184,7 @@ function BackupsCard() {
                 <p className="text-slate-500">{t("settings.restoreNoChanges")}</p>
               ) : (
                 <ul className="list-disc space-y-0.5 pl-5" aria-label={t("settings.restoreChanges")}>
-                  {preview.changes.map((c) => (
+                  {pickList(preview.changes, preview.changes_tr).map((c) => (
                     <li key={c} className="font-mono text-xs">{c}</li>
                   ))}
                 </ul>
@@ -205,7 +205,7 @@ function inRange(n: number, [lo, hi]: readonly [number, number]): boolean {
 }
 
 export function SettingsPage({ settings, onSaved }: { settings: SettingsView | null; onSaved: (s: SettingsView) => void }) {
-  const { t } = useI18n();
+  const { t, pick } = useI18n();
   const api = useApi();
   const fallback = useResource((a) => (settings ? Promise.resolve(settings) : a.settings()), `settings-${settings ? "given" : "load"}`);
   const current = settings ?? fallback.data;
@@ -243,7 +243,7 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
 
   const maintenance = async (type: "apply_retention") => {
     const msg = await maint.run(() => api.action(type));
-    if (msg !== undefined) setNotice(msg);
+    if (msg !== undefined) setNotice(pick(msg.message, msg.message_tr));
   };
 
   return (

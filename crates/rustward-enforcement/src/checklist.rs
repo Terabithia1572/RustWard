@@ -106,6 +106,39 @@ fn reg_line(name: &str, data: &RegData) -> String {
     }
 }
 
+/// The policy expected after an administrator applies the device-ID
+/// prevent rule for `hardware_id` on top of `live`, and the value lines that
+/// change. Shared by the checklist and the guided verification.
+#[must_use]
+pub fn planned_deny_policy(
+    live: &PolicySnapshot,
+    hardware_id: &str,
+    retroactive: bool,
+) -> (PolicySnapshot, Vec<String>) {
+    let list = live.list("DenyDeviceIDs");
+    let next = list.keys().max().map_or(1, |m| m + 1);
+    let already = list.values().any(|v| v.eq_ignore_ascii_case(hardware_id));
+    let list_key = format!("{RESTRICTIONS_KEY}\\DenyDeviceIDs");
+    let mut planned = live
+        .clone()
+        .with(RESTRICTIONS_KEY, "DenyDeviceIDs", RegData::Dword(1));
+    let mut expected = vec![reg_line("DenyDeviceIDs", &RegData::Dword(1))];
+    if !already {
+        let entry = RegData::Sz(hardware_id.to_string());
+        expected.push(reg_line(&format!("DenyDeviceIDs\\{next}"), &entry));
+        planned = planned.with(&list_key, &next.to_string(), entry);
+    }
+    if retroactive {
+        planned = planned.with(
+            RESTRICTIONS_KEY,
+            "DenyDeviceIDsRetroactive",
+            RegData::Dword(1),
+        );
+        expected.push(reg_line("DenyDeviceIDsRetroactive", &RegData::Dword(1)));
+    }
+    (planned, expected)
+}
+
 /// Build the checklist for preventing installation of `instance_id`.
 ///
 /// # Errors
@@ -152,26 +185,7 @@ pub fn device_deny_checklist(
 
     // Model the change.
     let list = live.list("DenyDeviceIDs");
-    let next = list.keys().max().map_or(1, |m| m + 1);
-    let already = list.values().any(|v| v.eq_ignore_ascii_case(&hardware_id));
-    let list_key = format!("{RESTRICTIONS_KEY}\\DenyDeviceIDs");
-    let mut planned = live
-        .clone()
-        .with(RESTRICTIONS_KEY, "DenyDeviceIDs", RegData::Dword(1));
-    let mut expected = vec![reg_line("DenyDeviceIDs", &RegData::Dword(1))];
-    if !already {
-        let entry = RegData::Sz(hardware_id.clone());
-        expected.push(reg_line(&format!("DenyDeviceIDs\\{next}"), &entry));
-        planned = planned.with(&list_key, &next.to_string(), entry);
-    }
-    if retroactive {
-        planned = planned.with(
-            RESTRICTIONS_KEY,
-            "DenyDeviceIDsRetroactive",
-            RegData::Dword(1),
-        );
-        expected.push(reg_line("DenyDeviceIDsRetroactive", &RegData::Dword(1)));
-    }
+    let (planned, expected) = planned_deny_policy(live, &hardware_id, retroactive);
 
     match evaluate_install(&planned, record) {
         InstallOutcome::Prevented { .. } => {}

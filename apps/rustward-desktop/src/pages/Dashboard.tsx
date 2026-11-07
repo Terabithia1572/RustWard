@@ -6,7 +6,7 @@ import { useResource } from "../lib/hooks";
 import { EventRow } from "./Audit";
 
 export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void }) {
-  const { t, lang, formatTime, tx } = useI18n();
+  const { t, lang, formatTime, tx, pick, pickList } = useI18n();
   const r = useResource((api) => api.dashboard(), "dashboard");
   const d = r.data;
 
@@ -43,7 +43,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
               icon={<Server className="size-4" aria-hidden />}
               label={t("dashboard.service")}
               value={d.service.healthy ? t("dashboard.healthy") : t("dashboard.degraded")}
-              hint={d.service.message}
+              hint={pick(d.service.message, d.service.message_tr)}
             />
             <Stat icon={<Factory className="size-4" aria-hidden />} label={t("dashboard.allowed")} value={d.allowed_manufacturers} />
             <Stat icon={<HardDrive className="size-4" aria-hidden />} label={t("dashboard.connected")} value={d.connected_storage} />
@@ -106,7 +106,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
           {d.warnings.length > 0 && (
             <Card title={t("dashboard.warnings")}>
               <ul className="list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-300">
-                {d.warnings.map((w) => (
+                {pickList(d.warnings, d.warnings_tr).map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>

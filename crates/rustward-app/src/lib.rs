@@ -11,7 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+mod guided;
 pub mod inventory;
+pub mod l10n;
 mod observation;
 mod policy_source;
 
@@ -360,8 +362,58 @@ fn device_view(r: &DeviceRow) -> DeviceView {
     }
 }
 
-fn event_view(e: SecurityEvent) -> EventView {
+/// Features that do not exist (English, Turkish).
+const UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "OS-level USB blocking by RustWard: not implemented; RustWard does not write Group Policy (administrator-guided workflow only)",
+        "RustWard tarafından işletim sistemi düzeyinde USB engelleme: uygulanmadı; RustWard Grup İlkesine yazmaz (yalnızca yönetici kontrollü iş akışı)",
+    ),
+    (
+        "Verified read/write denial: not measured; only installation denial is observed",
+        "Doğrulanmış okuma/yazma engeli: ölçülmüyor; yalnızca kurulum reddi gözlenir",
+    ),
+    (
+        "Manufacturer-based default deny: not verified on Windows (new and previously installed devices)",
+        "Üreticiye dayalı varsayılan ret: Windows üzerinde doğrulanmadı (yeni ve önceden kurulu cihazlar)",
+    ),
+    (
+        "Desktop toast notifications outside the app window: not implemented (in-app notices only)",
+        "Uygulama penceresi dışındaki masaüstü bildirimleri: uygulanmadı (yalnızca uygulama içi bildirimler)",
+    ),
+    (
+        "MTP/PTP and optical drives: scope decision pending",
+        "MTP/PTP cihazları ve optik sürücüler: kapsam kararı bekliyor",
+    ),
+];
+
+/// Native tests still open (English, Turkish).
+const PENDING_NATIVE: &[(&str, &str)] = &[
+    (
+        "Manufacturer-based default deny with layered evaluation in the test VM",
+        "Test sanal makinesinde katmanlı değerlendirmeyle üreticiye dayalı varsayılan ret",
+    ),
+    (
+        "Previously installed devices of other brands under a default-deny policy",
+        "Varsayılan ret politikasında diğer markaların önceden kurulu cihazları",
+    ),
+    (
+        "Windows 11 behaviour of the device installation restrictions",
+        "Aygıt yükleme kısıtlamalarının Windows 11 davranışı",
+    ),
+    (
+        "Named-pipe DACL inspection (AccessChk) and impostor-pipe test",
+        "Adlandırılmış kanal DACL incelemesi (AccessChk) ve sahte kanal testi",
+    ),
+    (
+        "TÜBİTAK SIR II identification at the workplace",
+        "TÜBİTAK SIR II cihazının iş yerinde tanımlanması",
+    ),
+];
+
+fn event_view(e: SecurityEvent, names: l10n::Names<'_>) -> EventView {
+    let message_tr = l10n::event(&e, names);
     EventView {
+        message_tr,
         id: e.id,
         utc_ms: e.utc_ms,
         severity: e.severity.as_str().into(),
@@ -619,6 +671,44 @@ impl AppService {
             .map_err(|_| IpcError::new(ErrorCode::Internal, "backend state lock poisoned"))
     }
 
+    /// Brand id -> display name from the active catalog (id when unknown).
+    fn brand_names(store: &Store) -> impl Fn(&str) -> String + use<> {
+        let map: HashMap<String, String> = Self::validated(store)
+            .map(|v| Self::name_map(&v))
+            .unwrap_or_default();
+        move |id: &str| map.get(id).cloned().unwrap_or_else(|| id.to_string())
+    }
+
+    fn name_map(v: &Validated) -> HashMap<String, String> {
+        v.state
+            .catalog
+            .brands
+            .iter()
+            .map(|b| (b.id.clone(), b.display_name.clone()))
+            .collect()
+    }
+
+    /// Brand id -> display name for a validated state.
+    fn names_from(v: &Validated) -> impl Fn(&str) -> String + use<> {
+        let map = Self::name_map(v);
+        move |id: &str| map.get(id).cloned().unwrap_or_else(|| id.to_string())
+    }
+
+    /// Turkish catalog + policy warnings.
+    fn warnings_tr(v: &Validated, names: l10n::Names<'_>) -> Vec<String> {
+        v.catalog
+            .warnings()
+            .iter()
+            .map(|w| l10n::issue(w.code, &w.detail, names))
+            .chain(
+                v.policy
+                    .warnings()
+                    .iter()
+                    .map(|w| l10n::issue(w.code, &w.detail, names)),
+            )
+            .collect()
+    }
+
     fn validated(store: &Store) -> Result<Validated, IpcError> {
         let stored = store
             .active_policy()
@@ -820,7 +910,10 @@ impl AppService {
         .collect();
         let current_settings = g.store.settings().map_err(storage_err)?;
         let changes = restore_changes(&current.state, &current_settings, &candidate);
-        let preview = RestorePreviewView {
+        let changes_tr = changes.iter().map(|c| l10n::text(c)).collect();
+        let mut preview = RestorePreviewView {
+            changes_tr,
+            notice_tr: String::new(),
             restore_id: restore_id.clone(),
             file_name: candidate.record.file_name.clone(),
             sha256: candidate.record.sha256.clone(),
@@ -836,6 +929,7 @@ impl AppService {
                 current.version.saturating_add(1)
             ),
         };
+        preview.notice_tr = l10n::text(&preview.notice);
         g.store
             .append_event(&NewEvent {
                 severity: Severity::Info,
@@ -935,11 +1029,16 @@ impl AppService {
                 Ok(ResponseBody::Mutation(MutationView {
                     policy_version: version,
                     catalog_version: staged.candidate.state.catalog.catalog_version.clone(),
+                    summary_tr: l10n::text(&format!(
+                        "backup {target} applied as policy v{version}; previous state saved as {}",
+                        pre.file_name
+                    )),
                     summary: format!(
                         "backup {target} applied as policy v{version}; previous state saved as {}",
                         pre.file_name
                     ),
                     warnings: Vec::new(),
+                    warnings_tr: Vec::new(),
                 }))
             }
             Err(err) => {
@@ -1233,7 +1332,8 @@ impl AppService {
 
     fn service_status(&self, g: &Inner) -> ServiceStatusView {
         let healthy = g.consecutive_failures == 0;
-        ServiceStatusView {
+        let mut view = ServiceStatusView {
+            message_tr: String::new(),
             backend: self.config.backend.code().into(),
             state: if healthy { "running" } else { "degraded" }.into(),
             healthy,
@@ -1246,7 +1346,9 @@ impl AppService {
                 }
                 (None, BackendKind::WindowsService) => "RustWard service running".into(),
             },
-        }
+        };
+        view.message_tr = l10n::text(&view.message);
+        view
     }
 
     fn mutate(
@@ -1271,15 +1373,28 @@ impl AppService {
             .commit_policy_edit(&outcome, &identity.actor())
             .map_err(storage_err)?;
         self.reevaluate_locked(&mut g)?;
+        let names = Self::brand_names(&g.store);
+        let summary_tr = l10n::change(
+            &outcome.change.action,
+            &outcome.change.brand_id,
+            &outcome.change.summary,
+            &names,
+        );
+        let warnings_tr = Self::validated(&g.store)
+            .map(|v| Self::warnings_tr(&v, &names))
+            .unwrap_or_default();
         Ok(ResponseBody::Mutation(MutationView {
             policy_version: outcome.state.policy.policy_version,
             catalog_version: outcome.state.catalog.catalog_version.clone(),
             summary: outcome.change.summary,
             warnings: outcome.warnings,
+            summary_tr,
+            warnings_tr,
         }))
     }
 
     fn manufacturers(v: &Validated) -> ManufacturersView {
+        let names = Self::names_from(v);
         let warnings: Vec<String> = v
             .catalog
             .warnings()
@@ -1287,6 +1402,7 @@ impl AppService {
             .map(|w| w.detail.clone())
             .chain(v.policy.warnings().iter().map(|w| w.detail.clone()))
             .collect();
+        let warnings_tr = Self::warnings_tr(v, &names);
         let manufacturers = v
             .state
             .catalog
@@ -1337,6 +1453,12 @@ impl AppService {
                         .filter(|w| w.contains(&quoted))
                         .cloned()
                         .collect(),
+                    issues_tr: warnings
+                        .iter()
+                        .zip(&warnings_tr)
+                        .filter(|(w, _)| w.contains(&quoted))
+                        .map(|(_, t)| t.clone())
+                        .collect(),
                 }
             })
             .collect();
@@ -1347,6 +1469,7 @@ impl AppService {
             mode: json_code(&serde_json::json!({ "m": v.state.policy.mode }), "m"),
             manufacturers,
             warnings,
+            warnings_tr,
             reserved_generic_vendors: v.state.catalog.reserved_generic_vendors.clone(),
         }
     }
@@ -1354,11 +1477,19 @@ impl AppService {
     fn dashboard(&self, g: &Inner) -> Result<DashboardView, IpcError> {
         let state = self.provider.status();
         let devices = g.store.list_devices(false).map_err(storage_err)?;
+        let names = Self::brand_names(&g.store);
         let mut warnings = Vec::new();
+        let mut warnings_tr = Vec::new();
         let (workstation_id, policy_version, catalog_version, last_update, allowed) =
             match Self::validated(&g.store) {
                 Ok(v) => {
                     warnings.extend(v.policy.warnings().iter().map(|w| w.detail.clone()));
+                    warnings_tr.extend(
+                        v.policy
+                            .warnings()
+                            .iter()
+                            .map(|w| l10n::issue(w.code, &w.detail, &names)),
+                    );
                     (
                         v.state.policy.workstation_id.clone(),
                         v.version,
@@ -1368,16 +1499,22 @@ impl AppService {
                     )
                 }
                 Err(e) => {
+                    warnings_tr.push(format!(
+                        "Politika kullanılamıyor. (Teknik ayrıntı: {})",
+                        e.message
+                    ));
                     warnings.push(format!("policy unavailable: {}", e.message));
                     ("?".into(), 0, "?".into(), None, 0)
                 }
             };
         if let Some(e) = &g.last_inventory_error {
             warnings.push(format!("inventory error: {e}"));
+            warnings_tr.push(l10n::text(&format!("inventory error: {e}")));
         }
         let synthetic_data_present = devices.iter().any(|d| d.synthetic);
         if synthetic_data_present {
             warnings.push("The inventory contains SYNTHETIC test devices.".into());
+            warnings_tr.push("Envanter SENTETİK test cihazları içeriyor.".into());
         }
         let mut denied: Vec<&DeviceRow> = devices
             .iter()
@@ -1412,7 +1549,8 @@ impl AppService {
             )
             .unwrap_or(u32::MAX),
             recent_denied: denied.into_iter().take(5).map(device_view).collect(),
-            recent_events: events.into_iter().map(event_view).collect(),
+            recent_events: events.into_iter().map(|e| event_view(e, &names)).collect(),
+            warnings_tr,
             warnings,
             synthetic_data_present,
         })
@@ -1453,6 +1591,8 @@ impl AppService {
                 PolicyHealthView {
                     valid: true,
                     errors: Vec::new(),
+                    errors_tr: Vec::new(),
+                    warnings_tr: Self::warnings_tr(&v, &Self::brand_names(&g.store)),
                     warnings: v
                         .catalog
                         .warnings()
@@ -1466,8 +1606,13 @@ impl AppService {
             Err(e) => (
                 PolicyHealthView {
                     valid: false,
+                    errors_tr: vec![
+                        l10n::error(&e, &|x: &str| x.to_string())
+                            .unwrap_or_else(|| format!("{}{}", l10n::UNTRANSLATED, e.message)),
+                    ],
                     errors: vec![e.message],
                     warnings: Vec::new(),
+                    warnings_tr: Vec::new(),
                 },
                 None,
             ),
@@ -1493,6 +1638,7 @@ impl AppService {
                     capabilities: self.provider.capabilities(&env),
                     planned_changes: u32::try_from(plan.changes.len()).unwrap_or(u32::MAX),
                     preconditions: plan.preconditions,
+                    risks_tr: plan.risks.iter().map(|r| l10n::text(r)).collect(),
                     risks: plan.risks,
                     enforcement_gaps: dry
                         .enforcement_gaps
@@ -1510,6 +1656,7 @@ impl AppService {
                 planned_changes: 0,
                 preconditions: Vec::new(),
                 risks: vec!["Policy unavailable; no plan can be computed.".into()],
+                risks_tr: vec![l10n::text("Policy unavailable; no plan can be computed.")],
                 enforcement_gaps: Vec::new(),
             },
         };
@@ -1539,23 +1686,22 @@ impl AppService {
                     skipped: m.skipped,
                 }
             },
-            unsupported_features: vec![
-                "OS-level USB blocking: activation disabled (dry-run only)".into(),
-                "Verified enforcement: no runtime evidence exists".into(),
-                "PnP change notifications (CM_Register_Notification): implemented as telemetry in the Windows service, not verified on Windows".into(),
-                "Windows Event Log mirroring: implemented in the Windows service, not verified on Windows; the event source is registered by the installer".into(),
-                "Windows named-pipe IPC: implemented, not verified on Windows".into(),
-                "Desktop toast notifications outside the app window: not implemented (in-app notices only)".into(),
-                "MTP/PTP and optical drives: scope decision pending".into(),
-            ],
-            pending_native_tests: vec![
-                "W-01..W-05: native build, tests and live SetupAPI inventory".into(),
-                "T-01..T-30: physical USB hardware acceptance".into(),
-                "Named-pipe DACL, token identity and session-0 check".into(),
-                "Windows service start/stop/recovery under the SCM (windows-sys host)".into(),
-                "CM_Register_Notification wake-up and Event Log entries".into(),
-                "Offline MSI installation with the WebView2 offline runtime".into(),
-            ],
+            unsupported_features: UNSUPPORTED
+                .iter()
+                .map(|(en, _)| (*en).to_string())
+                .collect(),
+            unsupported_features_tr: UNSUPPORTED
+                .iter()
+                .map(|(_, tr)| (*tr).to_string())
+                .collect(),
+            pending_native_tests: PENDING_NATIVE
+                .iter()
+                .map(|(en, _)| (*en).to_string())
+                .collect(),
+            pending_native_tests_tr: PENDING_NATIVE
+                .iter()
+                .map(|(_, tr)| (*tr).to_string())
+                .collect(),
             app_version: self.config.app_version.clone(),
         }
     }
@@ -1602,12 +1748,16 @@ impl AppService {
         let mut f = event_filter(q);
         f.limit = Some(q.limit.unwrap_or(5000).min(5000));
         let events = g.store.list_events(&f).map_err(storage_err)?;
+        let names = Self::brand_names(&g.store);
         let count = u32::try_from(events.len()).unwrap_or(u32::MAX);
         let day = utc_date(u64::try_from(self.clock.now_ms() / 1000).unwrap_or(0)).replace('-', "");
         let (content, mime, ext) = match format {
             ExportFormat::Json => (
                 serde_json::to_string_pretty(
-                    &events.into_iter().map(event_view).collect::<Vec<_>>(),
+                    &events
+                        .into_iter()
+                        .map(|e| event_view(e, &names))
+                        .collect::<Vec<_>>(),
                 )
                 .map_err(internal)?,
                 "application/json",
@@ -1663,6 +1813,18 @@ impl AppService {
 }
 
 impl Handler for AppService {
+    fn localize_error(&self, mut error: IpcError) -> IpcError {
+        if error.message_tr.is_none() {
+            let names = self.lock().map(|g| Self::brand_names(&g.store)).ok();
+            let fallback = |id: &str| id.to_string();
+            error.message_tr = match &names {
+                Some(n) => l10n::error(&error, n),
+                None => l10n::error(&error, &fallback),
+            };
+        }
+        error
+    }
+
     fn authorization_failed(&self, request: &Request, identity: &ClientIdentity, error: &IpcError) {
         self.record_authorization_failure(request, identity, error);
     }
@@ -1745,25 +1907,28 @@ impl Handler for AppService {
             }
             Request::ListEvents { query } => {
                 let g = self.lock()?;
+                let names = Self::brand_names(&g.store);
                 let events = g
                     .store
                     .list_events(&event_filter(query))
                     .map_err(storage_err)?;
                 Ok(ResponseBody::Events(
-                    events.into_iter().map(event_view).collect(),
+                    events.into_iter().map(|e| event_view(e, &names)).collect(),
                 ))
             }
             Request::ListPolicyChanges { limit } => {
                 let g = self.lock()?;
                 let rows = g.store.policy_changes(*limit).map_err(storage_err)?;
+                let names = Self::brand_names(&g.store);
                 Ok(ResponseBody::PolicyChanges(
                     rows.into_iter()
                         .map(|r| PolicyChangeView {
                             id: r.id,
                             utc_ms: r.utc_ms,
                             actor: r.actor,
-                            action: r.action,
-                            brand_id: r.brand_id,
+                            action: r.action.clone(),
+                            brand_id: r.brand_id.clone(),
+                            summary_tr: l10n::change(&r.action, &r.brand_id, &r.summary, &names),
                             summary: r.summary,
                             from_version: r.from_version,
                             to_version: r.to_version,
@@ -1773,7 +1938,7 @@ impl Handler for AppService {
             }
             Request::GetDiagnostics => {
                 let g = self.lock()?;
-                Ok(ResponseBody::Diagnostics(self.diagnostics(&g)))
+                Ok(ResponseBody::Diagnostics(Box::new(self.diagnostics(&g))))
             }
             Request::GetEnforcementObservation => {
                 let mut g = self.lock()?;
@@ -1788,6 +1953,39 @@ impl Handler for AppService {
                 let g = self.lock()?;
                 Ok(ResponseBody::PolicyChecklist(Box::new(
                     self.policy_checklist(&g, device_key, *retroactive)?,
+                )))
+            }
+            Request::GetEnforcementSession => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.session_view(&mut g)?,
+                )))
+            }
+            Request::PrepareEnforcementSession {
+                device_key,
+                retroactive,
+            } => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.prepare_session(&mut g, device_key, *retroactive, identity)?,
+                )))
+            }
+            Request::VerifyEnforcementApplied { session_id } => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.verify_applied(&mut g, session_id)?,
+                )))
+            }
+            Request::VerifyEnforcementRollback { session_id } => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.verify_rollback(&mut g, session_id)?,
+                )))
+            }
+            Request::CancelEnforcementSession { session_id } => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.cancel_session(&mut g, session_id)?,
                 )))
             }
             Request::GetEnforcementReadiness => {
@@ -1831,6 +2029,7 @@ impl Handler for AppService {
                         .map(|i| mask_instance_id(i))
                         .collect(),
                     notice: "SIMULATION ONLY — enforcement is NOT ACTIVE.".into(),
+                    notice_tr: l10n::text("SIMULATION ONLY — enforcement is NOT ACTIVE."),
                 }))
             }
             Request::AddManufacturer {
@@ -1906,9 +2105,10 @@ impl Handler for AppService {
             Request::ApplyRetention => {
                 let mut g = self.lock()?;
                 let n = g.store.apply_retention().map_err(storage_err)?;
-                Ok(ResponseBody::Done {
+                Ok(done(ResponseBody::Done {
+                    message_tr: String::new(),
                     message: format!("{n} events removed by retention"),
-                })
+                }))
             }
             Request::CreateBackup => {
                 let dir = self.backup_dir()?;
@@ -1917,9 +2117,10 @@ impl Handler for AppService {
                     .store
                     .create_backup(&dir, BackupKind::Manual, &identity.actor())
                     .map_err(storage_err)?;
-                Ok(ResponseBody::Done {
+                Ok(done(ResponseBody::Done {
+                    message_tr: String::new(),
                     message: format!("backup created: {}", rec.file_name),
-                })
+                }))
             }
             Request::ListBackups => Ok(ResponseBody::Backups(self.list_backups()?)),
             Request::PrepareRestore { file_name } => self.prepare_restore(file_name, identity),
@@ -1939,18 +2140,20 @@ impl Handler for AppService {
             ),
             Request::RefreshInventory => {
                 let s = self.refresh_inventory()?;
-                Ok(ResponseBody::Done {
+                Ok(done(ResponseBody::Done {
+                    message_tr: String::new(),
                     message: format!(
                         "inventory refreshed: {} stored devices, {} arrived, {} removed",
                         s.stored, s.arrived, s.removed
                     ),
-                })
+                }))
             }
             Request::LoadSyntheticInventory => {
                 let s = self.load_synthetic()?;
-                Ok(ResponseBody::Done {
+                Ok(done(ResponseBody::Done {
+                    message_tr: String::new(),
                     message: format!("SYNTHETIC inventory loaded: {} stored devices", s.stored),
-                })
+                }))
             }
         }
     }
@@ -2038,6 +2241,17 @@ pub fn default_policy_state() -> Result<PolicyState, String> {
         policy: serde_json::from_str(include_str!("../../../config/policy.example.json"))
             .map_err(|e| e.to_string())?,
     })
+}
+
+/// Fill the Turkish rendering of an acknowledgement.
+fn done(r: ResponseBody) -> ResponseBody {
+    match r {
+        ResponseBody::Done { message, .. } => ResponseBody::Done {
+            message_tr: l10n::text(&message),
+            message,
+        },
+        other => other,
+    }
 }
 
 #[cfg(test)]

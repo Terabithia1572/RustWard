@@ -10,7 +10,7 @@ const PAGE = 100;
 const severityTone: Record<string, Tone> = { info: "info", warning: "warning", critical: "danger" };
 
 export function EventRow({ e, compact = false }: { e: EventView; compact?: boolean }) {
-  const { t, tx, formatTime } = useI18n();
+  const { t, tx, formatTime, pick } = useI18n();
   return (
     <tr className="border-b border-slate-100 align-top last:border-0 dark:border-slate-800">
       <td className="py-1.5 pr-3 text-xs text-slate-500">{formatTime(e.utc_ms)}</td>
@@ -18,7 +18,7 @@ export function EventRow({ e, compact = false }: { e: EventView; compact?: boole
         <Badge tone={severityTone[e.severity] ?? "neutral"}>{tx("audit.severity", e.severity)}</Badge>
       </td>
       {!compact && <td className="py-1.5 pr-3 font-mono text-xs [overflow-wrap:anywhere]">{e.kind}</td>}
-      <td className="min-w-0 py-1.5 pr-3 [overflow-wrap:anywhere]">{e.message}</td>
+      <td className="min-w-0 py-1.5 pr-3 [overflow-wrap:anywhere]">{pick(e.message, e.message_tr)}</td>
       <td className="py-1.5">
         {e.simulated ? <Badge tone="synthetic">{t("audit.origin.simulated")}</Badge> : <Badge>{t("audit.origin.real")}</Badge>}
       </td>

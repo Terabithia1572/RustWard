@@ -132,13 +132,25 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         | Request::GetDiagnostics
         | Request::GetEnforcementReadiness
         | Request::GetEnforcementObservation
+        | Request::GetEnforcementSession
         | Request::GetSettings
         | Request::RunSimulation
         | Request::ApplyRetention
         | Request::CreateBackup
         | Request::RefreshInventory
         | Request::LoadSyntheticInventory => Ok(()),
-        Request::ExplainDevice { device_key } | Request::GetPolicyChecklist { device_key, .. } => {
+        Request::VerifyEnforcementApplied { session_id }
+        | Request::VerifyEnforcementRollback { session_id }
+        | Request::CancelEnforcementSession { session_id } => {
+            if session_id.len() == 16 && session_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Ok(())
+            } else {
+                Err(bad("session_id must be 16 hex characters"))
+            }
+        }
+        Request::ExplainDevice { device_key }
+        | Request::GetPolicyChecklist { device_key, .. }
+        | Request::PrepareEnforcementSession { device_key, .. } => {
             if device_key.len() == 32 && device_key.bytes().all(|b| b.is_ascii_hexdigit()) {
                 Ok(())
             } else {

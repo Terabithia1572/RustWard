@@ -4,6 +4,7 @@ import type {
   DeviceView,
   DiagnosticsView,
   EnforcementObservationView,
+  EnforcementSessionView,
   EnforcementReadinessView,
   PolicyChecklistView,
   ErrorCode,
@@ -26,10 +27,13 @@ import type {
 /** Error returned by the backend (validated server-side). */
 export class ApiError extends Error {
   readonly code: ErrorCode | "client";
-  constructor(code: ErrorCode | "client", message: string) {
+  /** Turkish message from the backend, when it has one. */
+  readonly messageTr: string | undefined;
+  constructor(code: ErrorCode | "client", message: string, messageTr?: string) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.messageTr = messageTr;
   }
 }
 
@@ -38,7 +42,7 @@ export interface Backend {
   call(request: Request): Promise<ResponseBody>;
 }
 
-function isIpcError(e: unknown): e is { code: ErrorCode; message: string } {
+function isIpcError(e: unknown): e is { code: ErrorCode; message: string; message_tr?: unknown } {
   return typeof e === "object" && e !== null && "code" in e && "message" in e &&
     typeof (e as { code: unknown }).code === "string" && typeof (e as { message: unknown }).message === "string";
 }
@@ -46,7 +50,7 @@ function isIpcError(e: unknown): e is { code: ErrorCode; message: string } {
 /** Normalize anything thrown by a backend into an ApiError. */
 export function toApiError(e: unknown): ApiError {
   if (e instanceof ApiError) return e;
-  if (isIpcError(e)) return new ApiError(e.code, e.message);
+  if (isIpcError(e)) return new ApiError(e.code, e.message, typeof e.message_tr === "string" ? e.message_tr : undefined);
   if (e instanceof Error) return new ApiError("client", e.message);
   return new ApiError("client", String(e));
 }
@@ -123,6 +127,24 @@ export class Api {
       "policy_checklist",
     );
   }
+  async enforcementSession(): Promise<EnforcementSessionView> {
+    return expect(await this.call({ type: "get_enforcement_session" }), "enforcement_session");
+  }
+  async prepareSession(deviceKey: string, retroactive: boolean): Promise<EnforcementSessionView> {
+    return expect(
+      await this.call({ type: "prepare_enforcement_session", device_key: deviceKey, retroactive }),
+      "enforcement_session",
+    );
+  }
+  async verifyApplied(sessionId: string): Promise<EnforcementSessionView> {
+    return expect(await this.call({ type: "verify_enforcement_applied", session_id: sessionId }), "enforcement_session");
+  }
+  async verifyRollback(sessionId: string): Promise<EnforcementSessionView> {
+    return expect(await this.call({ type: "verify_enforcement_rollback", session_id: sessionId }), "enforcement_session");
+  }
+  async cancelSession(sessionId: string): Promise<EnforcementSessionView> {
+    return expect(await this.call({ type: "cancel_enforcement_session", session_id: sessionId }), "enforcement_session");
+  }
   async settings(): Promise<SettingsView> {
     return expect(await this.call({ type: "get_settings" }), "settings");
   }
@@ -180,7 +202,9 @@ export class Api {
       "mutation",
     );
   }
-  async action(type: "apply_retention" | "create_backup" | "refresh_inventory" | "load_synthetic_inventory"): Promise<string> {
-    return expect(await this.call({ type }), "done").message;
+  async action(
+    type: "apply_retention" | "create_backup" | "refresh_inventory" | "load_synthetic_inventory",
+  ): Promise<{ message: string; message_tr?: string }> {
+    return expect(await this.call({ type }), "done");
   }
 }

@@ -72,6 +72,14 @@ pub const EVENT_IDS: &[(&str, u32)] = &[
     ("restore_failed", 5006),
     ("policy_restored", 5007),
     ("audit_checkpoint", 5008),
+    ("windows_install_denied_observed", 6000),
+    ("windows_install_denial_ended", 6001),
+    ("enforcement_session_prepared", 6100),
+    ("enforcement_session_apply_verified", 6101),
+    ("enforcement_session_apply_mismatch", 6102),
+    ("enforcement_session_rollback_verified", 6103),
+    ("enforcement_session_rollback_mismatch", 6104),
+    ("enforcement_session_cancelled", 6105),
 ];
 
 /// Event ID used for kinds not in [`EVENT_IDS`].
@@ -247,6 +255,7 @@ mod tests {
         assert_eq!(data.len() % 4, 0);
         let ids = message_table_ids();
         assert!(ids.contains(&EVENT_ID_OTHER) && ids.contains(&1010) && ids.contains(&5008));
+        assert!(ids.contains(&6000) && ids.contains(&6105));
         for id in &ids {
             assert_eq!(
                 message_table_lookup(&data, *id).as_deref(),
@@ -254,12 +263,12 @@ mod tests {
                 "id {id}"
             );
         }
-        for missing in [0, 999, 1011, 4001, 5004, 5009, 8999, 9001] {
+        for missing in [0, 999, 1011, 4001, 5004, 5009, 6002, 6106, 8999, 9001] {
             assert_eq!(message_table_lookup(&data, missing), None, "{missing}");
         }
         // Blocks are contiguous ranges: 1000-1010, 2000-2002, 2100-2101, ...
         let blocks = u32::from_le_bytes(data[0..4].try_into().unwrap());
-        assert_eq!(blocks, 10);
+        assert_eq!(blocks, 12);
         assert_eq!(u32::from_le_bytes(data[4..8].try_into().unwrap()), 1000);
         assert_eq!(u32::from_le_bytes(data[8..12].try_into().unwrap()), 1010);
         assert_eq!(

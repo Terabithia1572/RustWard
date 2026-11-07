@@ -46,7 +46,7 @@ function Editor({
   onClose: () => void;
   onDone: (msg: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, pick } = useI18n();
   const api = useApi();
   const isNew = target === "new";
   const [input, setInput] = useState<ManufacturerInput>(() => toInput(isNew ? null : target));
@@ -73,7 +73,7 @@ function Editor({
         ? api.addManufacturer(payload, allowNow, view.policy_version)
         : api.updateManufacturer(target.id, payload, view.policy_version),
     );
-    if (res) onDone(res.summary);
+    if (res) onDone(pick(res.summary, res.summary_tr));
   };
 
   return (
@@ -214,12 +214,12 @@ function ManufacturerCard({
   onEdit: () => void;
   onRemove: () => void;
 }) {
-  const { t, tx } = useI18n();
+  const { t, tx, pick, pickList } = useI18n();
   const api = useApi();
   const action = useAction();
-  const toggle = async (fn: () => Promise<{ summary: string }>) => {
+  const toggle = async (fn: () => Promise<{ summary: string; summary_tr?: string }>) => {
     const res = await action.run(fn);
-    if (res) onChanged(res.summary);
+    if (res) onChanged(pick(res.summary, res.summary_tr));
   };
   return (
     <Card
@@ -298,7 +298,7 @@ function ManufacturerCard({
         )}
         {m.issues.length > 0 && (
           <ul className="list-disc pl-5 text-xs text-amber-800 dark:text-amber-300">
-            {m.issues.map((x) => (
+            {pickList(m.issues, m.issues_tr).map((x) => (
               <li key={x}>{x}</li>
             ))}
           </ul>
@@ -309,7 +309,7 @@ function ManufacturerCard({
 }
 
 export function ManufacturersPage() {
-  const { t, tx, formatTime } = useI18n();
+  const { t, tx, formatTime, pick, pickList } = useI18n();
   const api = useApi();
   const [tick, setTick] = useState(0);
   const r = useResource((a) => a.manufacturers(), `m-${tick}`);
@@ -348,7 +348,7 @@ export function ManufacturersPage() {
           {v.warnings.length > 0 && (
             <Card title={t("manufacturers.warnings")}>
               <ul className="list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-300">
-                {v.warnings.map((w) => (
+                {pickList(v.warnings, v.warnings_tr).map((w) => (
                   <li key={w}>{w}</li>
                 ))}
               </ul>
@@ -359,7 +359,7 @@ export function ManufacturersPage() {
               <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
                 {history.data.map((c) => (
                   <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
-                    <span>{c.summary}</span>
+                    <span>{pick(c.summary, c.summary_tr)}</span>
                     <span className="text-xs text-slate-500">
                       v{c.from_version} → v{c.to_version} · {c.actor} · {formatTime(c.utc_ms)}
                     </span>
@@ -396,7 +396,7 @@ export function ManufacturersPage() {
                       void removeAction.run(() => api.removeManufacturer(removing.id, v.policy_version)).then((res) => {
                         if (res) {
                           setRemoving(null);
-                          changed(res.summary);
+                          changed(pick(res.summary, res.summary_tr));
                         }
                       })
                     }

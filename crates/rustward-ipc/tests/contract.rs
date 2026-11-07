@@ -54,8 +54,22 @@ fn all_requests() -> Vec<Request> {
             device_key: "k".into(),
             retroactive: true,
         },
+        Request::GetEnforcementSession,
         Request::GetSettings,
         Request::RunSimulation,
+        Request::PrepareEnforcementSession {
+            device_key: "k".into(),
+            retroactive: false,
+        },
+        Request::VerifyEnforcementApplied {
+            session_id: "s".into(),
+        },
+        Request::VerifyEnforcementRollback {
+            session_id: "s".into(),
+        },
+        Request::CancelEnforcementSession {
+            session_id: "s".into(),
+        },
         Request::AddManufacturer {
             input: input(),
             allowed: true,
@@ -118,8 +132,13 @@ fn all_requests() -> Vec<Request> {
             | Request::GetEnforcementReadiness
             | Request::GetEnforcementObservation
             | Request::GetPolicyChecklist { .. }
+            | Request::GetEnforcementSession
             | Request::GetSettings
             | Request::RunSimulation
+            | Request::PrepareEnforcementSession { .. }
+            | Request::VerifyEnforcementApplied { .. }
+            | Request::VerifyEnforcementRollback { .. }
+            | Request::CancelEnforcementSession { .. }
             | Request::AddManufacturer { .. }
             | Request::UpdateManufacturer { .. }
             | Request::RemoveManufacturer { .. }

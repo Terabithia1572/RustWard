@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Turkish strings for the Tauri MSI template. The standard WixUI dialogs
+     use WiX's own tr-TR localization. Codepage 1254 (Turkish). -->
+<WixLocalization Culture="tr-tr" Codepage="1254" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="LaunchApp">RustWard uygulamasını başlat</String>
+  <String Id="DowngradeErrorMessage">RustWard uygulamasının daha yeni bir sürümü zaten yüklü.</String>
+  <String Id="PathEnvVarFeature">RustWard yürütülebilir dosyasının yükleme konumunu PATH sistem ortam değişkenine ekler. Böylece RustWard her konumdan çağrılabilir.</String>
+  <String Id="InstallAppFeature">RustWard uygulamasını yükler.</String>
+</WixLocalization>

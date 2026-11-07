@@ -119,11 +119,37 @@ pub enum Request {
         /// Include the "also apply to installed devices" option.
         retroactive: bool,
     },
+    /// Administrator-guided Windows enforcement session state (read-only).
+    GetEnforcementSession,
     /// Settings.
     GetSettings,
     /// Re-evaluate the current inventory under the current policy (no writes).
     RunSimulation,
     // ---- privileged (administrator) -------------------------------------
+    /// Prepare a guided enforcement session for one USB storage device:
+    /// impact check, baseline saved, expected policy recorded. Changes no
+    /// Windows setting.
+    PrepareEnforcementSession {
+        /// Device key (32 hex).
+        device_key: String,
+        /// Include the "also apply to installed devices" option.
+        retroactive: bool,
+    },
+    /// Verify the administrator's Group Policy change against the plan.
+    VerifyEnforcementApplied {
+        /// Session id (16 hex).
+        session_id: String,
+    },
+    /// Verify that the previous Windows policy is back; closes the session.
+    VerifyEnforcementRollback {
+        /// Session id (16 hex).
+        session_id: String,
+    },
+    /// Cancel a session whose change was never applied.
+    CancelEnforcementSession {
+        /// Session id (16 hex).
+        session_id: String,
+    },
     /// Add a manufacturer.
     AddManufacturer {
         /// Input.
@@ -241,9 +267,14 @@ impl Request {
             | Self::GetEnforcementReadiness
             | Self::GetEnforcementObservation
             | Self::GetPolicyChecklist { .. }
+            | Self::GetEnforcementSession
             | Self::GetSettings
             | Self::RunSimulation => AccessLevel::ReadOnly,
-            Self::AddManufacturer { .. }
+            Self::PrepareEnforcementSession { .. }
+            | Self::VerifyEnforcementApplied { .. }
+            | Self::VerifyEnforcementRollback { .. }
+            | Self::CancelEnforcementSession { .. }
+            | Self::AddManufacturer { .. }
             | Self::UpdateManufacturer { .. }
             | Self::RemoveManufacturer { .. }
             | Self::SetManufacturerAllowed { .. }
@@ -286,6 +317,9 @@ pub struct ServiceStatusView {
     pub last_refresh_ms: Option<i64>,
     /// Detail.
     pub message: String,
+    /// Turkish rendering of `message`.
+    #[serde(default)]
+    pub message_tr: String,
 }
 
 /// Device as shown in the UI.
@@ -364,6 +398,9 @@ pub struct DashboardView {
     pub recent_events: Vec<EventView>,
     /// Warnings.
     pub warnings: Vec<String>,
+    /// Turkish rendering of `warnings`.
+    #[serde(default)]
+    pub warnings_tr: Vec<String>,
     /// Synthetic data in the inventory.
     pub synthetic_data_present: bool,
 }
@@ -406,6 +443,9 @@ pub struct ManufacturerView {
     pub enforceable: bool,
     /// Issues specific to this brand.
     pub issues: Vec<String>,
+    /// Turkish rendering of `issues`.
+    #[serde(default)]
+    pub issues_tr: Vec<String>,
 }
 
 /// Catalog + allowlist view.
@@ -423,6 +463,9 @@ pub struct ManufacturersView {
     pub manufacturers: Vec<ManufacturerView>,
     /// Global warnings.
     pub warnings: Vec<String>,
+    /// Turkish rendering of `warnings`.
+    #[serde(default)]
+    pub warnings_tr: Vec<String>,
     /// Reserved generic vendors.
     pub reserved_generic_vendors: Vec<String>,
 }
@@ -442,6 +485,9 @@ pub struct EventView {
     pub device_key: Option<String>,
     /// Message.
     pub message: String,
+    /// Turkish rendering of `message` (the stored record stays as written).
+    #[serde(default)]
+    pub message_tr: String,
     /// Simulation flag.
     pub simulated: bool,
     /// Enforcement state.
@@ -465,6 +511,9 @@ pub struct PolicyChangeView {
     pub brand_id: String,
     /// Summary.
     pub summary: String,
+    /// Turkish rendering of `summary`.
+    #[serde(default)]
+    pub summary_tr: String,
     /// From.
     pub from_version: u64,
     /// To.
@@ -513,8 +562,14 @@ pub struct PolicyHealthView {
     pub valid: bool,
     /// Errors.
     pub errors: Vec<String>,
+    /// Turkish rendering of `errors`.
+    #[serde(default)]
+    pub errors_tr: Vec<String>,
     /// Warnings.
     pub warnings: Vec<String>,
+    /// Turkish rendering of `warnings`.
+    #[serde(default)]
+    pub warnings_tr: Vec<String>,
 }
 
 /// Enforcement view.
@@ -536,6 +591,9 @@ pub struct EnforcementView {
     pub preconditions: Vec<Precondition>,
     /// Risks.
     pub risks: Vec<String>,
+    /// Turkish rendering of `risks`.
+    #[serde(default)]
+    pub risks_tr: Vec<String>,
     /// Dry-run gaps.
     pub enforcement_gaps: Vec<String>,
 }
@@ -558,8 +616,14 @@ pub struct DiagnosticsView {
     pub event_log: EventLogView,
     /// Unsupported / not implemented features.
     pub unsupported_features: Vec<String>,
+    /// Turkish rendering of `unsupported_features`.
+    #[serde(default)]
+    pub unsupported_features_tr: Vec<String>,
     /// Native tests pending.
     pub pending_native_tests: Vec<String>,
+    /// Turkish rendering of `pending_native_tests`.
+    #[serde(default)]
+    pub pending_native_tests_tr: Vec<String>,
     /// Application version.
     pub app_version: String,
 }
@@ -573,8 +637,14 @@ pub struct MutationView {
     pub catalog_version: String,
     /// Summary.
     pub summary: String,
+    /// Turkish rendering of `summary`.
+    #[serde(default)]
+    pub summary_tr: String,
     /// Warnings after the change.
     pub warnings: Vec<String>,
+    /// Turkish rendering of `warnings`.
+    #[serde(default)]
+    pub warnings_tr: Vec<String>,
 }
 
 /// Export result.
@@ -605,6 +675,9 @@ pub struct SimulationView {
     pub enforcement_gaps: Vec<String>,
     /// Statement.
     pub notice: String,
+    /// Turkish rendering of `notice`.
+    #[serde(default)]
+    pub notice_tr: String,
 }
 
 /// A successful response.
@@ -624,13 +697,15 @@ pub enum ResponseBody {
     /// Policy changes.
     PolicyChanges(Vec<PolicyChangeView>),
     /// Diagnostics.
-    Diagnostics(DiagnosticsView),
+    Diagnostics(Box<DiagnosticsView>),
     /// Enforcement readiness (read-only).
     EnforcementReadiness(Box<EnforcementReadinessView>),
     /// Windows enforcement observation (read-only).
     EnforcementObservation(Box<EnforcementObservationView>),
     /// Administrator Group Policy checklist (generated, never applied).
     PolicyChecklist(Box<PolicyChecklistView>),
+    /// Guided enforcement session state.
+    EnforcementSession(Box<EnforcementSessionView>),
     /// Settings.
     Settings(SettingsView),
     /// Simulation.
@@ -643,6 +718,9 @@ pub enum ResponseBody {
     Done {
         /// Message.
         message: String,
+        /// Turkish rendering of `message`.
+        #[serde(default)]
+        message_tr: String,
     },
     /// Backups, newest first.
     Backups(Vec<BackupView>),
@@ -696,10 +774,16 @@ pub struct RestorePreviewView {
     pub backup_workstation_id: String,
     /// Human-readable differences (English; empty = identical content).
     pub changes: Vec<String>,
+    /// Turkish rendering of `changes`.
+    #[serde(default)]
+    pub changes_tr: Vec<String>,
     /// Preview expiry, UTC ms.
     pub expires_ms: i64,
     /// Statement of what applying does and does not do.
     pub notice: String,
+    /// Turkish rendering of `notice`.
+    #[serde(default)]
+    pub notice_tr: String,
 }
 
 /// Windows Event Log mirroring status.
@@ -838,4 +922,71 @@ pub struct PolicyChecklistView {
     pub checklist: rustward_enforcement::checklist::PolicyChecklist,
     /// Plain-text rendering for copying.
     pub text: String,
+}
+
+/// One step of the honest enforcement-state ladder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LadderStepView {
+    /// `policy_simulation`, `windows_restriction_configured`,
+    /// `windows_install_denied`, `read_write_verified`, `protection_inactive`,
+    /// `enforcement_error`, `recovery_required`.
+    pub code: String,
+    /// Turkish label.
+    pub label_tr: String,
+    /// English label.
+    pub label_en: String,
+    /// `yes`, `no` or `not_verified`.
+    pub status: String,
+}
+
+/// A guided enforcement session (from the audit log).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionView {
+    /// Session id.
+    pub session_id: String,
+    /// Prepared at (UTC ms).
+    pub prepared_ms: i64,
+    /// Prepared by.
+    pub prepared_by: String,
+    /// Target device key.
+    pub device_key: String,
+    /// Target device name.
+    pub device_name: String,
+    /// Exact hardware ID of the rule.
+    pub hardware_id: String,
+    /// Retroactive option.
+    pub retroactive: bool,
+    /// Saved previous Windows policy (normalized lines).
+    pub baseline: Vec<String>,
+    /// Expected registry values after the change.
+    pub expected_lines: Vec<String>,
+    /// Kind of the last application verification event, if any.
+    pub last_verification: Option<String>,
+    /// Its time.
+    pub last_verification_ms: Option<i64>,
+}
+
+/// Guided enforcement state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnforcementSessionView {
+    /// State code (see [`LadderStepView::code`]).
+    pub state: String,
+    /// Turkish explanation.
+    pub state_tr: String,
+    /// English explanation.
+    pub state_en: String,
+    /// All states with their status.
+    pub ladder: Vec<LadderStepView>,
+    /// Active session.
+    pub session: Option<SessionView>,
+    /// Live policy differences from the expected policy (enforcement error).
+    pub differences: Vec<String>,
+    /// Policy read error.
+    pub policy_error: Option<String>,
+    /// Observed target device.
+    pub target: Option<ObservedDeviceView>,
+    /// Always false in this build.
+    pub automated_apply_available: bool,
+    /// Why automated application is not available.
+    pub automated_apply_blocker: TextTrEn,
 }

@@ -3,6 +3,7 @@
 // request is `get_enforcement_readiness`, and the activation button is
 // permanently disabled in this build.
 import type { ReactNode } from "react";
+import { GuidedSessionCard } from "../components/GuidedSession";
 import { ObservationCard } from "../components/WindowsObservation";
 import { Lock } from "lucide-react";
 import type {
@@ -58,7 +59,7 @@ function ConflictText({ c }: { c: PolicyConflict }) {
 }
 
 function InspectionCard({ v }: { v: EnforcementReadinessView }) {
-  const { t, tx, formatTime } = useI18n();
+  const { t, tx, formatTime, pick } = useI18n();
   const i: PolicyInspection | null = v.inspection;
   const flag = (n: number | null) => (n === null ? t("readiness.notSet") : String(n));
   return (
@@ -95,7 +96,7 @@ function InspectionCard({ v }: { v: EnforcementReadinessView }) {
               <Badge tone={i.layering.status === "supported" ? "success" : i.layering.status === "not_supported" ? "danger" : "warning"}>
                 {tx("readiness.layering", i.layering.status)}
               </Badge>
-              {"reason" in i.layering && <div className="mt-1 text-xs font-normal text-slate-500">{i.layering.reason}</div>}
+              {"reason" in i.layering && <div className="mt-1 text-xs font-normal text-slate-500">{pick(i.layering.reason, i.layering.reason_tr)}</div>}
             </Row>
             <Row label={t("readiness.planPresence")}>
               {i.plan_presence === null
@@ -275,6 +276,8 @@ export function ReadinessPage() {
               {t("readiness.activationDisabled")}
             </p>
           </Card>
+
+          <GuidedSessionCard />
 
           <ObservationCard />
 

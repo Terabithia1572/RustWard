@@ -44,6 +44,12 @@ pub trait Handler {
     /// (e.g. the Windows token could not be read). The request is refused
     /// with `Unauthorized` before validation, authorization and `handle`.
     fn identification_failed(&self, _request: &Request, _reason: &str) {}
+
+    /// Add a localized message to an error before it is returned (every
+    /// error, including validation and authorization refusals).
+    fn localize_error(&self, error: IpcError) -> IpcError {
+        error
+    }
 }
 
 /// Client-side errors.
@@ -159,7 +165,7 @@ pub fn process(
     ResponseEnvelope {
         version: PROTOCOL_VERSION,
         request_id: env.request_id,
-        result,
+        result: result.map_err(|e| handler.localize_error(e)),
     }
 }
 

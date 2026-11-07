@@ -96,6 +96,19 @@ fn input(name: &str) -> ManufacturerInput {
 /// privileged request without a test here a compile error.
 fn privileged_samples(version: u64) -> Vec<Request> {
     let all = vec![
+        Request::PrepareEnforcementSession {
+            device_key: "0".repeat(32),
+            retroactive: true,
+        },
+        Request::VerifyEnforcementApplied {
+            session_id: "0".repeat(16),
+        },
+        Request::VerifyEnforcementRollback {
+            session_id: "0".repeat(16),
+        },
+        Request::CancelEnforcementSession {
+            session_id: "0".repeat(16),
+        },
         Request::AddManufacturer {
             input: input("Rogue Brand"),
             allowed: true,
@@ -153,7 +166,11 @@ fn privileged_samples(version: u64) -> Vec<Request> {
     for r in &all {
         assert_eq!(r.access_level(), AccessLevel::Administrator, "{}", r.name());
         match r {
-            Request::AddManufacturer { .. }
+            Request::PrepareEnforcementSession { .. }
+            | Request::VerifyEnforcementApplied { .. }
+            | Request::VerifyEnforcementRollback { .. }
+            | Request::CancelEnforcementSession { .. }
+            | Request::AddManufacturer { .. }
             | Request::UpdateManufacturer { .. }
             | Request::RemoveManufacturer { .. }
             | Request::SetManufacturerAllowed { .. }
@@ -179,6 +196,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::GetEnforcementReadiness
             | Request::GetEnforcementObservation
             | Request::GetPolicyChecklist { .. }
+            | Request::GetEnforcementSession
             | Request::GetSettings
             | Request::RunSimulation => unreachable!("read-only request in privileged list"),
         }
@@ -351,6 +369,7 @@ fn read_only_requests_work_for_standard_users_and_change_nothing() {
         Request::GetDiagnostics,
         Request::GetEnforcementReadiness,
         Request::GetEnforcementObservation,
+        Request::GetEnforcementSession,
         Request::GetSettings,
         Request::RunSimulation,
     ] {

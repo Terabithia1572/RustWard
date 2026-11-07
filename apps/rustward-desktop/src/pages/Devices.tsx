@@ -38,7 +38,7 @@ function ExplanationPanel({ data }: { data: ExplanationView }) {
 }
 
 export function DevicesPage() {
-  const { t, tx, formatTime } = useI18n();
+  const { t, tx, formatTime, pick } = useI18n();
   const api = useApi();
   const [includeAbsent, setIncludeAbsent] = useState(true);
   const [filter, setFilter] = useState<Filter>("storage");
@@ -73,7 +73,7 @@ export function DevicesPage() {
   const runAction = async (type: "refresh_inventory" | "load_synthetic_inventory") => {
     const msg = await action.run(() => api.action(type));
     if (msg !== undefined) {
-      setNotice(msg);
+      setNotice(pick(msg.message, msg.message_tr));
       r.reload();
     }
   };

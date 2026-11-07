@@ -1,0 +1,660 @@
+//! Administrator-guided Windows enforcement session.
+//!
+//! RustWard does NOT write Group Policy or the registry. This workflow makes
+//! the administrator's manual change safe and verifiable:
+//!
+//! 1. prepare (administrator): pick one USB storage device, check the impact
+//!    on every other device (checklist), save the current Windows policy as
+//!    the baseline and the exact expected policy, audit both;
+//! 2. the administrator applies the checklist in gpedit.msc;
+//! 3. verify application (administrator): re-read the policy, require it to
+//!    equal the expected policy (nothing else changed), observe the target
+//!    device's real Windows state, audit the evidence;
+//! 4. the administrator restores the previous configuration;
+//! 5. verify rollback (administrator): require the policy to equal the
+//!    baseline again, observe the device, audit and close the session.
+//!
+//! Sessions live in the hash-chained audit log (`enforcement_session_*`).
+
+use std::collections::BTreeMap;
+
+use rustward_enforcement::checklist::{device_deny_checklist, planned_deny_policy};
+use rustward_enforcement::device_install::RESTRICTIONS_KEY;
+use rustward_enforcement::observer::EvidenceLevel;
+use rustward_enforcement::policy_state::{PolicySnapshot, RegData};
+use rustward_ipc::messages::{
+    EnforcementSessionView, LadderStepView, ObservedDeviceView, SessionView, TextTrEn,
+};
+use rustward_ipc::{ClientIdentity, ErrorCode, IpcError};
+use rustward_storage::{
+    EventFilter, NewEvent, SecurityEvent, Severity, device_key, mask_instance_id, sha256_hex,
+};
+
+use super::{AppService, Inner, empty_snapshot, storage_err};
+
+const PREPARED: &str = "enforcement_session_prepared";
+const APPLY_OK: &str = "enforcement_session_apply_verified";
+const APPLY_BAD: &str = "enforcement_session_apply_mismatch";
+const ROLLBACK_OK: &str = "enforcement_session_rollback_verified";
+const ROLLBACK_BAD: &str = "enforcement_session_rollback_mismatch";
+const CANCELLED: &str = "enforcement_session_cancelled";
+
+/// Normalized policy: DWORDs and other values by name, list entries as an
+/// upper-case set (Group Policy may renumber list entries).
+pub fn normalize(p: &PolicySnapshot) -> BTreeMap<String, String> {
+    let root = RESTRICTIONS_KEY.to_ascii_uppercase();
+    let mut out = BTreeMap::new();
+    let mut lists: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (r, d) in &p.values {
+        let sub = r
+            .key
+            .strip_prefix(&root)
+            .unwrap_or(&r.key)
+            .trim_start_matches('\\');
+        match (sub.is_empty(), r.name.parse::<u32>(), d) {
+            (false, Ok(_), RegData::Sz(s)) => lists
+                .entry(format!("{sub}[]"))
+                .or_default()
+                .push(s.to_ascii_uppercase()),
+            _ => {
+                let name = if sub.is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{sub}\\{}", r.name)
+                };
+                let v = match d {
+                    RegData::Dword(v) => v.to_string(),
+                    RegData::Sz(s) => s.clone(),
+                    RegData::MultiSz(v) => v.join("|"),
+                    RegData::Other { reg_type, bytes } => format!("type {reg_type}, {bytes} bytes"),
+                };
+                out.insert(name, v);
+            }
+        }
+    }
+    for (k, mut v) in lists {
+        v.sort();
+        v.dedup();
+        out.insert(k, v.join(" | "));
+    }
+    out
+}
+
+/// Differences `from` -> `to`, one line each.
+pub fn diff(from: &BTreeMap<String, String>, to: &BTreeMap<String, String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, v) in to {
+        match from.get(k) {
+            None => out.push(format!("+ {k} = {v}")),
+            Some(o) if o != v => out.push(format!("~ {k}: {o} -> {v}")),
+            _ => {}
+        }
+    }
+    for (k, v) in from {
+        if !to.contains_key(k) {
+            out.push(format!("- {k} = {v}"));
+        }
+    }
+    out
+}
+
+fn map_of(v: &serde_json::Value) -> BTreeMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn s(d: &serde_json::Value, k: &str) -> String {
+    d.get(k)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Turkish text of a session audit event.
+#[must_use]
+pub fn event_tr(kind: &str, _m: &str, d: &serde_json::Value) -> String {
+    let id = s(d, "session_id");
+    let name = s(d, "device_name");
+    match kind {
+        PREPARED => format!(
+            "Yönetici kontrollü uygulama oturumu {id} hazırlandı: {name} ({}). Önceki Windows politikası kaydedildi; değişikliği yönetici Grup İlkesi Düzenleyicisi ile yapacak.",
+            s(d, "hardware_id")
+        ),
+        APPLY_OK => format!(
+            "Oturum {id}: Windows politikası beklenen değişiklikle birebir eşleşiyor{}.",
+            match s(d, "evidence").as_str() {
+                "install_denied" => format!(
+                    "; Windows {name} cihazının kurulumunu engelledi (Kod {})",
+                    d.get("problem_code")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_default()
+                ),
+                "policy_only" => "; cihaz düzeyinde engel henüz gözlenmedi".into(),
+                _ => "; cihaz gözlenemedi".into(),
+            }
+        ),
+        APPLY_BAD => format!(
+            "Oturum {id}: Windows politikası beklenen değişiklikle EŞLEŞMİYOR; uygulama hatası, inceleme gerekir."
+        ),
+        ROLLBACK_OK => format!(
+            "Oturum {id}: önceki Windows politikası birebir geri yüklendi; oturum kapatıldı."
+        ),
+        ROLLBACK_BAD => format!(
+            "Oturum {id}: geri alma doğrulanamadı; Windows politikası önceki durumdan farklı. Kurtarma gerekli."
+        ),
+        CANCELLED => format!("Oturum {id} iptal edildi; Windows politikası değiştirilmemişti."),
+        _ => format!("{}{kind}", crate::l10n::UNTRANSLATED),
+    }
+}
+
+struct Active {
+    prepared: SecurityEvent,
+    last_apply: Option<SecurityEvent>,
+    last_rollback_bad: Option<SecurityEvent>,
+}
+
+fn blocker() -> TextTrEn {
+    TextTrEn {
+        tr: "Otomatik uygulama bu sürümde kullanılamaz: RustWard Windows Grup İlkesine veya kayıt defterine yazmaz. Değişikliği yönetici Grup İlkesi Düzenleyicisi (gpedit.msc) ile kendisi yapar; RustWard önceki durumu kaydeder, sonucu yeniden okuyup doğrular ve denetim kaydına yazar.".into(),
+        en: "Automated application is not available in this build: RustWard does not write Group Policy or the registry. The administrator makes the change in the Group Policy Editor (gpedit.msc); RustWard saves the previous state, re-reads and verifies the result and audits it.".into(),
+    }
+}
+
+impl AppService {
+    fn latest(g: &Inner, kind: &str) -> Result<Option<SecurityEvent>, IpcError> {
+        Ok(g.store
+            .list_events(&EventFilter {
+                kind: Some(kind.into()),
+                limit: Some(1),
+                ..EventFilter::default()
+            })
+            .map_err(storage_err)?
+            .into_iter()
+            .next())
+    }
+
+    fn active_session(g: &Inner) -> Result<Option<Active>, IpcError> {
+        let Some(prepared) = Self::latest(g, PREPARED)? else {
+            return Ok(None);
+        };
+        let id = s(&prepared.details, "session_id");
+        let newer = |e: &Option<SecurityEvent>| {
+            e.as_ref()
+                .filter(|e| e.id > prepared.id && s(&e.details, "session_id") == id)
+                .cloned()
+        };
+        if newer(&Self::latest(g, ROLLBACK_OK)?).is_some()
+            || newer(&Self::latest(g, CANCELLED)?).is_some()
+        {
+            return Ok(None);
+        }
+        let ok = newer(&Self::latest(g, APPLY_OK)?);
+        let bad = newer(&Self::latest(g, APPLY_BAD)?);
+        let last_apply = match (ok, bad) {
+            (Some(a), Some(b)) => Some(if a.id > b.id { a } else { b }),
+            (a, b) => a.or(b),
+        };
+        Ok(Some(Active {
+            last_rollback_bad: newer(&Self::latest(g, ROLLBACK_BAD)?),
+            prepared,
+            last_apply,
+        }))
+    }
+
+    fn live_normalized(&self) -> Result<BTreeMap<String, String>, IpcError> {
+        let c = self
+            .policy_source
+            .capture(self.clock.now_ms())
+            .map_err(|e| {
+                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+            })?;
+        Ok(normalize(&c.values))
+    }
+
+    fn require(g: &Inner, session_id: &str) -> Result<Active, IpcError> {
+        match Self::active_session(g)? {
+            Some(a) if s(&a.prepared.details, "session_id") == session_id => Ok(a),
+            Some(_) => Err(IpcError::new(
+                ErrorCode::Conflict,
+                "another enforcement session is active",
+            )),
+            None => Err(IpcError::new(
+                ErrorCode::NotFound,
+                "no active enforcement session",
+            )),
+        }
+    }
+
+    fn session_event(
+        &self,
+        g: &mut Inner,
+        severity: Severity,
+        kind: &str,
+        message: String,
+        details: serde_json::Value,
+    ) -> Result<(), IpcError> {
+        g.store
+            .append_event(&NewEvent {
+                severity,
+                kind: kind.into(),
+                device_key: details
+                    .get("device_key")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                message,
+                simulated: false,
+                enforcement_state: self.enforcement_state_code().into(),
+                policy_version: None,
+                details,
+            })
+            .map_err(storage_err)?;
+        Ok(())
+    }
+
+    /// Prepare a session (administrator).
+    pub(crate) fn prepare_session(
+        &self,
+        g: &mut Inner,
+        key: &str,
+        retroactive: bool,
+        identity: &ClientIdentity,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        if Self::active_session(g)?.is_some() {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                "another enforcement session is active",
+            ));
+        }
+        let v = Self::validated(&g.store)?;
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        let rec = snap
+            .devices
+            .iter()
+            .find(|d| device_key(&d.instance_id) == key)
+            .cloned()
+            .ok_or_else(|| {
+                IpcError::new(ErrorCode::NotFound, "device not in the current inventory")
+            })?;
+        let captured = self
+            .policy_source
+            .capture(self.clock.now_ms())
+            .map_err(|e| {
+                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+            })?;
+        let checklist = device_deny_checklist(
+            &snap,
+            &v.policy,
+            &v.catalog,
+            &captured.values,
+            &rec.instance_id,
+            retroactive,
+        )
+        .map_err(|e| IpcError::new(ErrorCode::ValidationFailed, e.to_string()))?;
+        let baseline = normalize(&captured.values);
+        let expected = normalize(
+            &planned_deny_policy(&captured.values, &checklist.hardware_id, retroactive).0,
+        );
+        let now = self.clock.now_ms();
+        let id = sha256_hex(format!("{key}|{now}|{baseline:?}|{expected:?}").as_bytes())[..16]
+            .to_string();
+        let details = serde_json::json!({
+            "session_id": id,
+            "device_key": key,
+            "device": mask_instance_id(&rec.instance_id),
+            "device_name": checklist.device_name,
+            "vid_pid": checklist.vid_pid,
+            "hardware_id": checklist.hardware_id,
+            "retroactive": retroactive,
+            "baseline": baseline,
+            "expected": expected,
+            "expected_lines": checklist.expected_registry,
+            "affected_devices": checklist.affected_devices,
+            "prepared_by": identity.actor(),
+            "applied_by": "administrator_gpedit_not_rustward",
+        });
+        self.session_event(
+            g,
+            Severity::Warning,
+            PREPARED,
+            format!(
+                "enforcement session {id} prepared for {} ({}) by {}; previous policy saved; the administrator applies the checklist in Group Policy",
+                checklist.device_name,
+                checklist.hardware_id,
+                identity.actor()
+            ),
+            details,
+        )?;
+        self.session_view(g)
+    }
+
+    /// Verify that the administrator's change matches the plan exactly.
+    pub(crate) fn verify_applied(
+        &self,
+        g: &mut Inner,
+        session_id: &str,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        let a = Self::require(g, session_id)?;
+        let d = &a.prepared.details;
+        let live = self.live_normalized()?;
+        let baseline = map_of(&d["baseline"]);
+        let expected = map_of(&d["expected"]);
+        if live == baseline {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                "the Windows policy is unchanged; apply the checklist in Group Policy first",
+            ));
+        }
+        let key = s(d, "device_key");
+        if live == expected {
+            let obs = self.enforcement_observation(g)?;
+            let target = obs.devices.iter().find(|x| x.device_key == key);
+            let evidence = target.map_or("not_observed", |t| match t.observed.evidence {
+                EvidenceLevel::InstallDenied => "install_denied",
+                EvidenceLevel::PolicyOnly => "policy_only",
+                EvidenceLevel::None => "none",
+            });
+            self.session_event(
+                g,
+                Severity::Warning,
+                APPLY_OK,
+                format!("enforcement session {session_id}: Windows policy matches the expected change exactly; device evidence: {evidence}"),
+                serde_json::json!({
+                    "session_id": session_id,
+                    "device_key": key,
+                    "device_name": s(d, "device_name"),
+                    "evidence": evidence,
+                    "problem_code": target.and_then(|t| t.observed.problem_code),
+                    "read_write_tested": false,
+                }),
+            )?;
+        } else {
+            self.session_event(
+                g,
+                Severity::Critical,
+                APPLY_BAD,
+                format!("enforcement session {session_id}: Windows policy does NOT match the expected change"),
+                serde_json::json!({
+                    "session_id": session_id,
+                    "device_key": key,
+                    "differences_from_expected": diff(&expected, &live),
+                }),
+            )?;
+        }
+        self.session_view(g)
+    }
+
+    /// Verify that the previous policy is back.
+    pub(crate) fn verify_rollback(
+        &self,
+        g: &mut Inner,
+        session_id: &str,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        let a = Self::require(g, session_id)?;
+        let d = &a.prepared.details;
+        let live = self.live_normalized()?;
+        let baseline = map_of(&d["baseline"]);
+        let key = s(d, "device_key");
+        if live == baseline {
+            let obs = self.enforcement_observation(g)?;
+            let status = obs
+                .devices
+                .iter()
+                .find(|x| x.device_key == key)
+                .map(|t| t.observed.label_status_tr.clone());
+            self.session_event(
+                g,
+                Severity::Info,
+                ROLLBACK_OK,
+                format!("enforcement session {session_id}: previous Windows policy restored exactly; session closed"),
+                serde_json::json!({
+                    "session_id": session_id,
+                    "device_key": key,
+                    "device_status_tr": status,
+                }),
+            )?;
+        } else {
+            self.session_event(
+                g,
+                Severity::Critical,
+                ROLLBACK_BAD,
+                format!("enforcement session {session_id}: rollback NOT verified; policy differs from the saved baseline"),
+                serde_json::json!({
+                    "session_id": session_id,
+                    "device_key": key,
+                    "differences_from_baseline": diff(&baseline, &live),
+                }),
+            )?;
+        }
+        self.session_view(g)
+    }
+
+    /// Cancel a session whose change was never applied.
+    pub(crate) fn cancel_session(
+        &self,
+        g: &mut Inner,
+        session_id: &str,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        let a = Self::require(g, session_id)?;
+        let live = self.live_normalized()?;
+        if live != map_of(&a.prepared.details["baseline"]) {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                "the Windows policy differs from the saved baseline; restore it and verify the rollback instead",
+            ));
+        }
+        self.session_event(
+            g,
+            Severity::Info,
+            CANCELLED,
+            format!("enforcement session {session_id} cancelled; the Windows policy was not changed"),
+            serde_json::json!({ "session_id": session_id, "device_key": s(&a.prepared.details, "device_key") }),
+        )?;
+        self.session_view(g)
+    }
+
+    /// Current session state (read-only towards Windows).
+    pub(crate) fn session_view(&self, g: &mut Inner) -> Result<EnforcementSessionView, IpcError> {
+        let active = Self::active_session(g)?;
+        let live = self.live_normalized();
+        let step = |code: &str, tr: &str, en: &str, status: &str| LadderStepView {
+            code: code.into(),
+            label_tr: tr.into(),
+            label_en: en.into(),
+            status: status.into(),
+        };
+        let Some(a) = active else {
+            return Ok(EnforcementSessionView {
+                state: "policy_simulation".into(),
+                state_tr: "Politika simülasyonu: etkin bir Windows uygulama oturumu yok.".into(),
+                state_en: "Policy simulation: no active Windows enforcement session.".into(),
+                ladder: vec![
+                    step(
+                        "policy_simulation",
+                        "Politika simülasyonu",
+                        "Policy simulation",
+                        "yes",
+                    ),
+                    step(
+                        "windows_restriction_configured",
+                        "Windows kısıtlaması yapılandırıldı",
+                        "Windows restriction configured",
+                        "no",
+                    ),
+                    step(
+                        "windows_install_denied",
+                        "Windows cihaz kurulumu engellendi",
+                        "Windows device installation denied",
+                        "no",
+                    ),
+                    step(
+                        "read_write_verified",
+                        "Okuma/yazma erişimi doğrulandı",
+                        "Read/write access verified",
+                        "not_verified",
+                    ),
+                    step(
+                        "protection_inactive",
+                        "Koruma etkin değil",
+                        "Protection inactive",
+                        "yes",
+                    ),
+                    step(
+                        "enforcement_error",
+                        "Uygulama hatası",
+                        "Enforcement error",
+                        "no",
+                    ),
+                    step(
+                        "recovery_required",
+                        "Kurtarma gerekli",
+                        "Recovery required",
+                        "no",
+                    ),
+                ],
+                session: None,
+                differences: Vec::new(),
+                policy_error: live.err().map(|e| e.message),
+                target: None,
+                automated_apply_available: false,
+                automated_apply_blocker: blocker(),
+            });
+        };
+        let d = a.prepared.details.clone();
+        let baseline = map_of(&d["baseline"]);
+        let expected = map_of(&d["expected"]);
+        let key = s(&d, "device_key");
+        let obs = self.enforcement_observation(g)?;
+        let target: Option<ObservedDeviceView> =
+            obs.devices.into_iter().find(|x| x.device_key == key);
+        let (configured, at_baseline, differences, policy_error) = match &live {
+            Ok(l) => (l == &expected, l == &baseline, diff(&expected, l), None),
+            Err(e) => (false, false, Vec::new(), Some(e.message.clone())),
+        };
+        let denied = configured
+            && target
+                .as_ref()
+                .is_some_and(|t| t.observed.evidence == EvidenceLevel::InstallDenied);
+        let error = policy_error.is_none() && !configured && !at_baseline;
+        let recovery = error || (a.last_rollback_bad.is_some() && !at_baseline);
+        let yn = |b: bool| if b { "yes" } else { "no" };
+        let (state, tr, en) = if recovery && a.last_rollback_bad.is_some() {
+            (
+                "recovery_required",
+                "Kurtarma gerekli: Windows politikası kaydedilen önceki durumdan farklı.",
+                "Recovery required: the Windows policy differs from the saved previous state.",
+            )
+        } else if error {
+            (
+                "enforcement_error",
+                "Uygulama hatası: Windows politikası ne önceki durumla ne de beklenen değişiklikle eşleşiyor.",
+                "Enforcement error: the Windows policy matches neither the previous state nor the expected change.",
+            )
+        } else if denied {
+            (
+                "windows_install_denied",
+                "Windows cihaz kurulumu engellendi (gerçek Windows kanıtı). Okuma/yazma yolları ayrıca doğrulanmadı.",
+                "Windows device installation denied (real Windows evidence). Read/write paths not verified separately.",
+            )
+        } else if configured {
+            (
+                "windows_restriction_configured",
+                "Windows kısıtlaması yapılandırıldı; cihaz düzeyinde engel henüz gözlenmedi.",
+                "Windows restriction configured; no device-level denial observed yet.",
+            )
+        } else {
+            (
+                "protection_inactive",
+                "Koruma etkin değil: oturum hazır, Windows politikası henüz değiştirilmedi.",
+                "Protection inactive: session prepared, the Windows policy has not been changed yet.",
+            )
+        };
+        let lines = d
+            .get("expected_lines")
+            .and_then(serde_json::Value::as_array)
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(EnforcementSessionView {
+            state: state.into(),
+            state_tr: tr.into(),
+            state_en: en.into(),
+            ladder: vec![
+                step(
+                    "policy_simulation",
+                    "Politika simülasyonu",
+                    "Policy simulation",
+                    "yes",
+                ),
+                step(
+                    "windows_restriction_configured",
+                    "Windows kısıtlaması yapılandırıldı",
+                    "Windows restriction configured",
+                    yn(configured),
+                ),
+                step(
+                    "windows_install_denied",
+                    "Windows cihaz kurulumu engellendi",
+                    "Windows device installation denied",
+                    yn(denied),
+                ),
+                step(
+                    "read_write_verified",
+                    "Okuma/yazma erişimi doğrulandı",
+                    "Read/write access verified",
+                    "not_verified",
+                ),
+                step(
+                    "protection_inactive",
+                    "Koruma etkin değil",
+                    "Protection inactive",
+                    yn(!configured),
+                ),
+                step(
+                    "enforcement_error",
+                    "Uygulama hatası",
+                    "Enforcement error",
+                    yn(error),
+                ),
+                step(
+                    "recovery_required",
+                    "Kurtarma gerekli",
+                    "Recovery required",
+                    yn(recovery),
+                ),
+            ],
+            session: Some(SessionView {
+                session_id: s(&d, "session_id"),
+                prepared_ms: a.prepared.utc_ms,
+                prepared_by: s(&d, "prepared_by"),
+                device_key: key,
+                device_name: s(&d, "device_name"),
+                hardware_id: s(&d, "hardware_id"),
+                retroactive: d
+                    .get("retroactive")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                baseline: baseline.iter().map(|(k, v)| format!("{k} = {v}")).collect(),
+                expected_lines: lines,
+                last_verification: a.last_apply.as_ref().map(|e| e.kind.clone()),
+                last_verification_ms: a.last_apply.as_ref().map(|e| e.utc_ms),
+            }),
+            differences: if configured || at_baseline {
+                Vec::new()
+            } else {
+                differences
+            },
+            policy_error,
+            target,
+            automated_apply_available: false,
+            automated_apply_blocker: blocker(),
+        })
+    }
+}

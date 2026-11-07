@@ -111,6 +111,9 @@ pub struct IpcError {
     pub code: ErrorCode,
     /// Message (safe to show; no internal paths or secrets).
     pub message: String,
+    /// Turkish rendering of `message`, when the backend knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_tr: Option<String>,
 }
 
 impl IpcError {
@@ -120,6 +123,7 @@ impl IpcError {
         Self {
             code,
             message: message.into(),
+            message_tr: None,
         }
     }
 }

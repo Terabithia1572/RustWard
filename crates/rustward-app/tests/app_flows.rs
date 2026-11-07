@@ -523,7 +523,7 @@ fn export_backup_settings_and_retention() {
         3
     );
 
-    let ResponseBody::Done { message } = call(&s, Request::CreateBackup) else {
+    let ResponseBody::Done { message, .. } = call(&s, Request::CreateBackup) else {
         panic!()
     };
     assert!(message.starts_with("backup created: rustward-backup-"));
@@ -702,7 +702,7 @@ fn kinds_of(s: &AppService, kind: &str) -> Vec<rustward_ipc::messages::EventView
 }
 
 fn create_backup(s: &AppService) -> String {
-    let ResponseBody::Done { message } = call(s, Request::CreateBackup) else {
+    let ResponseBody::Done { message, .. } = call(s, Request::CreateBackup) else {
         panic!()
     };
     message.trim_start_matches("backup created: ").to_owned()

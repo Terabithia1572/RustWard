@@ -2,8 +2,18 @@
   "bundle": {
     "windows": {
       "wix": {
-        "fragmentPaths": ["../../../packaging/wix/rustward-service.wxs"],
-        "componentRefs": ["RustWardServiceComponent", "RustWardDataDirComponent"]
+        "fragmentPaths": [
+          "../../../packaging/wix/rustward-service.wxs"
+        ],
+        "componentRefs": [
+          "RustWardServiceComponent",
+          "RustWardDataDirComponent"
+        ],
+        "language": {
+          "tr-TR": {
+            "localePath": "../../../packaging/wix/locales/tr-TR.wxl"
+          }
+        }
       }
     }
   }

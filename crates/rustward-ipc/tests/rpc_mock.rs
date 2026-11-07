@@ -36,6 +36,7 @@ impl Handler for CountingHandler {
             Request::GetSettings => Err(IpcError::new(ErrorCode::NotFound, "no settings")),
             _ => Ok(ResponseBody::Done {
                 message: format!("{} by {}", request.name(), identity.actor()),
+                message_tr: String::new(),
             }),
         }
     }
@@ -92,7 +93,9 @@ fn read_only_request_round_trip_and_error_propagation() {
     let (end, server) = spawn_server(identity(false, AccessLevel::ReadOnly), handler.clone());
     let mut client = Client::new(end, Duration::from_secs(2));
     match client.call(Request::GetDashboard).unwrap() {
-        ResponseBody::Done { message } => assert_eq!(message, "get_dashboard by PC-01\\operator"),
+        ResponseBody::Done { message, .. } => {
+            assert_eq!(message, "get_dashboard by PC-01\\operator")
+        }
         other => panic!("{other:?}"),
     }
     match client.call(Request::GetSettings) {
@@ -264,6 +267,7 @@ fn mismatched_response_id_is_a_protocol_violation() {
             request_id: 999,
             result: Ok(ResponseBody::Done {
                 message: "spoof".into(),
+                message_tr: String::new(),
             }),
         })
         .unwrap();

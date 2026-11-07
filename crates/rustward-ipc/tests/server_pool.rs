@@ -31,6 +31,7 @@ impl Handler for SlowHandler {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ResponseBody::Done {
             message: format!("{} by {}", request.name(), identity.account),
+            message_tr: String::new(),
         })
     }
 }
@@ -78,7 +79,9 @@ fn idle_clients_do_not_block_other_callers() {
         Duration::from_secs(2),
     );
     match client.call(Request::GetDashboard).unwrap() {
-        ResponseBody::Done { message } => assert_eq!(message, "get_dashboard by PC-01\\operator"),
+        ResponseBody::Done { message, .. } => {
+            assert_eq!(message, "get_dashboard by PC-01\\operator")
+        }
         other => panic!("{other:?}"),
     }
     assert_eq!(handler.calls.load(Ordering::SeqCst), 1);

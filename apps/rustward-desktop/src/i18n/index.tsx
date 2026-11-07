@@ -14,6 +14,10 @@ interface I18n {
   /** Translate a dynamic key (category/reason codes) with a fallback. */
   tx: (prefix: string, code: string) => string;
   formatTime: (ms: number | null | undefined) => string;
+  /** Backend text: the Turkish rendering in Turkish mode (English otherwise or when absent). */
+  pick: (en: string, tr?: string | null) => string;
+  /** Backend list: the Turkish rendering in Turkish mode when it has the same length. */
+  pickList: (en: string[], tr?: string[] | null) => string[];
 }
 
 export function translate(lang: Lang, key: TKey, params?: Record<string, string | number>): string {
@@ -45,6 +49,8 @@ export function I18nProvider({ lang, children }: { lang: Lang; children: ReactNo
         return isKey(k) ? t(k) : code;
       },
       formatTime: (ms) => (ms === null || ms === undefined ? "—" : fmt.format(new Date(ms))),
+      pick: (enText, trText) => (lang === "tr" && trText ? trText : enText),
+      pickList: (enList, trList) => (lang === "tr" && trList && trList.length === enList.length ? trList : enList),
     };
   }, [lang, t]);
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

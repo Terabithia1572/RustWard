@@ -134,7 +134,7 @@ prints the `sc.exe`/`icacls` commands; it executes nothing.
 
 | Item | Value |
 |---|---|
-| Service name / display name | `RustWardService` / "RustWard USB Storage Control" |
+| Service name / display name | `RustWardService` / "RustWard USB Depolama Denetimi" |
 | Binary / arguments | `C:\Program Files\RustWard\rustward-service.exe service` |
 | Account | `LocalSystem` (virtual-account variant prepared, decided in VM step C16) |
 | Start / recovery | automatic; restart after 5 s ×3, reset after 1 day; SCM stop wait hint 15 s |

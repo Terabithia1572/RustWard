@@ -53,6 +53,11 @@ export type Request =
   | { type: "get_enforcement_readiness" }
   | { type: "get_enforcement_observation" }
   | { type: "get_policy_checklist"; device_key: string; retroactive: boolean }
+  | { type: "get_enforcement_session" }
+  | { type: "prepare_enforcement_session"; device_key: string; retroactive: boolean }
+  | { type: "verify_enforcement_applied"; session_id: string }
+  | { type: "verify_enforcement_rollback"; session_id: string }
+  | { type: "cancel_enforcement_session"; session_id: string }
   | { type: "get_settings" }
   | { type: "run_simulation" }
   | { type: "add_manufacturer"; input: ManufacturerInput; allowed: boolean; expected_policy_version: number }
@@ -86,8 +91,13 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "get_enforcement_readiness",
   "get_enforcement_observation",
   "get_policy_checklist",
+  "get_enforcement_session",
   "get_settings",
   "run_simulation",
+  "prepare_enforcement_session",
+  "verify_enforcement_applied",
+  "verify_enforcement_rollback",
+  "cancel_enforcement_session",
   "add_manufacturer",
   "update_manufacturer",
   "remove_manufacturer",
@@ -107,6 +117,10 @@ export const REQUEST_TYPES: readonly RequestType[] = [
 
 /** Requests that require an elevated administrator (server-enforced). */
 export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
+  "prepare_enforcement_session",
+  "verify_enforcement_applied",
+  "verify_enforcement_rollback",
+  "cancel_enforcement_session",
   "add_manufacturer",
   "update_manufacturer",
   "remove_manufacturer",
@@ -131,6 +145,8 @@ export interface ServiceStatusView {
   started_ms: number | null;
   last_refresh_ms: number | null;
   message: string;
+  /** Turkish rendering (empty from older services). */
+  message_tr?: string;
 }
 
 export type SimulatedDecision = "allow" | "deny" | "not_applicable";
@@ -164,6 +180,8 @@ export interface EventView {
   kind: string;
   device_key: string | null;
   message: string;
+  /** Turkish rendering; the stored record stays as written. */
+  message_tr?: string;
   simulated: boolean;
   enforcement_state: string;
   policy_version: number | null;
@@ -185,6 +203,7 @@ export interface DashboardView {
   recent_denied: DeviceView[];
   recent_events: EventView[];
   warnings: string[];
+  warnings_tr?: string[];
   synthetic_data_present: boolean;
 }
 
@@ -207,6 +226,7 @@ export interface ManufacturerView {
   enabled: boolean;
   enforceable: boolean;
   issues: string[];
+  issues_tr?: string[];
 }
 
 export interface ManufacturersView {
@@ -216,6 +236,7 @@ export interface ManufacturersView {
   mode: "dry_run" | "enforce" | string;
   manufacturers: ManufacturerView[];
   warnings: string[];
+  warnings_tr?: string[];
   reserved_generic_vendors: string[];
 }
 
@@ -226,6 +247,7 @@ export interface PolicyChangeView {
   action: string;
   brand_id: string;
   summary: string;
+  summary_tr?: string;
   from_version: number;
   to_version: number;
 }
@@ -270,7 +292,7 @@ export interface DiagnosticsView {
     location_kind: string;
   };
   windows_adapter: { platform: string; live_inventory_available: boolean; last_error: string | null };
-  policy: { valid: boolean; errors: string[]; warnings: string[] };
+  policy: { valid: boolean; errors: string[]; warnings: string[]; errors_tr?: string[]; warnings_tr?: string[] };
   enforcement: {
     state: string;
     label_tr: string;
@@ -280,12 +302,15 @@ export interface DiagnosticsView {
     planned_changes: number;
     preconditions: Precondition[];
     risks: string[];
+    risks_tr?: string[];
     enforcement_gaps: string[];
   };
   /** Windows Event Log mirroring (absent from older services). */
   event_log?: { attached: boolean; delivered: number; failures: number; pending?: number; skipped?: number };
   unsupported_features: string[];
   pending_native_tests: string[];
+  unsupported_features_tr?: string[];
+  pending_native_tests_tr?: string[];
   app_version: string;
 }
 
@@ -310,15 +335,19 @@ export interface RestorePreviewView {
   resulting_policy_version: number;
   backup_workstation_id: string;
   changes: string[];
+  changes_tr?: string[];
   expires_ms: number;
   notice: string;
+  notice_tr?: string;
 }
 
 export interface MutationView {
   policy_version: number;
   catalog_version: string;
   summary: string;
+  summary_tr?: string;
   warnings: string[];
+  warnings_tr?: string[];
 }
 
 export interface ExportView {
@@ -335,6 +364,7 @@ export interface SimulationView {
   not_applicable: number;
   enforcement_gaps: string[];
   notice: string;
+  notice_tr?: string;
 }
 
 export type ResponseBody =
@@ -352,7 +382,8 @@ export type ResponseBody =
   | { type: "simulation"; data: SimulationView }
   | { type: "mutation"; data: MutationView }
   | { type: "export"; data: ExportView }
-  | { type: "done"; data: { message: string } }
+  | { type: "done"; data: { message: string; message_tr?: string } }
+  | { type: "enforcement_session"; data: EnforcementSessionView }
   | { type: "backups"; data: BackupView[] }
   | { type: "restore_preview"; data: RestorePreviewView };
 
@@ -403,8 +434,8 @@ export interface PolicyFlagView {
 
 export type LayeringSupport =
   | { status: "supported" }
-  | { status: "not_supported"; reason: string }
-  | { status: "unresolved"; reason: string };
+  | { status: "not_supported"; reason: string; reason_tr?: string }
+  | { status: "unresolved"; reason: string; reason_tr?: string };
 
 export type PlanPresence =
   | { state: "not_applied" }
@@ -625,4 +656,47 @@ export interface PolicyChecklist {
 export interface PolicyChecklistView {
   checklist: PolicyChecklist;
   text: string;
+}
+
+// ---- Administrator-guided enforcement session ------------------------------
+
+export interface LadderStepView {
+  code:
+    | "policy_simulation"
+    | "windows_restriction_configured"
+    | "windows_install_denied"
+    | "read_write_verified"
+    | "protection_inactive"
+    | "enforcement_error"
+    | "recovery_required";
+  label_tr: string;
+  label_en: string;
+  status: "yes" | "no" | "not_verified";
+}
+
+export interface SessionView {
+  session_id: string;
+  prepared_ms: number;
+  prepared_by: string;
+  device_key: string;
+  device_name: string;
+  hardware_id: string;
+  retroactive: boolean;
+  baseline: string[];
+  expected_lines: string[];
+  last_verification: string | null;
+  last_verification_ms: number | null;
+}
+
+export interface EnforcementSessionView {
+  state: LadderStepView["code"];
+  state_tr: string;
+  state_en: string;
+  ladder: LadderStepView[];
+  session: SessionView | null;
+  differences: string[];
+  policy_error: string | null;
+  target: ObservedDeviceView | null;
+  automated_apply_available: boolean;
+  automated_apply_blocker: { tr: string; en: string };
 }

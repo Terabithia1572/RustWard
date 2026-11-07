@@ -9,6 +9,9 @@ import type {
   DiagnosticsView,
   EnforcementObservationView,
   EnforcementReadinessView,
+  EnforcementSessionView,
+  LadderStepView,
+  SessionView,
   EventView,
   ObservedDevice,
   ManufacturerView,
@@ -52,6 +55,7 @@ export function event(over: Partial<EventView> = {}): EventView {
     kind: "simulated_deny",
     device_key: "k-deny",
     message: "SYNTHETIC device would be denied (simulation)",
+    message_tr: "SENTETİK cihaz reddedilirdi (simülasyon)",
     simulated: true,
     enforcement_state: "simulated",
     policy_version: 1,
@@ -99,6 +103,50 @@ export interface FakeState {
   readinessInspection: boolean;
   /** Windows observation returned by get_enforcement_observation. */
   observation: EnforcementObservationView;
+  /** Guided enforcement session state. */
+  session: EnforcementSessionView;
+}
+
+const LADDER: [LadderStepView["code"], string, string][] = [
+  ["policy_simulation", "Politika simülasyonu", "Policy simulation"],
+  ["windows_restriction_configured", "Windows kısıtlaması yapılandırıldı", "Windows restriction configured"],
+  ["windows_install_denied", "Windows cihaz kurulumu engellendi", "Windows device installation denied"],
+  ["read_write_verified", "Okuma/yazma erişimi doğrulandı", "Read/write access verified"],
+  ["protection_inactive", "Koruma etkin değil", "Protection inactive"],
+  ["enforcement_error", "Uygulama hatası", "Enforcement error"],
+  ["recovery_required", "Kurtarma gerekli", "Recovery required"],
+];
+
+/** Guided session view in a given state (mirrors the service's ladder). */
+export function sessionView(state: LadderStepView["code"], session: SessionView | null = null): EnforcementSessionView {
+  const on: Record<string, boolean> = {
+    policy_simulation: true,
+    windows_restriction_configured: state === "windows_restriction_configured" || state === "windows_install_denied",
+    windows_install_denied: state === "windows_install_denied",
+    protection_inactive: state === "policy_simulation" || state === "protection_inactive",
+    enforcement_error: state === "enforcement_error",
+    recovery_required: state === "recovery_required",
+  };
+  return {
+    state,
+    state_tr: `Durum: ${state}`,
+    state_en: `State: ${state}`,
+    ladder: LADDER.map(([code, tr, en]) => ({
+      code,
+      label_tr: tr,
+      label_en: en,
+      status: code === "read_write_verified" ? "not_verified" : on[code] ? "yes" : "no",
+    })),
+    session,
+    differences: [],
+    policy_error: null,
+    target: null,
+    automated_apply_available: false,
+    automated_apply_blocker: {
+      tr: "Otomatik uygulama bu sürümde kullanılamaz: RustWard Windows Grup İlkesine veya kayıt defterine yazmaz.",
+      en: "Automated application is not available in this build.",
+    },
+  };
 }
 
 /** Observed device as the VM showed it after the rollback (accessible). */
@@ -165,6 +213,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
     workstationId: "PC-TEST",
     readinessInspection: true,
+    session: sessionView("policy_simulation"),
     observation: observation([
       observed(),
       observed({
@@ -197,7 +246,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
 
   const mutation = (summary: string): ResponseBody => {
     state.version += 1;
-    return { type: "mutation", data: { policy_version: state.version, catalog_version: `test+local.${state.version}`, summary, warnings: [] } };
+    return { type: "mutation", data: { policy_version: state.version, catalog_version: `test+local.${state.version}`, summary, summary_tr: `TR: ${summary}`, warnings: [], warnings_tr: [] } };
   };
   const checkVersion = (v: number) => {
     if (v !== state.version) throw { code: "conflict", message: `policy changed (expected ${v}, current ${state.version})` };
@@ -214,7 +263,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     enforcement_label_en: "Simulation (not enforced)",
     protection_verified: false,
     not_validated_banner: BANNER_TR,
-    service: { backend: "dev_backend", state: "running", healthy: true, started_ms: 1, last_refresh_ms: 2, message: "ok" },
+    service: { backend: "dev_backend", state: "running", healthy: true, started_ms: 1, last_refresh_ms: 2, message: "RustWard service running", message_tr: "RustWard hizmeti çalışıyor." },
     workstation_id: state.workstationId,
     policy_version: state.version,
     catalog_version: "test",
@@ -373,6 +422,35 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       }
       case "get_diagnostics":
         return { type: "diagnostics", data: diagnostics() };
+      case "get_enforcement_session":
+        return { type: "enforcement_session", data: state.session };
+      case "prepare_enforcement_session":
+        state.session = sessionView("protection_inactive", {
+          session_id: "0123456789abcdef",
+          prepared_ms: 1_794_050_000_000,
+          prepared_by: "PC-TEST\\admin",
+          device_key: r.device_key,
+          device_name: "Kingston DataTraveler 3.0 USB Device",
+          hardware_id: "USBSTOR\\DiskKingstonDataTraveler_3.0____",
+          retroactive: r.retroactive,
+          baseline: [],
+          expected_lines: ["DenyDeviceIDs = 1 (REG_DWORD)"],
+          last_verification: null,
+          last_verification_ms: null,
+        });
+        return { type: "enforcement_session", data: state.session };
+      case "verify_enforcement_applied":
+        if (!state.session.session) throw { code: "not_found", message: "no active enforcement session", message_tr: "Etkin bir uygulama oturumu yok." };
+        state.session = sessionView("windows_install_denied", {
+          ...state.session.session,
+          last_verification: "enforcement_session_apply_verified",
+          last_verification_ms: 1_794_050_100_000,
+        });
+        return { type: "enforcement_session", data: state.session };
+      case "verify_enforcement_rollback":
+      case "cancel_enforcement_session":
+        state.session = sessionView("policy_simulation");
+        return { type: "enforcement_session", data: state.session };
       case "get_enforcement_observation":
         return { type: "enforcement_observation", data: state.observation };
       case "get_policy_checklist": {

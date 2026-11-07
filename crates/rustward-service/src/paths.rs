@@ -45,7 +45,7 @@ impl ServicePaths {
 pub const INSTALL_PLAN: &str = r#"RustWard service deployment plan (PLANNING ONLY - not executed by this tool).
 Run by the offline installer in Phase 8, after Windows VM validation:
 
-  sc.exe create RustWardService binPath= "\"C:\Program Files\RustWard\rustward-service.exe\" service" start= auto obj= LocalSystem DisplayName= "RustWard USB Storage Control"
+  sc.exe create RustWardService binPath= "\"C:\Program Files\RustWard\rustward-service.exe\" service" start= auto obj= LocalSystem DisplayName= "RustWard USB Depolama Denetimi"
   sc.exe description RustWardService "Offline USB storage access control (RustWard)"
   sc.exe failure RustWardService reset= 86400 actions= restart/5000/restart/5000/restart/5000
   sc.exe sidtype RustWardService unrestricted

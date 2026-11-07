@@ -25,8 +25,8 @@
               Source="$(env.TAURI_RUSTWARD_SERVICE_EXE)" KeyPath="yes" Checksum="yes" />
         <ServiceInstall Id="RustWardServiceInstall"
                         Name="RustWardService"
-                        DisplayName="RustWard USB Storage Control"
-                        Description="Offline USB storage access control (RustWard). Simulation build: enforcement disabled."
+                        DisplayName="RustWard USB Depolama Denetimi"
+                        Description="Çevrimdışı USB depolama erişim denetimi (RustWard). Bu sürümde RustWard kısıtlama uygulamaz; Windows politikasını okur ve doğrular."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
                         Account="LocalSystem" Arguments="service" Vital="yes">
           <util:ServiceConfig FirstFailureActionType="restart"

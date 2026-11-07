@@ -139,11 +139,17 @@ pub enum LayeringSupport {
     NotSupported {
         /// Why.
         reason: String,
+        /// Why (Turkish).
+        #[serde(default)]
+        reason_tr: String,
     },
     /// Cannot be decided from documented facts.
     Unresolved {
         /// Why.
         reason: String,
+        /// Why (Turkish).
+        #[serde(default)]
+        reason_tr: String,
     },
 }
 
@@ -230,6 +236,7 @@ pub fn layering_support(os: &OsFacts) -> LayeringSupport {
     match os.build {
         None => LayeringSupport::Unresolved {
             reason: "OS build not captured".into(),
+            reason_tr: "İşletim sistemi derlemesi okunamadı.".into(),
         },
         Some(b) if b >= 22000 => LayeringSupport::Supported,
         Some(b) if (19041..=19045).contains(&b) => match os.ubr {
@@ -238,19 +245,27 @@ pub fn layering_support(os: &OsFacts) -> LayeringSupport {
                     reason: format!(
                         "build {b}.{u} meets 19041.1151, but the update revision comes from the undocumented UBR registry value; confirm with winver"
                     ),
+                    reason_tr: format!(
+                        "Derleme {b}.{u}, 19041.1151 koşulunu karşılıyor; ancak güncelleme düzeltmesi belgelenmemiş UBR kayıt değerinden okunuyor. winver ile doğrulayın."
+                    ),
                 }
             }
             Some(u) => LayeringSupport::NotSupported {
                 reason: format!("build {b}.{u} is below 19041.1151 (KB5004296)"),
+                reason_tr: format!("Derleme {b}.{u}, 19041.1151 sürümünün altında (KB5004296)."),
             },
             None => LayeringSupport::Unresolved {
                 reason: format!(
                     "build {b}: update revision unknown; layering needs 19041.1151 or later"
                 ),
+                reason_tr: format!(
+                    "Derleme {b}: güncelleme düzeltmesi bilinmiyor; katmanlı değerlendirme 19041.1151 veya sonrasını gerektirir."
+                ),
             },
         },
         Some(b) => LayeringSupport::NotSupported {
             reason: format!("build {b} is older than the Windows 10 2004 family"),
+            reason_tr: format!("Derleme {b}, Windows 10 2004 ailesinden daha eski."),
         },
     }
 }

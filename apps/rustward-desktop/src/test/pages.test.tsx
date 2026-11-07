@@ -199,7 +199,7 @@ describe("Allowed manufacturers", () => {
     await user.type(within(dialog).getByLabelText("Görünen ad"), "Synthetic Brand");
     await user.click(within(dialog).getByRole("button", { name: "Kaydet" }));
     await waitFor(() => expect(state.manufacturers).toHaveLength(2));
-    expect(await screen.findByText("added synthetic-brand")).toBeInTheDocument();
+    expect(await screen.findByText("TR: added synthetic-brand")).toBeInTheDocument();
   });
 
   it("asks for confirmation before removing", async () => {
@@ -223,7 +223,7 @@ describe("Blocked devices", () => {
 describe("Audit logs", () => {
   it("sends text filters to the backend", async () => {
     const { user, state } = setup("audit");
-    await screen.findByText("SYNTHETIC device would be denied (simulation)");
+    await screen.findByText("SENTETİK cihaz reddedilirdi (simülasyon)");
     await user.type(screen.getByLabelText("Ara"), "nomatch");
     await waitFor(() => {
       const last = [...state.calls].reverse().find((c) => c.type === "list_events");

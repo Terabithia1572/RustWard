@@ -47,11 +47,31 @@
     },
     {
       "access": "read_only",
+      "type": "get_enforcement_session"
+    },
+    {
+      "access": "read_only",
       "type": "get_settings"
     },
     {
       "access": "read_only",
       "type": "run_simulation"
+    },
+    {
+      "access": "administrator",
+      "type": "prepare_enforcement_session"
+    },
+    {
+      "access": "administrator",
+      "type": "verify_enforcement_applied"
+    },
+    {
+      "access": "administrator",
+      "type": "verify_enforcement_rollback"
+    },
+    {
+      "access": "administrator",
+      "type": "cancel_enforcement_session"
     },
     {
       "access": "administrator",

@@ -46,7 +46,7 @@ function List({ items, tone = "neutral" }: { items: string[]; tone?: "neutral" |
 }
 
 export function DiagnosticsPage() {
-  const { t, tx, lang, formatTime } = useI18n();
+  const { t, tx, lang, formatTime, pick, pickList } = useI18n();
   const api = useApi();
   const r = useResource((a) => a.diagnostics(), "diagnostics");
   const sim = useAction();
@@ -88,7 +88,7 @@ export function DiagnosticsPage() {
                 na: result.not_applicable,
               })}
             </p>
-            <p className="text-amber-800 dark:text-amber-300">{result.notice}</p>
+            <p className="text-amber-800 dark:text-amber-300">{pick(result.notice, result.notice_tr)}</p>
             {result.enforcement_gaps.length > 0 && <List items={result.enforcement_gaps} tone="warning" />}
           </div>
         </Card>
@@ -108,7 +108,7 @@ export function DiagnosticsPage() {
                 </Row>
                 <Row label={t("diag.state")}>{d.service.state}</Row>
                 <Row label={t("diag.lastRefresh")}>{formatTime(d.service.last_refresh_ms)}</Row>
-                <Row label={t("diag.detail")}>{d.service.message}</Row>
+                <Row label={t("diag.detail")}>{pick(d.service.message, d.service.message_tr)}</Row>
               </dl>
             </Card>
             <Card title={t("diag.database")}>
@@ -156,8 +156,8 @@ export function DiagnosticsPage() {
             <Card title={t("diag.policy")}>
               <div className="space-y-2">
                 <OkBadge ok={d.policy.valid} yes={t("diag.valid")} no={t("diag.invalid")} />
-                {d.policy.errors.length > 0 && <List items={d.policy.errors} />}
-                {d.policy.warnings.length > 0 && <List items={d.policy.warnings} tone="warning" />}
+                {d.policy.errors.length > 0 && <List items={pickList(d.policy.errors, d.policy.errors_tr)} />}
+                {d.policy.warnings.length > 0 && <List items={pickList(d.policy.warnings, d.policy.warnings_tr)} tone="warning" />}
               </div>
             </Card>
           </div>
@@ -208,16 +208,16 @@ export function DiagnosticsPage() {
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card title={t("diag.risks")}>
-              <List items={d.enforcement.risks} tone="warning" />
+              <List items={pickList(d.enforcement.risks, d.enforcement.risks_tr)} tone="warning" />
             </Card>
             <Card title={t("diag.gaps")}>
               <List items={d.enforcement.enforcement_gaps} tone="warning" />
             </Card>
             <Card title={t("diag.unsupported")}>
-              <List items={d.unsupported_features} />
+              <List items={pickList(d.unsupported_features, d.unsupported_features_tr)} />
             </Card>
             <Card title={t("diag.pending")}>
-              <List items={d.pending_native_tests} />
+              <List items={pickList(d.pending_native_tests, d.pending_native_tests_tr)} />
             </Card>
           </div>
         </>

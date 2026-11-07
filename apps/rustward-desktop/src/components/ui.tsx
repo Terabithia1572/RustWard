@@ -233,7 +233,7 @@ const errorKeys: Record<string, TKey> = {
 };
 
 export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
-  const { t } = useI18n();
+  const { t, pick } = useI18n();
   const e = error instanceof ApiError ? error : new ApiError("client", String(error));
   const key = errorKeys[e.code];
   const reason = e.code === "unavailable" ? serviceReason(e.message) : null;
@@ -247,7 +247,7 @@ export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () =
           {reason?.key === "reason.admin_required" ? t("error.unauthorized") : key ? t(key) : t("error.title")}
         </div>
         {reason && <div className="font-medium">{t(reason.key)}</div>}
-        <div className="opacity-90 [overflow-wrap:anywhere]">{reason ? reason.detail : e.message}</div>
+        <div className="opacity-90 [overflow-wrap:anywhere]">{reason ? reason.detail : pick(e.message, e.messageTr)}</div>
       </div>
       {onRetry && (
         <Button variant="ghost" onClick={onRetry}>
