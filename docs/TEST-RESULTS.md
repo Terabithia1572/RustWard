@@ -1,5 +1,7 @@
 # Test Results
 
+**Real Windows USB block 2026-11-07 (VM, policy applied manually by the owner): see [WINDOWS-VM-KINGSTON-BLOCK-2026-11-07.md](WINDOWS-VM-KINGSTON-BLOCK-2026-11-07.md).** Kingston blocked (Code 1, then Code 28 after reconnect), ASELSAN/internal disk/input devices unaffected, rollback PASS. RustWard read the policy; it did not apply it.
+
 **Read-only hardware identification 2026-11-07 (VM): see [BRAND-IDENTIFICATION.md](BRAND-IDENTIFICATION.md#observed-hardware-vm-2026-11-07-read-only).** Kingston 0951:1666 identified; the ASELSAN-labelled stick reports `VendorC` 346D:5678 (corrected label; no SanDisk stick available). 8 regression tests on the sanitized observations (`vm_observed_hardware.rs`); all decisions are simulated. Linux suite: 285 Rust workspace + 3 release + 4 src-tauri, 50 Vitest, 16 integration — PASS; `verify-all` 18 PASS, 0 FAIL.
 
 **Native Windows VM test 2026-11-06 (service installed from the complete MSI): see [WINDOWS-VM-TEST-2026-11-06.md](WINDOWS-VM-TEST-2026-11-06.md)** — IPC, LocalSystem service, SCM stop/start/restart/crash recovery, elevation-based authorization, SQLite persistence across reinstall, real SetupAPI inventory, Event Log writes and uninstall PASS; caller identity FAIL then fixed and PASS; formatted Event Viewer messages NOT VERIFIED; scripted pipe-ACL/impostor tests NOT RUN. Linux suite at `de4c6b4`: 277 Rust workspace + 3 release + 4 src-tauri, 50 Vitest, 16 integration — PASS.

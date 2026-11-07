@@ -277,3 +277,39 @@ fn previously_installed_denied_sticks_are_reported_separately() {
         assert!(!d.instance_id.contains("HID\\") && !d.instance_id.contains("ACPI\\"));
     }
 }
+
+#[test]
+fn model_agrees_with_the_real_kingston_block_observed_on_2026_11_07() {
+    // The exact Local Group Policy applied by the owner in the test VM and
+    // read back by RustWard: "Prevent installation of devices that match any
+    // of these device IDs" with one entry, retroactive. Windows then removed
+    // the Kingston disk and refused to reinstall it (Code 1, then Code 28
+    // after reconnect); the ASELSAN stick, internal disk and input devices
+    // were unaffected. RustWard's install model must predict the same.
+    use rustward_enforcement::device_install::RESTRICTIONS_KEY;
+    use rustward_enforcement::policy_eval::{InstallOutcome, evaluate_install};
+    let observed = PolicySnapshot::default()
+        .with(RESTRICTIONS_KEY, "DenyDeviceIDs", RegData::Dword(1))
+        .with(
+            RESTRICTIONS_KEY,
+            "DenyDeviceIDsRetroactive",
+            RegData::Dword(1),
+        )
+        .with(
+            &format!("{RESTRICTIONS_KEY}\\DenyDeviceIDs"),
+            "1",
+            RegData::Sz("USBSTOR\\DiskKingstonDataTraveler_3.0____".into()),
+        );
+    let s = DeviceSnapshot::from_json(OBSERVED).unwrap();
+    for d in &s.devices {
+        let outcome = evaluate_install(&observed, d);
+        if d.instance_id.starts_with(KINGSTON) {
+            assert!(
+                matches!(outcome, InstallOutcome::Prevented { .. }),
+                "{outcome:?}"
+            );
+        } else {
+            assert_eq!(outcome, InstallOutcome::NotRestricted, "{}", d.instance_id);
+        }
+    }
+}
