@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "source": {
+    "kind": "live",
+    "computer_name": null,
+    "collected_unix_seconds": 1794001761,
+    "includes_non_present": false
+  },
+  "devices": [
+    {
+      "instance_id": "USB\\VID_0951&PID_1666\\SERIAL-REDACTED-KINGSTON",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "description": "USB Mass Storage Device",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0&REV_\\SERIAL-REDACTED-KINGSTON&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_0951&PID_1666\\SERIAL-REDACTED-KINGSTON",
+      "hardware_ids": [
+        "USBSTOR\\DiskKingstonDataTraveler_3.0____",
+        "USBSTOR\\DiskKingstonDataTraveler_3.0",
+        "USBSTOR\\DiskKingston",
+        "USBSTOR\\KingstonDataTraveler_3.0_",
+        "KingstonDataTraveler_3.0_",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW",
+        "GenDisk"
+      ],
+      "friendly_name": "Kingston DataTraveler 3.0 USB Device",
+      "inf_manufacturer": "(Standard disk drives)",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-SANDISK-LABELLED",
+      "class_guid": "{36fc9e60-c465-11cf-8056-444553540000}",
+      "class_name": "USB",
+      "service": "USBSTOR",
+      "description": "USB Mass Storage Device",
+      "present": true
+    },
+    {
+      "instance_id": "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE&REV_3.20\\SERIAL-REDACTED-SANDISK-LABELLED&0",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "class_name": "DiskDrive",
+      "service": "disk",
+      "parent_instance_id": "USB\\VID_346D&PID_5678\\SERIAL-REDACTED-SANDISK-LABELLED",
+      "hardware_ids": [
+        "USBSTOR\\DiskVendorC_ProductCode_____3.20",
+        "USBSTOR\\DiskVendorC_ProductCode_____",
+        "USBSTOR\\DiskVendorC_",
+        "USBSTOR\\VendorC_ProductCode_____3",
+        "VendorC_ProductCode_____3",
+        "USBSTOR\\GenDisk",
+        "GenDisk"
+      ],
+      "compatible_ids": [
+        "USBSTOR\\Disk",
+        "USBSTOR\\RAW",
+        "GenDisk"
+      ],
+      "friendly_name": "VendorC ProductCode USB Device",
+      "inf_manufacturer": "(Standard disk drives)",
+      "present": true
+    },
+    {
+      "instance_id": "SCSI\\DISK&VEN_NVME&PROD_VMWARE_VIRTUAL_N\\INSTANCE-REDACTED-INTERNAL",
+      "class_name": "DiskDrive",
+      "class_guid": "{4d36e967-e325-11ce-bfc1-08002be10318}",
+      "hardware_ids": [
+        "SCSI\\DiskNVMe____VMware_Virtual_N1.0_",
+        "SCSI\\DiskNVMe____VMware_Virtual_N",
+        "SCSI\\DiskNVMe____",
+        "SCSI\\NVMe____VMware_Virtual_N1",
+        "NVMe____VMware_Virtual_N1",
+        "GenDisk"
+      ],
+      "friendly_name": "VMware Virtual NVMe Disk",
+      "present": true
+    },
+    {
+      "instance_id": "HID\\VID_0E0F&PID_0003&MI_00\\INSTANCE-REDACTED",
+      "present": true
+    },
+    {
+      "instance_id": "HID\\VID_0E0F&PID_0003&MI_01\\INSTANCE-REDACTED",
+      "present": true
+    },
+    {
+      "instance_id": "USB\\VID_0E0F&PID_0003&MI_00\\INSTANCE-REDACTED",
+      "present": true
+    },
+    {
+      "instance_id": "ACPI\\PNP0303\\INSTANCE-REDACTED",
+      "present": true
+    },
+    {
+      "instance_id": "ACPI\\VMW0003\\INSTANCE-REDACTED",
+      "present": true
+    }
+  ]
+}

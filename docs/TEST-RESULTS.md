@@ -1,5 +1,7 @@
 # Test Results
 
+**Read-only hardware identification 2026-11-07 (VM): see [BRAND-IDENTIFICATION.md](BRAND-IDENTIFICATION.md#observed-hardware-vm-2026-11-07-read-only).** Kingston 0951:1666 identified; the SanDisk-labelled stick reports `VendorC` 346D:5678 (no SanDisk identifiers). 8 regression tests on the sanitized observations (`vm_observed_hardware.rs`); all decisions are simulated. Linux suite: 285 Rust workspace + 3 release + 4 src-tauri, 50 Vitest, 16 integration — PASS; `verify-all` 18 PASS, 0 FAIL.
+
 **Native Windows VM test 2026-11-06 (service installed from the complete MSI): see [WINDOWS-VM-TEST-2026-11-06.md](WINDOWS-VM-TEST-2026-11-06.md)** — IPC, LocalSystem service, SCM stop/start/restart/crash recovery, elevation-based authorization, SQLite persistence across reinstall, real SetupAPI inventory, Event Log writes and uninstall PASS; caller identity FAIL then fixed and PASS; formatted Event Viewer messages NOT VERIFIED; scripted pipe-ACL/impostor tests NOT RUN. Linux suite at `de4c6b4`: 277 Rust workspace + 3 release + 4 src-tauri, 50 Vitest, 16 integration — PASS.
 
 Earlier entry — Last run: **2026-11-06**, **Phase 11** (native Windows build preparation). **No native Windows test was executed** (no Windows execution environment or disposable VM was available; PHASE-11-NATIVE-VALIDATION.md).
