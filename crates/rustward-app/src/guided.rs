@@ -673,7 +673,167 @@ impl AppService {
         &self,
         g: &Inner,
     ) -> Result<rustward_ipc::messages::WindowsProtectionView, IpcError> {
+        use rustward_core::catalog::Verification;
+        use rustward_core::policy::PolicyMode;
+        use rustward_enforcement::assessment::AssessmentCategory as A;
         use rustward_enforcement::observer::{observe, restrictions_configured};
+        use rustward_enforcement::policy_inspect::CapturedPolicy;
+        use rustward_ipc::messages::{ProtectionBlockerView, StorageSummaryView};
+
+        let blocker = |code: &str, kind: &str, tr: String, en: String| ProtectionBlockerView {
+            code: code.into(),
+            kind: kind.into(),
+            tr,
+            en,
+        };
+        let v = Self::validated(&g.store)?;
+        let now = self.clock.now_ms();
+        let captured = self.policy_source.capture(now);
+        let readable = captured.is_ok();
+        let cap = captured.unwrap_or(CapturedPolicy {
+            captured_ms: now,
+            ..CapturedPolicy::default()
+        });
+        let restrictions = readable && restrictions_configured(&cap.values);
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        let obs = observe(&snap, &v.policy, &v.catalog, &cap);
+
+        // Phase 6 counts.
+        let mut summary = StorageSummaryView::default();
+        let mut installed_before_rule = 0u32;
+        for d in &obs.devices {
+            let Some(a) = &d.assessment else { continue };
+            if d.present != Some(true) {
+                summary.disconnected += 1;
+                continue;
+            }
+            summary.connected += 1;
+            match a.policy_category {
+                A::AllowCandidate => summary.allow_candidates += 1,
+                A::DenyCandidate => summary.deny_candidates += 1,
+                A::UnverifiedIdentity => summary.unverified_identity += 1,
+                A::UnsupportedDevice => summary.unsupported += 1,
+                _ => {}
+            }
+            let policy_denies = matches!(
+                a.policy_category,
+                A::DenyCandidate | A::UnverifiedIdentity | A::UnsupportedDevice
+            );
+            match a.enforcement_category {
+                Some(A::WindowsDenialVerified) if readable => summary.windows_denied += 1,
+                _ if policy_denies => {
+                    summary.denied_by_policy_only += 1;
+                    if a.previously_installed {
+                        installed_before_rule += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Every reason the system is not in a verified protection state.
+        let mut blockers = vec![blocker(
+            "automatic_apply_blocked",
+            "blocked",
+            "Otomatik politika uygulama ENGELLİ: RustWard Windows politikasını kendisi yazmaz; değişiklik yalnızca yönetici onayıyla, yönetici tarafından elle yapılır.".into(),
+            "Automatic policy application is BLOCKED: RustWard never writes Windows policy itself; changes are made manually by an administrator with explicit approval.".into(),
+        )];
+        if !readable {
+            blockers.push(blocker(
+                "policy_unreadable",
+                "action",
+                "Windows politikası okunamadı; gerçek durum belirlenemiyor.".into(),
+                "The Windows policy could not be read; the real state cannot be determined.".into(),
+            ));
+        } else if !restrictions {
+            blockers.push(blocker(
+                "no_windows_rule",
+                "action",
+                "Windows'ta hiçbir Aygıt Yükleme Kısıtlaması kuralı yok; hiçbir cihaz Windows tarafından engellenmiyor.".into(),
+                "No Device Installation Restriction rule exists in Windows; no device is denied by Windows.".into(),
+            ));
+        }
+        if v.policy.policy().mode == PolicyMode::DryRun {
+            blockers.push(blocker(
+                "dry_run_mode",
+                "action",
+                "RustWard politikası kuru çalışma (simülasyon) modunda.".into(),
+                "The RustWard policy is in dry-run (simulation) mode.".into(),
+            ));
+        }
+        for rule in v
+            .policy
+            .policy()
+            .allowed_brands
+            .iter()
+            .filter(|r| r.enabled)
+        {
+            let Some(brand) = v.catalog.brand(&rule.brand_id) else {
+                continue;
+            };
+            let ids: Vec<_> = brand.enforceable_identifiers().collect();
+            if ids.is_empty() {
+                blockers.push(blocker(
+                    "allowed_brand_without_identifier",
+                    "limitation",
+                    format!("İzinli üretici \"{}\" için doğrulanmış donanım kimliği yok; bu üreticinin cihazları da reddedilir.", brand.display_name),
+                    format!("Allowed manufacturer \"{}\" has no verified hardware identifier; its devices are denied as well.", brand.display_name),
+                ));
+            } else if ids
+                .iter()
+                .any(|i| i.verification != Verification::LabVerified)
+            {
+                blockers.push(blocker(
+                    "allowed_brand_unverified",
+                    "action",
+                    format!("İzinli üretici \"{}\" için donanım kimliği gerçek cihaz üzerinde doğrulanmadı.", brand.display_name),
+                    format!("The hardware identifier of allowed manufacturer \"{}\" was not verified on a real device.", brand.display_name),
+                ));
+            }
+        }
+        blockers.push(blocker(
+            "manufacturer_default_deny_unverified",
+            "limitation",
+            "Üretici genelinde varsayılan ret Windows'ta doğrulanmadı: Windows yalnızca cihazın kendi bildirdiği kimlik dizeleriyle eşleşir; doğrulanmış tek mekanizma tek cihaz kimliği reddidir.".into(),
+            "Manufacturer-wide default deny is not verified in Windows: Windows matches only identity strings the device reports about itself; the only verified mechanism is a single device-ID deny.".into(),
+        ));
+        if summary.denied_by_policy_only > 0 {
+            blockers.push(blocker(
+                "denied_by_policy_only",
+                "action",
+                format!(
+                    "Politikanın reddettiği {} bağlı cihaz Windows tarafından engellenmiyor.",
+                    summary.denied_by_policy_only
+                ),
+                format!(
+                    "{} connected device(s) the policy denies are not denied by Windows.",
+                    summary.denied_by_policy_only
+                ),
+            ));
+        }
+        if installed_before_rule > 0 {
+            blockers.push(blocker(
+                "installed_before_rule",
+                "limitation",
+                format!("{installed_before_rule} cihaz zaten kurulu; geriye dönük olmayan bir kural kurulu cihazı etkilemez."),
+                format!("{installed_before_rule} device(s) are already installed; a non-retroactive rule does not affect installed devices."),
+            ));
+        }
+        if summary.unverified_identity > 0 {
+            blockers.push(blocker(
+                "unverified_identity_connected",
+                "limitation",
+                format!("{} bağlı cihazın kimliği genel, eksik veya çelişkili; üreticisi belirlenemiyor.", summary.unverified_identity),
+                format!("{} connected device(s) report a generic, missing or conflicting identity; the manufacturer cannot be determined.", summary.unverified_identity),
+            ));
+        }
+        blockers.push(blocker(
+            "read_write_unverified",
+            "limitation",
+            "Okuma/yazma engeli doğrulanmadı: kurulum reddi tam okuma/yazma engeli kanıtı değildir.".into(),
+            "Read/write denial is not verified: an installation denial is not proof of a complete read/write denial.".into(),
+        ));
+
         let mk = |state: &str, tr: &str, en: &str, dtr: String, den: String, n: u32| {
             rustward_ipc::messages::WindowsProtectionView {
                 state: state.into(),
@@ -683,9 +843,11 @@ impl AppService {
                 detail_en: den,
                 denied_now: n,
                 automated_apply_available: false,
+                summary: summary.clone(),
+                blockers: blockers.clone(),
             }
         };
-        let Ok(cap) = self.policy_source.capture(self.clock.now_ms()) else {
+        if !readable {
             return Ok(mk(
                 "unknown",
                 "Durum bilinmiyor",
@@ -695,8 +857,8 @@ impl AppService {
                     .into(),
                 0,
             ));
-        };
-        if !restrictions_configured(&cap.values) {
+        }
+        if !restrictions {
             return Ok(mk(
                 "inactive",
                 "Windows koruması etkin değil",
@@ -706,9 +868,6 @@ impl AppService {
                 0,
             ));
         }
-        let v = Self::validated(&g.store)?;
-        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
-        let obs = observe(&snap, &v.policy, &v.catalog, &cap);
         let denied: Vec<_> = obs
             .devices
             .iter()

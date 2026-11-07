@@ -118,6 +118,7 @@ fn rules(identifier: Option<&str>, allowed: bool) -> (ValidatedCatalog, Validate
             } else {
                 vec![]
             },
+            denied_brands: vec![],
         },
         &catalog,
     )

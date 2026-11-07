@@ -35,6 +35,11 @@ pub enum DecisionReason {
         /// Brand id.
         brand_id: String,
     },
+    /// Identified as a catalog brand the policy explicitly denies.
+    BrandDenied {
+        /// Brand id.
+        brand_id: String,
+    },
     /// Identified as a catalog brand that is not allowed (or disabled).
     BrandNotAllowed {
         /// Brand id.
@@ -161,6 +166,14 @@ fn identity_verdict(
             Verdict::Deny,
             DecisionReason::UnknownManufacturer { vendor },
         ),
+        // An explicit deny always wins (validation also forbids a brand
+        // that is both allowed and denied).
+        Some(brand) if policy.brand_denied(brand) => (
+            Verdict::Deny,
+            DecisionReason::BrandDenied {
+                brand_id: brand.to_owned(),
+            },
+        ),
         Some(brand) if policy.brand_allowed(brand) => (
             Verdict::Allow,
             DecisionReason::BrandAllowed {
@@ -185,6 +198,7 @@ fn add_corroboration(
 ) {
     let matched_brand = match reason {
         DecisionReason::BrandAllowed { brand_id }
+        | DecisionReason::BrandDenied { brand_id }
         | DecisionReason::BrandNotAllowed { brand_id } => Some(brand_id.as_str()),
         _ => None,
     };

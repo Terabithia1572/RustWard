@@ -476,3 +476,134 @@ fn dashboard_protection_state_follows_real_windows_evidence_only() {
         .unwrap();
     assert_eq!(protection(&r).state, "inactive");
 }
+
+#[test]
+fn phase6_assessment_summary_and_blockers_reflect_real_state() {
+    use rustward_enforcement::assessment::{AssessmentCategory as A, IdentityConfidence};
+    let r = rig();
+    r.refresh();
+    // Shipped Phase 6 example policy: allow SanDisk + TÜBİTAK, deny Kingston + Seagate.
+    let o = r.observe();
+    let get = |o: &EnforcementObservationView, vid: &str| {
+        o.devices
+            .iter()
+            .find(|d| d.observed.vid_pid.as_deref() == Some(vid))
+            .unwrap()
+            .observed
+            .assessment
+            .clone()
+            .unwrap()
+    };
+    let k = get(&o, "0951:1666");
+    assert_eq!(k.policy_category, A::DenyCandidate);
+    assert_eq!(k.identity, IdentityConfidence::Corroborated);
+    assert_eq!(k.enforcement_category, Some(A::EnforcementNotActive));
+    assert!(!k.authenticated);
+    let a = get(&o, "346D:5678");
+    assert_eq!(a.policy_category, A::UnverifiedIdentity);
+    assert_eq!(a.identity, IdentityConfidence::Generic);
+
+    let p = protection(&r);
+    assert_eq!(p.summary.connected, 2);
+    assert_eq!(p.summary.deny_candidates, 1);
+    assert_eq!(p.summary.unverified_identity, 1);
+    assert_eq!(p.summary.windows_denied, 0);
+    assert_eq!(p.summary.denied_by_policy_only, 2);
+    let codes: Vec<&str> = p.blockers.iter().map(|b| b.code.as_str()).collect();
+    for c in [
+        "automatic_apply_blocked",
+        "no_windows_rule",
+        "dry_run_mode",
+        "allowed_brand_unverified",
+        "allowed_brand_without_identifier",
+        "manufacturer_default_deny_unverified",
+        "denied_by_policy_only",
+        "installed_before_rule",
+        "unverified_identity_connected",
+        "read_write_unverified",
+    ] {
+        assert!(codes.contains(&c), "missing blocker {c}: {codes:?}");
+    }
+    assert_eq!(codes[0], "automatic_apply_blocked");
+    assert!(
+        p.blockers
+            .iter()
+            .all(|b| !b.tr.is_empty() && !b.en.is_empty())
+    );
+
+    // A real Windows denial of the Kingston: verified on the device only.
+    r.policy(true);
+    r.kingston(true, Some(1));
+    let k = get(&r.observe(), "0951:1666");
+    assert_eq!(k.enforcement_category, Some(A::WindowsDenialVerified));
+    let p = protection(&r);
+    assert_eq!(p.summary.windows_denied, 1);
+    assert_eq!(p.summary.denied_by_policy_only, 1);
+    let codes: Vec<&str> = p.blockers.iter().map(|b| b.code.as_str()).collect();
+    assert!(!codes.contains(&"no_windows_rule"));
+    // Disconnected: never counted as denied.
+    r.kingston(false, None);
+    let p = protection(&r);
+    assert_eq!(p.summary.windows_denied, 0);
+    assert_eq!(p.summary.disconnected, 1);
+}
+
+#[test]
+fn explicit_deny_is_an_audited_administrator_edit() {
+    let r = rig();
+    r.refresh();
+    let version = |r: &Rig| match r.call(Request::ListManufacturers, false).unwrap() {
+        ResponseBody::Manufacturers(m) => m,
+        other => panic!("{other:?}"),
+    };
+    let m = version(&r);
+    let k = m.manufacturers.iter().find(|b| b.id == "kingston").unwrap();
+    assert!(k.denied && !k.allowed);
+    // (Read-only callers are rejected at the pipe: see ipc_security.rs.)
+    r.call(
+        Request::SetManufacturerDenied {
+            id: "seagate".into(),
+            denied: false,
+            expected_policy_version: m.policy_version,
+        },
+        true,
+    )
+    .unwrap();
+    let m2 = version(&r);
+    assert_eq!(m2.policy_version, m.policy_version + 1);
+    assert!(
+        !m2.manufacturers
+            .iter()
+            .find(|b| b.id == "seagate")
+            .unwrap()
+            .denied
+    );
+    let ResponseBody::Events(ev) = r
+        .call(
+            Request::ListEvents {
+                query: EventQuery {
+                    text: Some("denylist".into()),
+                    ..EventQuery::default()
+                },
+            },
+            false,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(!ev.is_empty(), "the denylist edit is audited");
+    let ResponseBody::Mutation(_) = r
+        .call(
+            Request::SetManufacturerDenied {
+                id: "seagate".into(),
+                denied: true,
+                expected_policy_version: m2.policy_version,
+            },
+            true,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+}

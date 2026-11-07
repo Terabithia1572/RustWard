@@ -3,9 +3,13 @@
   "workstation_id": "PC-01",
   "policy_version": 1,
   "mode": "dry_run",
-  "catalog_version": "2026.11.05-phase1",
+  "catalog_version": "2026.11.07-phase6",
   "allowed_brands": [
-    { "brand_id": "sandisk", "enabled": true, "note": "Approved for PC-01" },
-    { "brand_id": "tubitak", "enabled": true, "note": "Approved; identifiers pending SIR II lab inspection" }
+    { "brand_id": "sandisk", "enabled": true, "note": "Phase 6 target: ALLOW. Identifiers not yet verified on a real SanDisk device" },
+    { "brand_id": "tubitak", "enabled": true, "note": "Phase 6 target: ALLOW. No identifiers until SIR II physical inspection; its devices are denied meanwhile" }
+  ],
+  "denied_brands": [
+    { "brand_id": "kingston", "enabled": true, "note": "Phase 6 target: DENY" },
+    { "brand_id": "seagate", "enabled": true, "note": "Phase 6 target: DENY" }
   ]
 }

@@ -1,7 +1,11 @@
 //! Per-workstation brand allowlist policy.
 //!
 //! The default decision is always **deny**; it is not configurable. A
-//! policy can only *add* brands to the allowlist.
+//! policy can *add* brands to the allowlist, and can name brands that are
+//! **explicitly denied** (Phase 6). An explicit deny does not change the
+//! verdict of an unlisted brand (already deny); it records the
+//! administrator's intent, makes the reason visible, and can never be
+//! combined with an allow rule for the same brand.
 
 use std::collections::HashSet;
 
@@ -51,6 +55,10 @@ pub struct WorkstationPolicy {
     pub catalog_version: String,
     /// Allowed brands.
     pub allowed_brands: Vec<BrandRule>,
+    /// Explicitly denied brands. Omitted from the serialized form while
+    /// empty, so policies written before Phase 6 keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_brands: Vec<BrandRule>,
 }
 
 /// A policy validation finding.
@@ -195,6 +203,36 @@ impl ValidatedPolicy {
             }
         }
 
+        let mut seen_denied = HashSet::new();
+        for rule in &policy.denied_brands {
+            if !seen_denied.insert(rule.brand_id.as_str()) {
+                err(
+                    "brand_rule_duplicate",
+                    format!("brand {:?} denied more than once", rule.brand_id),
+                );
+            }
+            if catalog.brand(&rule.brand_id).is_none() {
+                err(
+                    "brand_unknown",
+                    format!("denied brand {:?} is not in the catalog", rule.brand_id),
+                );
+            }
+            if rule.enabled
+                && policy
+                    .allowed_brands
+                    .iter()
+                    .any(|a| a.enabled && a.brand_id == rule.brand_id)
+            {
+                err(
+                    "brand_rule_conflict",
+                    format!(
+                        "brand {:?} is both allowed and denied; remove one of the rules",
+                        rule.brand_id
+                    ),
+                );
+            }
+        }
+
         if issues.is_empty() {
             Ok(Self { policy, warnings })
         } else {
@@ -213,6 +251,15 @@ impl ValidatedPolicy {
     #[must_use]
     pub fn warnings(&self) -> &[PolicyIssue] {
         &self.warnings
+    }
+
+    /// Whether a brand is explicitly denied (enabled deny rule).
+    #[must_use]
+    pub fn brand_denied(&self, brand_id: &str) -> bool {
+        self.policy
+            .denied_brands
+            .iter()
+            .any(|r| r.enabled && r.brand_id == brand_id)
     }
 
     /// Whether a brand is allowed and enabled.
@@ -286,6 +333,7 @@ mod tests {
                     note: None,
                 })
                 .collect(),
+            denied_brands: Vec::new(),
         }
     }
 
@@ -363,5 +411,55 @@ mod tests {
         ] {
             assert!(c.contains(&code), "missing {code}");
         }
+    }
+
+    #[test]
+    fn explicit_deny_is_validated_and_never_combined_with_allow() {
+        let c = catalog(Verification::LabVerified);
+        let mut p = policy(PolicyMode::DryRun, &[("sandisk", true)]);
+        p.denied_brands.push(BrandRule {
+            brand_id: "tubitak".into(),
+            enabled: true,
+            note: None,
+        });
+        let v = ValidatedPolicy::validate(p.clone(), &c).unwrap();
+        assert!(v.brand_denied("tubitak"));
+        assert!(!v.brand_allowed("tubitak"));
+        assert!(v.brand_allowed("sandisk"));
+
+        let mut conflict = p.clone();
+        conflict.denied_brands.push(BrandRule {
+            brand_id: "sandisk".into(),
+            enabled: true,
+            note: None,
+        });
+        assert!(
+            error_codes(ValidatedPolicy::validate(conflict, &c).unwrap_err())
+                .contains(&"brand_rule_conflict")
+        );
+
+        let mut unknown = p.clone();
+        unknown.denied_brands[0].brand_id = "no-such-brand".into();
+        assert!(
+            error_codes(ValidatedPolicy::validate(unknown, &c).unwrap_err())
+                .contains(&"brand_unknown")
+        );
+
+        let mut dup = p;
+        dup.denied_brands.push(dup.denied_brands[0].clone());
+        assert!(
+            error_codes(ValidatedPolicy::validate(dup, &c).unwrap_err())
+                .contains(&"brand_rule_duplicate")
+        );
+    }
+
+    #[test]
+    fn an_empty_denylist_is_not_serialized() {
+        // Policies written before Phase 6 keep their exact bytes.
+        let p = policy(PolicyMode::DryRun, &[("sandisk", true)]);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("denied_brands"));
+        let back: WorkstationPolicy = serde_json::from_str(&json).unwrap();
+        assert!(back.denied_brands.is_empty());
     }
 }

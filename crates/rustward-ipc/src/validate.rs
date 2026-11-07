@@ -167,6 +167,7 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         }
         Request::RemoveManufacturer { id, .. }
         | Request::SetManufacturerAllowed { id, .. }
+        | Request::SetManufacturerDenied { id, .. }
         | Request::SetRuleEnabled { id, .. } => slug("id", id),
         Request::UpdateSettings { settings: s } => settings(s),
         Request::ListBackups => Ok(()),

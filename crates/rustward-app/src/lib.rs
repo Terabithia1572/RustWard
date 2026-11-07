@@ -1509,6 +1509,7 @@ impl AppService {
                     notes: b.notes.clone(),
                     allowed: rule.is_some(),
                     enabled: rule.is_some_and(|r| r.enabled),
+                    denied: v.policy.brand_denied(&b.id),
                     enforceable: b.enforceable_identifiers().next().is_some(),
                     issues: warnings
                         .iter()
@@ -2156,6 +2157,18 @@ impl Handler for AppService {
                 &PolicyEdit::SetAllowed {
                     id: id.clone(),
                     allowed: *allowed,
+                },
+                *expected_policy_version,
+                identity,
+            ),
+            Request::SetManufacturerDenied {
+                id,
+                denied,
+                expected_policy_version,
+            } => self.mutate(
+                &PolicyEdit::SetDenied {
+                    id: id.clone(),
+                    denied: *denied,
                 },
                 *expected_policy_version,
                 identity,

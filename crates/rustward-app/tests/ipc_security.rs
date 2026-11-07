@@ -128,6 +128,11 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             allowed: true,
             expected_policy_version: version,
         },
+        Request::SetManufacturerDenied {
+            id: "seagate".into(),
+            denied: true,
+            expected_policy_version: version,
+        },
         Request::SetRuleEnabled {
             id: "sandisk".into(),
             enabled: false,
@@ -174,6 +179,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::UpdateManufacturer { .. }
             | Request::RemoveManufacturer { .. }
             | Request::SetManufacturerAllowed { .. }
+            | Request::SetManufacturerDenied { .. }
             | Request::SetRuleEnabled { .. }
             | Request::UpdateSettings { .. }
             | Request::ExportEvents { .. }

@@ -113,7 +113,8 @@ fn unapproved_catalog_brands_are_denied_including_uasp_and_non_present() {
     assert_eq!(kingston.verdict, Verdict::Deny);
     assert_eq!(
         kingston.reason,
-        DecisionReason::BrandNotAllowed {
+        // Phase 6 example policy denies Kingston explicitly.
+        DecisionReason::BrandDenied {
             brand_id: "kingston".into()
         }
     );
@@ -371,7 +372,8 @@ fn friendly_name_spoof_never_authorizes() {
     assert_eq!(d.verdict, Verdict::Deny);
     assert_eq!(
         d.reason,
-        DecisionReason::BrandNotAllowed {
+        // Phase 6 example policy denies Kingston explicitly.
+        DecisionReason::BrandDenied {
             brand_id: "kingston".into()
         }
     );

@@ -64,6 +64,7 @@ export type Request =
   | { type: "update_manufacturer"; id: string; input: ManufacturerInput; expected_policy_version: number }
   | { type: "remove_manufacturer"; id: string; expected_policy_version: number }
   | { type: "set_manufacturer_allowed"; id: string; allowed: boolean; expected_policy_version: number }
+  | { type: "set_manufacturer_denied"; id: string; denied: boolean; expected_policy_version: number }
   | { type: "set_rule_enabled"; id: string; enabled: boolean; expected_policy_version: number }
   | { type: "update_settings"; settings: SettingsView }
   | { type: "export_events"; query: EventQuery; format: ExportFormat }
@@ -102,6 +103,7 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "update_manufacturer",
   "remove_manufacturer",
   "set_manufacturer_allowed",
+  "set_manufacturer_denied",
   "set_rule_enabled",
   "update_settings",
   "export_events",
@@ -125,6 +127,7 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "update_manufacturer",
   "remove_manufacturer",
   "set_manufacturer_allowed",
+  "set_manufacturer_denied",
   "set_rule_enabled",
   "update_settings",
   "export_events",

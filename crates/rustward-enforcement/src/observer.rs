@@ -23,6 +23,7 @@ use rustward_core::device::{DeviceRecord, DeviceSnapshot};
 use rustward_core::evaluate::{Decision, DecisionReason, Verdict, evaluate_snapshot};
 use rustward_core::policy::ValidatedPolicy;
 
+use crate::assessment::{DeviceAssessment, WindowsInput, assess};
 use crate::policy_eval::{InstallOutcome, evaluate_install};
 use crate::policy_inspect::CapturedPolicy;
 use crate::policy_state::PolicySnapshot;
@@ -120,6 +121,10 @@ pub struct ObservedDevice {
     pub explanation_tr: String,
     /// Earlier recorded denial that is no longer current.
     pub history: Option<HistoricalDenial>,
+    /// Phase 6 default-deny assessment (policy category, identity
+    /// confidence, enforcement category).
+    #[serde(default)]
+    pub assessment: Option<DeviceAssessment>,
 }
 
 /// The whole observation.
@@ -163,6 +168,7 @@ pub fn restrictions_configured(policy: &PolicySnapshot) -> bool {
 fn reason_code(r: &DecisionReason) -> &'static str {
     match r {
         DecisionReason::BrandAllowed { .. } => "brand_allowed",
+        DecisionReason::BrandDenied { .. } => "brand_denied",
         DecisionReason::BrandNotAllowed { .. } => "brand_not_allowed",
         DecisionReason::UnknownManufacturer { .. } => "unknown_manufacturer",
         DecisionReason::GenericVendorIdentity { .. } => "generic_vendor_identity",
@@ -339,6 +345,7 @@ pub fn observe_device(
         label_status_tr,
         explanation_tr: notes.join(" "),
         history: None,
+        assessment: None,
     }
 }
 
@@ -376,7 +383,19 @@ pub fn observe(
                 .devices
                 .iter()
                 .find(|r| r.instance_id == d.instance_id)
-                .map(|r| observe_device(r, d, &captured.values, restrictions))
+                .map(|r| {
+                    let mut o = observe_device(r, d, &captured.values, restrictions);
+                    o.assessment = Some(assess(
+                        d,
+                        catalog,
+                        Some(WindowsInput {
+                            present: o.present,
+                            evidence: o.evidence,
+                            driver_installed: o.driver_installed,
+                        }),
+                    ));
+                    o
+                })
         })
         .collect();
     Observation {

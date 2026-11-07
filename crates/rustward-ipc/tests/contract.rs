@@ -89,6 +89,11 @@ fn all_requests() -> Vec<Request> {
             allowed: true,
             expected_policy_version: 1,
         },
+        Request::SetManufacturerDenied {
+            id: "x".into(),
+            denied: true,
+            expected_policy_version: 1,
+        },
         Request::SetRuleEnabled {
             id: "x".into(),
             enabled: true,
@@ -143,6 +148,7 @@ fn all_requests() -> Vec<Request> {
             | Request::UpdateManufacturer { .. }
             | Request::RemoveManufacturer { .. }
             | Request::SetManufacturerAllowed { .. }
+            | Request::SetManufacturerDenied { .. }
             | Request::SetRuleEnabled { .. }
             | Request::UpdateSettings { .. }
             | Request::ExportEvents { .. }

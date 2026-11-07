@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026.11.05-phase1",
+  "catalog_version": "2026.11.07-phase6",
   "brands": [
     {
       "id": "sandisk",
@@ -43,13 +43,13 @@
         {
           "kind": "inquiry_vendor",
           "value": "Kingston",
-          "verification": "unverified",
-          "source": "Engineering assumption; confirm on hardware"
+          "verification": "lab_verified",
+          "source": "Observed read-only in the RustWard Windows 10 VM on 2026-11-07: Kingston DataTraveler 3.0, USBSTOR vendor field 'Kingston', VID:PID 0951:1666 (docs/BRAND-IDENTIFICATION.md). One model only; self-reported, not authenticated."
         },
         {
           "kind": "usb_vid",
           "value": "0951",
-          "verification": "public_registry",
+          "verification": "lab_verified",
           "source": "usb.ids public registry, '0951 Kingston Technology', retrieved 2026-11-05"
         },
         {
@@ -116,6 +116,8 @@
     "VIA",
     "Initio",
     "Innostor",
-    "Netac"
+    "Netac",
+    "VendorCo",
+    "VendorC"
   ]
 }

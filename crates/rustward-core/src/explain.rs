@@ -115,6 +115,14 @@ pub fn explain(decision: &Decision) -> Explanation {
             format!("Katalog eşleşmesi: \"{brand_id}\" markası; izin listesinde ve etkin."),
             format!("Catalog match: brand \"{brand_id}\"; allowlisted and enabled."),
         ),
+        DecisionReason::BrandDenied { brand_id } => (
+            format!(
+                "Katalog eşleşmesi: \"{brand_id}\" markası; politika bu markayı açıkça reddediyor."
+            ),
+            format!(
+                "Catalog match: brand \"{brand_id}\"; the policy explicitly denies this brand."
+            ),
+        ),
         DecisionReason::BrandNotAllowed { brand_id } => (
             format!(
                 "Katalog eşleşmesi: \"{brand_id}\" markası; izin listesinde değil veya kural devre dışı."

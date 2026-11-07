@@ -280,6 +280,10 @@ pub fn issue(code: &str, detail: &str, names: Names<'_>) -> String {
             nth(&q, 1)
         ),
         "brand_rule_duplicate" => format!("{} birden fazla kez listelenmiş.", brand()),
+        "brand_rule_conflict" => format!(
+            "{} hem izinli hem reddedilen olarak listelenmiş; kurallardan birini kaldırın.",
+            brand()
+        ),
         "brand_unknown" => format!("\"{}\" markası katalogda yok.", nth(&q, 0)),
         "brand_id" => format!(
             "Marka kimliği \"{}\" yalnızca küçük harf, rakam ve '-' içerebilir (1-32 karakter).",
@@ -333,6 +337,12 @@ pub fn change(action: &str, brand_id: &str, summary_en: &str, names: Names<'_>) 
         }
         "allowlist_changed" | "set_allowed" => {
             format!("{name} izin verilen üreticiler listesinden çıkarıldı.")
+        }
+        "denylist_changed" | "set_denied" if summary_en.contains("added to") => {
+            format!("{name} açıkça reddedilen üreticiler listesine eklendi.")
+        }
+        "denylist_changed" | "set_denied" => {
+            format!("{name} açıkça reddedilen üreticiler listesinden çıkarıldı.")
         }
         "rule_enabled_changed" | "set_rule_enabled" if summary_en.ends_with("enabled") => {
             format!("{name} için izin kuralı etkinleştirildi.")
@@ -518,6 +528,8 @@ fn change_from_text(summary: &str, names: Names<'_>) -> String {
         "set_workstation_id"
     } else if summary.contains(" the allowlist") {
         "set_allowed"
+    } else if summary.contains(" the denylist") {
+        "set_denied"
     } else if summary.starts_with("allowlist rule for") {
         "set_rule_enabled"
     } else if summary.ends_with(" removed") {
@@ -704,6 +716,15 @@ mod tests {
                 &names
             ),
             "Kingston izin verilen üreticiler listesinden çıkarıldı."
+        );
+        assert_eq!(
+            change(
+                "denylist_changed",
+                "kingston",
+                "manufacturer \"kingston\" added to the denylist",
+                &names
+            ),
+            "Kingston açıkça reddedilen üreticiler listesine eklendi."
         );
         assert_eq!(
             text("RustWard service running"),

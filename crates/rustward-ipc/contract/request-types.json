@@ -91,6 +91,10 @@
     },
     {
       "access": "administrator",
+      "type": "set_manufacturer_denied"
+    },
+    {
+      "access": "administrator",
       "type": "set_rule_enabled"
     },
     {

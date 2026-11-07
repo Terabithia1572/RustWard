@@ -105,6 +105,14 @@ pub enum PolicyEdit {
         /// Allowed.
         allowed: bool,
     },
+    /// Add to / remove from the explicit denylist. Denying a brand removes
+    /// it from the allowlist (and allowing removes it from the denylist).
+    SetDenied {
+        /// Brand id.
+        id: String,
+        /// Denied.
+        denied: bool,
+    },
     /// Enable / disable an existing allowlist rule (kept for history).
     SetRuleEnabled {
         /// Brand id.
@@ -129,6 +137,7 @@ impl PolicyEdit {
             Self::UpdateManufacturer { .. } => "manufacturer_updated",
             Self::RemoveManufacturer { .. } => "manufacturer_removed",
             Self::SetAllowed { .. } => "allowlist_changed",
+            Self::SetDenied { .. } => "denylist_changed",
             Self::SetRuleEnabled { .. } => "rule_enabled_changed",
             Self::SetWorkstationId { .. } => "workstation_id_changed",
         }
@@ -229,6 +238,9 @@ pub struct BrandSnapshot {
     pub allowed: bool,
     /// Rule enabled.
     pub enabled: bool,
+    /// Explicitly denied.
+    #[serde(default)]
+    pub denied: bool,
 }
 
 /// Audit record of an applied edit.
@@ -298,6 +310,11 @@ fn snapshot_brand(state: &PolicyState, id: &str) -> Option<BrandSnapshot> {
             .collect(),
         allowed: rule.is_some(),
         enabled: rule.is_some_and(|r| r.enabled),
+        denied: state
+            .policy
+            .denied_brands
+            .iter()
+            .any(|r| r.brand_id == id && r.enabled),
     })
 }
 
@@ -482,6 +499,7 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
                 return Err(EditError::NotFound { id: id.clone() });
             }
             next.policy.allowed_brands.retain(|r| &r.brand_id != id);
+            next.policy.denied_brands.retain(|r| &r.brand_id != id);
             catalog_changed = true;
             id.clone()
         }
@@ -492,12 +510,34 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
             let present = next.policy.allowed_brands.iter().any(|r| &r.brand_id == id);
             match (present, *allowed) {
                 (true, true) | (false, false) => return Err(EditError::NoChange),
-                (false, true) => next.policy.allowed_brands.push(BrandRule {
-                    brand_id: id.clone(),
-                    enabled: true,
-                    note: None,
-                }),
+                (false, true) => {
+                    next.policy.denied_brands.retain(|r| &r.brand_id != id);
+                    next.policy.allowed_brands.push(BrandRule {
+                        brand_id: id.clone(),
+                        enabled: true,
+                        note: None,
+                    });
+                }
                 (true, false) => next.policy.allowed_brands.retain(|r| &r.brand_id != id),
+            }
+            id.clone()
+        }
+        PolicyEdit::SetDenied { id, denied } => {
+            if !next.catalog.brands.iter().any(|b| &b.id == id) {
+                return Err(EditError::NotFound { id: id.clone() });
+            }
+            let present = next.policy.denied_brands.iter().any(|r| &r.brand_id == id);
+            match (present, *denied) {
+                (true, true) | (false, false) => return Err(EditError::NoChange),
+                (false, true) => {
+                    next.policy.allowed_brands.retain(|r| &r.brand_id != id);
+                    next.policy.denied_brands.push(BrandRule {
+                        brand_id: id.clone(),
+                        enabled: true,
+                        note: None,
+                    });
+                }
+                (true, false) => next.policy.denied_brands.retain(|r| &r.brand_id != id),
             }
             id.clone()
         }
@@ -551,6 +591,10 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
         PolicyEdit::SetAllowed { allowed, .. } => format!(
             "manufacturer {brand_id:?} {} the allowlist",
             if *allowed { "added to" } else { "removed from" }
+        ),
+        PolicyEdit::SetDenied { denied, .. } => format!(
+            "manufacturer {brand_id:?} {} the denylist",
+            if *denied { "added to" } else { "removed from" }
         ),
         PolicyEdit::SetRuleEnabled { enabled, .. } => format!(
             "allowlist rule for {brand_id:?} {}",
@@ -613,6 +657,83 @@ mod tests {
             identifiers: idents,
             notes: None,
         }
+    }
+
+    #[test]
+    fn denylist_edits_are_exclusive_with_the_allowlist() {
+        let mut base = state();
+        // The shipped example already denies Kingston and Seagate.
+        assert_eq!(base.policy.denied_brands.len(), 2);
+        base.policy.denied_brands.clear();
+        // Deny Kingston: recorded, audited, versioned.
+        let out = apply_edit(
+            &base,
+            &PolicyEdit::SetDenied {
+                id: "kingston".into(),
+                denied: true,
+            },
+        )
+        .unwrap();
+        assert!(out.validated.policy.brand_denied("kingston"));
+        assert_eq!(out.change.action, "denylist_changed");
+        assert!(out.change.after.as_ref().unwrap().denied);
+        assert_eq!(
+            out.state.policy.policy_version,
+            base.policy.policy_version + 1
+        );
+        // Denying an allowed brand removes the allow rule.
+        let out2 = apply_edit(
+            &out.state,
+            &PolicyEdit::SetDenied {
+                id: "sandisk".into(),
+                denied: true,
+            },
+        )
+        .unwrap();
+        assert!(!out2.validated.policy.brand_allowed("sandisk"));
+        assert!(out2.validated.policy.brand_denied("sandisk"));
+        // Allowing it again removes the deny rule.
+        let out3 = apply_edit(
+            &out2.state,
+            &PolicyEdit::SetAllowed {
+                id: "sandisk".into(),
+                allowed: true,
+            },
+        )
+        .unwrap();
+        assert!(out3.validated.policy.brand_allowed("sandisk"));
+        assert!(!out3.validated.policy.brand_denied("sandisk"));
+        // No-ops and unknown brands are rejected.
+        assert_eq!(
+            apply_edit(
+                &out3.state,
+                &PolicyEdit::SetDenied {
+                    id: "kingston".into(),
+                    denied: true
+                }
+            )
+            .unwrap_err(),
+            EditError::NoChange
+        );
+        assert!(matches!(
+            apply_edit(
+                &base,
+                &PolicyEdit::SetDenied {
+                    id: "nope".into(),
+                    denied: true
+                }
+            ),
+            Err(EditError::NotFound { .. })
+        ));
+        // Removing a manufacturer also drops its deny rule.
+        let out4 = apply_edit(
+            &out3.state,
+            &PolicyEdit::RemoveManufacturer {
+                id: "kingston".into(),
+            },
+        )
+        .unwrap();
+        assert!(out4.state.policy.denied_brands.is_empty());
     }
 
     #[test]
@@ -682,7 +803,7 @@ mod tests {
         assert_eq!(out.state.policy.policy_version, 2);
         assert_eq!(
             out.state.catalog.catalog_version,
-            "2026.11.05-phase1+local.1"
+            "2026.11.07-phase6+local.1"
         );
         assert_eq!(
             out.state.policy.catalog_version,

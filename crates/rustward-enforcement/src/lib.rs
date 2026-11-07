@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+pub mod assessment;
 pub mod checklist;
 pub mod device_install;
 pub mod installed_assessment;

@@ -81,6 +81,7 @@ impl From<&DecisionReason> for ManufacturerMatch {
     fn from(r: &DecisionReason) -> Self {
         match r {
             DecisionReason::BrandAllowed { brand_id }
+            | DecisionReason::BrandDenied { brand_id }
             | DecisionReason::BrandNotAllowed { brand_id } => Self::Matched {
                 brand_id: brand_id.clone(),
             },

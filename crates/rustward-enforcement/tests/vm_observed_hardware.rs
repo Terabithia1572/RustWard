@@ -145,17 +145,18 @@ fn kingston_receives_a_simulated_deny() {
 }
 
 #[test]
-fn aselsan_labelled_stick_reports_unknown_vendor_and_is_denied() {
+fn aselsan_labelled_stick_reports_generic_vendor_and_is_denied() {
     // Physically labelled ASELSAN; it reports INQUIRY vendor "VendorC" and
-    // VID 346D. That identity is what this one stick reports, not an
-    // authenticated ASELSAN identity. It is not in the catalog, so the model
-    // denies it (simulated), and the SanDisk rule must not match it.
+    // VID 346D. "VendorCo ProductCode" is the default string of unbranded
+    // controller firmware, so since catalog 2026.11.07-phase6 it is a
+    // reserved generic value: the brand cannot be determined and the model
+    // denies it (simulated). The SanDisk rule must not match it.
     let c = ctx();
     let s = decision(&c, ASELSAN_LABELLED);
     assert_eq!(s.verdict, Verdict::Deny);
     assert_eq!(
         s.reason,
-        DecisionReason::UnknownManufacturer {
+        DecisionReason::GenericVendorIdentity {
             vendor: "VendorC".into()
         }
     );

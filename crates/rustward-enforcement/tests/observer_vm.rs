@@ -82,7 +82,7 @@ fn only_usb_storage_is_observed_with_real_identities() {
     let a = dev(&o, ASELSAN);
     assert_eq!(a.vid_pid.as_deref(), Some("346D:5678"));
     assert_eq!(a.reported_vendor.as_deref(), Some("VendorC"));
-    assert_eq!(a.rustward_reason, "unknown_manufacturer");
+    assert_eq!(a.rustward_reason, "generic_vendor_identity");
 }
 
 #[test]

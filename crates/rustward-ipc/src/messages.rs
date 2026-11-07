@@ -184,6 +184,16 @@ pub enum Request {
         /// Optimistic concurrency.
         expected_policy_version: u64,
     },
+    /// Explicit denylist membership (Phase 6). Denying removes the brand
+    /// from the allowlist; allowing removes it from the denylist.
+    SetManufacturerDenied {
+        /// Id.
+        id: String,
+        /// Denied.
+        denied: bool,
+        /// Optimistic concurrency.
+        expected_policy_version: u64,
+    },
     /// Enable/disable a rule.
     SetRuleEnabled {
         /// Id.
@@ -278,6 +288,7 @@ impl Request {
             | Self::UpdateManufacturer { .. }
             | Self::RemoveManufacturer { .. }
             | Self::SetManufacturerAllowed { .. }
+            | Self::SetManufacturerDenied { .. }
             | Self::SetRuleEnabled { .. }
             | Self::UpdateSettings { .. }
             | Self::ExportEvents { .. }
@@ -442,6 +453,9 @@ pub struct ManufacturerView {
     pub allowed: bool,
     /// Rule enabled.
     pub enabled: bool,
+    /// Explicitly denied (Phase 6 denylist).
+    #[serde(default)]
+    pub denied: bool,
     /// Has at least one enforceable identifier.
     pub enforceable: bool,
     /// Issues specific to this brand.
@@ -1044,4 +1058,46 @@ pub struct WindowsProtectionView {
     pub denied_now: u32,
     /// Automated policy application by RustWard is available.
     pub automated_apply_available: bool,
+    /// Phase 6 assessment counts over USB storage in the inventory.
+    #[serde(default)]
+    pub summary: StorageSummaryView,
+    /// Every condition that keeps the system out of a verified protection
+    /// state, most fundamental first.
+    #[serde(default)]
+    pub blockers: Vec<ProtectionBlockerView>,
+}
+
+/// Counts of USB storage devices by Phase 6 category.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSummaryView {
+    /// USB storage devices connected now.
+    pub connected: u32,
+    /// Connected `ALLOW_CANDIDATE`.
+    pub allow_candidates: u32,
+    /// Connected `DENY_CANDIDATE`.
+    pub deny_candidates: u32,
+    /// Connected `UNVERIFIED_IDENTITY`.
+    pub unverified_identity: u32,
+    /// Connected `UNSUPPORTED_DEVICE`.
+    pub unsupported: u32,
+    /// Connected `WINDOWS_DENIAL_VERIFIED`.
+    pub windows_denied: u32,
+    /// Connected devices the policy denies but Windows does not.
+    pub denied_by_policy_only: u32,
+    /// Known but disconnected USB storage devices.
+    pub disconnected: u32,
+}
+
+/// One reason the system is not in a verified protection state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtectionBlockerView {
+    /// Stable code.
+    pub code: String,
+    /// `blocked` (cannot be resolved by RustWard), `action` (an
+    /// administrator can resolve it) or `limitation` (inherent).
+    pub kind: String,
+    /// Turkish text.
+    pub tr: String,
+    /// English text.
+    pub en: String,
 }
