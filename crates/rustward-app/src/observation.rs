@@ -188,7 +188,21 @@ impl AppService {
                 attach_history(&mut d, last_seen.as_ref().map(historical));
             }
             d.instance_id = masked;
+            let last = g
+                .store
+                .list_events(&EventFilter {
+                    device_key: Some(key.clone()),
+                    // The latest genuine Windows-side event, never a simulated decision.
+                    simulated: Some(false),
+                    limit: Some(1),
+                    ..EventFilter::default()
+                })
+                .map_err(storage_err)?
+                .into_iter()
+                .next();
             devices.push(ObservedDeviceView {
+                last_event_kind: last.as_ref().map(|e| e.kind.clone()),
+                last_event_ms: last.as_ref().map(|e| e.utc_ms),
                 device_key: key,
                 observed: d,
             });

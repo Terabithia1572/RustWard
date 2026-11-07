@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, ClipboardCheck, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Loader2, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import type { EnforcementSessionView, LadderStepView, PolicyChecklistView } from "../api/types";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
@@ -40,11 +40,20 @@ export function GuidedSessionCard() {
   const [checklist, setChecklist] = useState<PolicyChecklistView | null>(null);
   const v = view ?? r.data;
 
-  const run = async (fn: () => Promise<EnforcementSessionView>) => {
-    const res = await action.run(fn);
-    if (res) {
-      setView(res);
-      obs.reload();
+  // What is running, for progress feedback: verifications re-read the whole
+  // Windows device inventory and policy, which can take a few seconds.
+  const [phase, setPhase] = useState<"prepare" | "verify" | null>(null);
+  const run = async (fn: () => Promise<EnforcementSessionView>, p: "prepare" | "verify" = "verify") => {
+    setPhase(p);
+    try {
+      const res = await action.run(fn);
+      if (res) {
+        setView(res);
+        setChecklist(null);
+        obs.reload();
+      }
+    } finally {
+      setPhase(null);
     }
   };
 
@@ -53,6 +62,12 @@ export function GuidedSessionCard() {
       <div className="space-y-3 text-sm" data-testid="guided-session">
         {r.error && <ErrorNotice error={r.error} onRetry={r.reload} />}
         {action.error && <ErrorNotice error={action.error} />}
+        {action.busy && phase && (
+          <p className="flex items-center gap-2 text-cyan-800 dark:text-cyan-300" role="status" data-testid="guided-progress">
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+            {phase === "prepare" ? t("guided.busyPrepare") : t("guided.busy")}
+          </p>
+        )}
         {!v ? (
           !r.error && <Loading />
         ) : (
@@ -112,7 +127,7 @@ export function GuidedSessionCard() {
                     icon={<ClipboardCheck className="size-4" aria-hidden />}
                     disabled={!device}
                     busy={action.busy}
-                    onClick={() => void run(() => api.prepareSession(device, retro))}
+                    onClick={() => void run(() => api.prepareSession(device, retro), "prepare")}
                   >
                     {t("guided.prepare")}
                   </Button>

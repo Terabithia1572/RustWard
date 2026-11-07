@@ -807,41 +807,19 @@ impl Store {
 
     /// Insert or update a device row (keeps `first_seen_ms`).
     pub fn upsert_device(&mut self, d: &DeviceRow) -> Result<(), StorageError> {
-        self.conn.execute(
-            "INSERT INTO devices (device_key, display_id, category, transport, vendor, product, usb_vid_pid,
-                 vendor_level_id, friendly_name, matched_brand, first_seen_ms, last_seen_ms, present, synthetic,
-                 last_verdict, last_reason, last_policy_version, enforcement_state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
-             ON CONFLICT(device_key) DO UPDATE SET
-                 display_id = excluded.display_id, category = excluded.category, transport = excluded.transport,
-                 vendor = excluded.vendor, product = excluded.product, usb_vid_pid = excluded.usb_vid_pid,
-                 vendor_level_id = excluded.vendor_level_id, friendly_name = excluded.friendly_name,
-                 matched_brand = excluded.matched_brand, last_seen_ms = excluded.last_seen_ms,
-                 present = excluded.present, synthetic = excluded.synthetic,
-                 last_verdict = excluded.last_verdict, last_reason = excluded.last_reason,
-                 last_policy_version = excluded.last_policy_version,
-                 enforcement_state = excluded.enforcement_state",
-            params![
-                d.device_key,
-                d.display_id,
-                d.category,
-                d.transport,
-                d.vendor,
-                d.product,
-                d.usb_vid_pid,
-                d.vendor_level_id,
-                d.friendly_name,
-                d.matched_brand,
-                d.first_seen_ms,
-                d.last_seen_ms,
-                d.present,
-                d.synthetic,
-                d.last_verdict,
-                d.last_reason,
-                to_i64(d.last_policy_version)?,
-                d.enforcement_state
-            ],
-        )?;
+        upsert_device_on(&self.conn, d)
+    }
+
+    /// Insert or update many device rows in ONE transaction (one fsync per
+    /// inventory refresh instead of one per device).
+    pub fn upsert_devices(&mut self, rows: &[DeviceRow]) -> Result<(), StorageError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for d in rows {
+            upsert_device_on(&tx, d)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1589,6 +1567,46 @@ fn event_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SecurityEvent> {
         prev_hash: r.get(10)?,
         hash: r.get(11)?,
     })
+}
+
+/// Shared device upsert (connection or transaction).
+fn upsert_device_on(conn: &Connection, d: &DeviceRow) -> Result<(), StorageError> {
+    conn.execute(
+            "INSERT INTO devices (device_key, display_id, category, transport, vendor, product, usb_vid_pid,
+                 vendor_level_id, friendly_name, matched_brand, first_seen_ms, last_seen_ms, present, synthetic,
+                 last_verdict, last_reason, last_policy_version, enforcement_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT(device_key) DO UPDATE SET
+                 display_id = excluded.display_id, category = excluded.category, transport = excluded.transport,
+                 vendor = excluded.vendor, product = excluded.product, usb_vid_pid = excluded.usb_vid_pid,
+                 vendor_level_id = excluded.vendor_level_id, friendly_name = excluded.friendly_name,
+                 matched_brand = excluded.matched_brand, last_seen_ms = excluded.last_seen_ms,
+                 present = excluded.present, synthetic = excluded.synthetic,
+                 last_verdict = excluded.last_verdict, last_reason = excluded.last_reason,
+                 last_policy_version = excluded.last_policy_version,
+                 enforcement_state = excluded.enforcement_state",
+            params![
+                d.device_key,
+                d.display_id,
+                d.category,
+                d.transport,
+                d.vendor,
+                d.product,
+                d.usb_vid_pid,
+                d.vendor_level_id,
+                d.friendly_name,
+                d.matched_brand,
+                d.first_seen_ms,
+                d.last_seen_ms,
+                d.present,
+                d.synthetic,
+                d.last_verdict,
+                d.last_reason,
+                to_i64(d.last_policy_version)?,
+                d.enforcement_state
+            ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

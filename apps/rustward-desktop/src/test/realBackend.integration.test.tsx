@@ -134,7 +134,7 @@ describe("real backend: manufacturers and policy history", () => {
 describe("real backend: blocked devices, audit, diagnostics", () => {
   it("states that every listed denial is simulated and not enforced", async () => {
     await boot("blocked");
-    expect(await screen.findByText("Engellenen Cihazlar (simülasyon)")).toBeInTheDocument();
+    expect(await screen.findByText("Simüle edilen retler (uygulanmadı)")).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText("Uygulanmadı — yalnızca simüle karar").length).toBeGreaterThan(0));
     expect(document.body.textContent).not.toMatch(FORBIDDEN_BLOCKED_CLAIM);
   });

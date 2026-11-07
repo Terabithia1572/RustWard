@@ -60,9 +60,9 @@ describe("Navigation and mandatory warning", () => {
     expect(labels).toEqual([
       "Dashboard",
       "Cihazlar",
-      "İzinli Markalar",
-      "Engellenen Cihazlar",
-      "Olay Kayıtları",
+      "İzinli cihazlar",
+      "Engellenen cihazlar",
+      "Olay kayıtları",
       "Tanılama",
       "Uygulama Hazırlığı",
       "Ayarlar",
@@ -216,7 +216,9 @@ describe("Blocked devices", () => {
   it("states that the decision was not enforced", async () => {
     setup("blocked");
     expect(await screen.findByText("Uygulanmadı — yalnızca simüle karar")).toBeInTheDocument();
-    expect(screen.getByText("Engellenen Cihazlar (simülasyon)")).toBeInTheDocument();
+    expect(screen.getByText("Simüle edilen retler (uygulanmadı)")).toBeInTheDocument();
+    // No real Windows denial in the fake observation: nothing claimed as blocked.
+    expect(await screen.findByText("Şu an Windows'un kurulumunu reddettiği bağlı cihaz yok.")).toBeInTheDocument();
   });
 });
 

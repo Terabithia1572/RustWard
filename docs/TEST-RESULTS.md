@@ -1,5 +1,28 @@
 # Test Results
 
+**Phase 5 — real Windows status, performance, terminology, 2026-11-07 (Linux, automated).**
+- **Backend:**
+  - The inventory is collected outside the application lock (SetupAPI enumeration no longer blocks IPC).
+  - Device rows are stored in one transaction instead of one autocommit per device.
+  - Diagnostics expose service timings.
+  - Verify actions re-read the inventory first.
+  - The dashboard carries `windows_protection` (unknown, inactive, configured_unverified, denial_observed, verified_active), derived only from the policy re-read plus device problem codes.
+  - Each observed device carries its latest non-simulated audit event.
+  - After an administrator rollback, the guided headline asks for the rollback verification.
+- **UI:**
+  - "Koruma durumu" panel.
+  - Blocked page: real Windows denials first; simulated decisions separate.
+  - Devices page: "Bildirilen (doğrulanmamış)" vendor, policy match, last event, hardware ID.
+  - Diagnostics: performance card with the UI-measured IPC round trip and render time.
+  - Guided progress messages.
+  - Turkish terms: İzinli cihazlar, Engellenen cihazlar, Olay kayıtları, Gerçek Windows kanıtı, Yönetici onayı, Geri alma.
+- **New tests:**
+  - `a_slow_windows_enumeration_does_not_block_other_requests`: 1.5 s fake enumeration, dashboard and observation answered in under 700 ms.
+  - `dashboard_protection_state_follows_real_windows_evidence_only`.
+  - `realStatus.test.tsx` (9 tests).
+- **Result:** 317 Rust tests, 72 Vitest, 16 integration; `verify-all` 18 PASS, 0 FAIL.
+- **Not run:** native Windows checks (see the VM entry, when recorded).
+
 **Turkish localization + administrator-guided Windows enforcement, 2026-11-07 (`66ed480`, native build + VM).** Native build (Windows 11 23H2 host, build only): `dist\RustWard.exe` 4,044,800 B `a7946f2bebeaf3f5e0542cdb38713e493f6119ff51e0149f66164070a870b02f`; `dist\service\rustward-service.exe` 3,339,776 B `2c05b87c30f16d24cc7568c0721f861ab6ff7616403559e9920ae1a8b0f82bc9`; `dist\service\rustward-inventory.exe` `a112ed03a4b3d8823f5176c7af5a709d6d5e3d0a0a8813b051fea3bdaeaea7f2`; `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` 219,099,136 B `ce836b65350d2813e5804b65556ebae245a3bc422d9e39a5dff5e07ecf982311` (Turkish installer UI). VM (Windows 10 19045, snapshot `rustward-observer-before-guided-test` taken first): MSI upgrade PASS, policy v5 and audit chain kept; backend text (service status, audit messages, errors) shown in Turkish. Guided session (elevated app): prepare 19:50:27 (baseline: no Restrictions key) → owner applied the Kingston-only device-ID policy (retroactive) in gpedit → RustWard "Uygulamayı doğrula" 19:58:15: policy equal to the expected values, Kingston Code 1 "forbidden by system policy", state "Windows cihaz kurulumu engellendi", read/write "Doğrulanmadı"; notice "USB engellenmiştir. İşlem kayıt altına alınmıştır." shown once with the evidence qualifier; independently: Device Manager Code 1, E:/F: gone, ASELSAN G: readable. Owner rolled back → "Geri almayı doğrula" 20:02:22: policy equal to the baseline, session closed; Kingston reinstalled (E:/F: back), shown as history only. Audit: prepared, windows_install_denied_observed (once), apply_verified, windows_install_denial_ended, rollback_verified. RustWard wrote no policy: the change was made by the administrator. Slow: first requests after a service start and the verify actions took 15–40 s. Linux suite: 308 workspace + 3 + 4 Rust, 63 Vitest, 16 integration; `verify-all` 18 PASS.
 
 **Real Windows enforcement observer, 2026-11-07 (`f49a545`, native build + VM).** Native Windows build (BUILD-RUSTWARD.cmd, Windows 11 23H2 22631, rustc 1.92): `dist\RustWard.exe` `132159e0…78df`, `dist\service\rustward-service.exe` `762911c1…6b82`, `dist\service\rustward-inventory.exe` `613b9ac4…514f`, `dist\installer\RustWard_0.1.0_x64_en-US.msi` (218,984,448 bytes) `276f31e268d9edf0c571a538a9fc4a477409b714fd42d9700ae3b231743755ed`; MSI tables checked read-only. MSI upgrade in the VM: PASS (service, policy v4 and audit chain kept). App started unelevated: the observer works over the read-only status pipe. Readiness "Gerçek Windows gözlemi": Restrictions key absent, no rule; Kingston 0951:1666 and ASELSAN-labelled VendorC 346D:5678 both "Kural uygulanmamış / Erişilebilir / Gerçek engel kanıtı yok" (the manual 13:31 block predates the observer and is not shown as current). Checklist generated from the live VM inventory: only the Kingston affected, expected values identical to the verified experiment. Devices page column "Gerçek Windows durumu": PASS. Not run in the VM: a live denial seen by the observer (requires re-applying the policy). Linux suite: 300 workspace + 3 release + 4 src-tauri Rust, 58 Vitest, 16 integration, `verify-all` 18 PASS.

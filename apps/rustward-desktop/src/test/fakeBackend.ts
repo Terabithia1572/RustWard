@@ -18,6 +18,7 @@ import type {
   Request,
   ResponseBody,
   SettingsView,
+  WindowsProtectionView,
 } from "../api/types";
 
 export const BANNER_TR = "Koruma henüz gerçek Windows ortamında doğrulanmadı.";
@@ -257,6 +258,31 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     return m;
   };
 
+  /** Mirrors the service: protection state follows real Windows evidence only. */
+  const protection = (): WindowsProtectionView => {
+    const o = state.observation;
+    const denied = o.devices.filter((d) => d.observed.present === true && d.observed.evidence === "install_denied");
+    const names = denied.map((d) => d.observed.name).join(", ");
+    const mk = (st: string, tr: string, en: string, dtr: string, den: string): WindowsProtectionView => ({
+      state: st,
+      label_tr: tr,
+      label_en: en,
+      detail_tr: dtr,
+      detail_en: den,
+      denied_now: denied.length,
+      automated_apply_available: false,
+    });
+    if (o.policy_error) return mk("unknown", "Durum bilinmiyor", "State unknown", "Windows politikası okunamadı.", "The Windows policy could not be read.");
+    if (!o.windows_restrictions_configured)
+      return mk("inactive", "Windows koruması etkin değil", "Windows protection inactive", "Windows'ta hiçbir Aygıt Yükleme Kısıtlaması kuralı yapılandırılmamış.", "No Device Installation Restriction rule is configured.");
+    if (denied.length === 0)
+      return mk("configured_unverified", "Politika yapılandırılmış, doğrulanmadı", "Policy configured, not verified", "Gerçek bir kurulum engeli gözlenmedi.", "No real installation denial is observed.");
+    const s = state.session.session;
+    if (s && s.last_verification === "enforcement_session_apply_verified" && denied.some((d) => d.device_key === s.device_key))
+      return mk("verified_active", "Windows koruması doğrulandı (yalnızca hedef cihaz)", "Windows protection verified (target device only)", `Gerçek Windows kanıtı: ${names}. Okuma/yazma yolları ayrıca doğrulanmadı.`, `Real Windows evidence: ${names}.`);
+    return mk("denial_observed", "Windows cihaz kurulumunu engelliyor (RustWard oturumu dışında)", "Windows denies device installation (outside a RustWard session)", `Gerçek Windows kanıtı: ${names}.`, `Real Windows evidence: ${names}.`);
+  };
+
   const dashboard = (): DashboardView => ({
     enforcement_state: "simulated",
     enforcement_label_tr: "Simülasyon (uygulanmıyor)",
@@ -274,6 +300,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     recent_events: state.events,
     warnings: [],
     synthetic_data_present: true,
+    windows_protection: protection(),
   });
 
   const diagnostics = (): DiagnosticsView => ({
@@ -302,6 +329,16 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     },
     unsupported_features: ["desktop notifications"],
     pending_native_tests: ["native SetupAPI enumeration"],
+    performance: {
+      last_inventory_collect_ms: 412,
+      last_inventory_apply_ms: 9,
+      max_inventory_collect_ms: 1830,
+      inventory_refreshes: 7,
+      last_inventory_devices: 12,
+      first_inventory_after_start_ms: 640,
+      last_observation_ms: 21,
+      last_verification_ms: 455,
+    },
     app_version: "0.0.0-test",
   });
 

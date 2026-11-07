@@ -205,6 +205,38 @@ export interface DashboardView {
   warnings: string[];
   warnings_tr?: string[];
   synthetic_data_present: boolean;
+  /** Real Windows protection state (absent from older services). */
+  windows_protection?: WindowsProtectionView;
+}
+
+/** Protection state derived only from real Windows evidence. */
+export type WindowsProtectionState =
+  | "unknown"
+  | "inactive"
+  | "configured_unverified"
+  | "denial_observed"
+  | "verified_active";
+
+export interface WindowsProtectionView {
+  state: WindowsProtectionState | string;
+  label_tr: string;
+  label_en: string;
+  detail_tr: string;
+  detail_en: string;
+  denied_now: number;
+  automated_apply_available: boolean;
+}
+
+/** Service-side timings in milliseconds (absent from older services). */
+export interface PerformanceView {
+  last_inventory_collect_ms: number | null;
+  last_inventory_apply_ms: number | null;
+  max_inventory_collect_ms: number | null;
+  inventory_refreshes: number;
+  last_inventory_devices: number | null;
+  first_inventory_after_start_ms: number | null;
+  last_observation_ms: number | null;
+  last_verification_ms: number | null;
 }
 
 export interface IdentifierView {
@@ -311,6 +343,7 @@ export interface DiagnosticsView {
   pending_native_tests: string[];
   unsupported_features_tr?: string[];
   pending_native_tests_tr?: string[];
+  performance?: PerformanceView;
   app_version: string;
 }
 
@@ -619,6 +652,9 @@ export interface ObservedDevice {
 
 export interface ObservedDeviceView {
   device_key: string;
+  /** Latest audit event recorded for this device. */
+  last_event_kind?: string | null;
+  last_event_ms?: number | null;
   observed: ObservedDevice;
 }
 

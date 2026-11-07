@@ -566,6 +566,14 @@ impl AppService {
                 "Windows kısıtlaması yapılandırıldı; cihaz düzeyinde engel henüz gözlenmedi.",
                 "Windows restriction configured; no device-level denial observed yet.",
             )
+        } else if a.last_apply.is_some() && at_baseline {
+            // Applied earlier and now back at the baseline: the administrator
+            // rolled back; only the rollback verification is still missing.
+            (
+                "protection_inactive",
+                "Koruma etkin değil: Windows politikası kaydedilen önceki duruma döndü. Geri almayı doğrulayın.",
+                "Protection inactive: the Windows policy is back at the saved previous state. Verify the rollback.",
+            )
         } else {
             (
                 "protection_inactive",
@@ -656,5 +664,103 @@ impl AppService {
             automated_apply_available: false,
             automated_apply_blocker: blocker(),
         })
+    }
+}
+
+impl AppService {
+    /// Real Windows protection state (dashboard). Read-only.
+    pub(crate) fn windows_protection(
+        &self,
+        g: &Inner,
+    ) -> Result<rustward_ipc::messages::WindowsProtectionView, IpcError> {
+        use rustward_enforcement::observer::{observe, restrictions_configured};
+        let mk = |state: &str, tr: &str, en: &str, dtr: String, den: String, n: u32| {
+            rustward_ipc::messages::WindowsProtectionView {
+                state: state.into(),
+                label_tr: tr.into(),
+                label_en: en.into(),
+                detail_tr: dtr,
+                detail_en: den,
+                denied_now: n,
+                automated_apply_available: false,
+            }
+        };
+        let Ok(cap) = self.policy_source.capture(self.clock.now_ms()) else {
+            return Ok(mk(
+                "unknown",
+                "Durum bilinmiyor",
+                "State unknown",
+                "Windows politikası okunamadı; gerçek koruma durumu belirlenemiyor.".into(),
+                "The Windows policy could not be read; the real protection state is unknown."
+                    .into(),
+                0,
+            ));
+        };
+        if !restrictions_configured(&cap.values) {
+            return Ok(mk(
+                "inactive",
+                "Windows koruması etkin değil",
+                "Windows protection inactive",
+                "Windows'ta hiçbir Aygıt Yükleme Kısıtlaması kuralı yapılandırılmamış. RustWard kararları yalnızca simülasyondur.".into(),
+                "No Device Installation Restriction rule is configured in Windows. RustWard's decisions are simulations only.".into(),
+                0,
+            ));
+        }
+        let v = Self::validated(&g.store)?;
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        let obs = observe(&snap, &v.policy, &v.catalog, &cap);
+        let denied: Vec<_> = obs
+            .devices
+            .iter()
+            .filter(|d| d.evidence == EvidenceLevel::InstallDenied && d.present == Some(true))
+            .collect();
+        let n = u32::try_from(denied.len()).unwrap_or(u32::MAX);
+        if denied.is_empty() {
+            return Ok(mk(
+                "configured_unverified",
+                "Politika yapılandırılmış, doğrulanmadı",
+                "Policy configured, not verified",
+                "Windows'ta bir kısıtlama kuralı var ama bağlı hiçbir cihazda gerçek bir kurulum engeli gözlenmedi.".into(),
+                "A Windows restriction rule exists, but no real installation denial is observed on a connected device.".into(),
+                0,
+            ));
+        }
+        let names: Vec<String> = denied.iter().map(|d| d.name.clone()).collect();
+        let verified = Self::active_session(g)?.is_some_and(|a| {
+            let key = s(&a.prepared.details, "device_key");
+            a.last_apply.as_ref().is_some_and(|e| e.kind == APPLY_OK)
+                && denied.iter().any(|d| device_key(&d.instance_id) == key)
+        });
+        if verified {
+            Ok(mk(
+                "verified_active",
+                "Windows koruması doğrulandı (yalnızca hedef cihaz)",
+                "Windows protection verified (target device only)",
+                format!(
+                    "Gerçek Windows kanıtı: yönetici onaylı oturumda politika birebir doğrulandı ve Windows şu cihazların kurulumunu engelliyor: {}. Okuma/yazma yolları ayrıca doğrulanmadı; üreticiye dayalı varsayılan ret yoktur.",
+                    names.join(", ")
+                ),
+                format!(
+                    "Real Windows evidence: the policy was verified in an administrator-approved session and Windows denies installation of: {}. Read/write paths not verified separately; there is no manufacturer-based default deny.",
+                    names.join(", ")
+                ),
+                n,
+            ))
+        } else {
+            Ok(mk(
+                "denial_observed",
+                "Windows cihaz kurulumunu engelliyor (RustWard oturumu dışında)",
+                "Windows denies device installation (outside a RustWard session)",
+                format!(
+                    "Gerçek Windows kanıtı: Windows şu cihazların kurulumunu engelliyor: {}. Politika RustWard yönetici oturumuyla doğrulanmadı.",
+                    names.join(", ")
+                ),
+                format!(
+                    "Real Windows evidence: Windows denies installation of: {}. The policy was not verified through a RustWard administrator session.",
+                    names.join(", ")
+                ),
+                n,
+            ))
+        }
     }
 }

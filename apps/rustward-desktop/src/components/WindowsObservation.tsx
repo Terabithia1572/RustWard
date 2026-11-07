@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ClipboardCopy, Eye, FileText } from "lucide-react";
-import type { EnforcementObservationView, ObservedDevice, ObservedState, PolicyChecklistView } from "../api/types";
+import type { EnforcementObservationView, ObservedDevice, ObservedDeviceView, ObservedState, PolicyChecklistView } from "../api/types";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
 import { Badge, Button, Card, Empty, ErrorNotice, Loading, type Tone } from "./ui";
@@ -37,9 +37,10 @@ export function EvidenceBadge({ o }: { o: ObservedDevice }) {
 }
 
 /** Compact Windows status for a device table cell. */
-export function WindowsStatusCell({ o }: { o: ObservedDevice | undefined }) {
-  const { t } = useI18n();
-  if (!o) return <span className="text-xs text-slate-500">—</span>;
+export function WindowsStatusCell({ v }: { v: ObservedDeviceView | undefined }) {
+  const { t, tx, formatTime } = useI18n();
+  if (!v) return <span className="text-xs text-slate-500">—</span>;
+  const o = v.observed;
   return (
     <div className="min-w-0 space-y-0.5 text-xs" data-testid="windows-status">
       <div>
@@ -51,6 +52,17 @@ export function WindowsStatusCell({ o }: { o: ObservedDevice | undefined }) {
         {o.label_status_tr}
       </div>
       <EvidenceBadge o={o} />
+      {o.hardware_id && (
+        <div className="break-all font-mono text-[10px] text-slate-500" title={t("devices.hardwareId")}>
+          {o.hardware_id}
+        </div>
+      )}
+      {v.last_event_kind && (
+        <div data-testid="last-event">
+          <span className="text-slate-500">{t("devices.lastEvent")}: </span>
+          {tx("event", v.last_event_kind)} · {formatTime(v.last_event_ms)}
+        </div>
+      )}
     </div>
   );
 }

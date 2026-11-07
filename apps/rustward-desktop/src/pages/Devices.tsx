@@ -54,7 +54,7 @@ export function DevicesPage() {
   // Real Windows state per device (read-only observer), re-read with the list.
   const obs = useObservation(`observation-${r.data?.length ?? 0}-${r.loading}`);
   const observed = useMemo(
-    () => new Map((obs.data?.devices ?? []).map((d) => [d.device_key, d.observed])),
+    () => new Map((obs.data?.devices ?? []).map((d) => [d.device_key, d])),
     [obs.data],
   );
 
@@ -166,10 +166,21 @@ export function DevicesPage() {
                       </td>
                       <td className="px-3 py-2">
                         {tx("category", d.category)}
-                        {d.storage_type && <div className="text-xs text-slate-500">{d.storage_type}</div>}
+                        {d.storage_type && (
+                          <div className="text-xs text-slate-500">
+                            {t("devices.interface")}: {d.storage_type}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-3 py-2">
-                        {d.matched_brand ?? d.vendor ?? "—"}
+                      <td className="px-3 py-2" data-testid="manufacturer-cell">
+                        {/* A reported string is never a verified identity. */}
+                        <div>{d.vendor ? t("devices.reported", { v: d.vendor }) : t("devices.reportedNone")}</div>
+                        {d.matched_brand && (
+                          <div className="text-xs text-slate-500">{t("devices.policyMatch", { b: d.matched_brand })}</div>
+                        )}
+                        {STORAGE.has(d.category) && (
+                          <div className="text-[11px] text-amber-700 dark:text-amber-400">{t("devices.noCryptoIdentity")}</div>
+                        )}
                       </td>
                       <td className="break-all px-3 py-2 font-mono text-[11px]">
                         {d.vendor_level_id && <div>{d.vendor_level_id}</div>}
@@ -187,7 +198,7 @@ export function DevicesPage() {
                       </td>
                       <td className="max-w-xs px-3 py-2">
                         {STORAGE.has(d.category) ? (
-                          <WindowsStatusCell o={observed.get(d.device_key)} />
+                          <WindowsStatusCell v={observed.get(d.device_key)} />
                         ) : (
                           <span className="text-xs text-slate-500">—</span>
                         )}

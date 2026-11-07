@@ -1,9 +1,63 @@
-import { Clock, Factory, HardDrive, Server, ShieldQuestion } from "lucide-react";
+import { Clock, Factory, FlaskConical, HardDrive, Server, ShieldAlert, ShieldCheck, ShieldOff, ShieldQuestion } from "lucide-react";
+import type { WindowsProtectionView } from "../api/types";
 import type { PageId } from "../App";
-import { Badge, Card, DecisionBadge, Empty, ErrorNotice, Loading, NotValidatedBanner, PageHeader, Stat, Button } from "../components/ui";
+import { Badge, Card, DecisionBadge, Empty, ErrorNotice, Loading, NotValidatedBanner, PageHeader, Stat, Button, type Tone } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useResource } from "../lib/hooks";
 import { EventRow } from "./Audit";
+
+const protectionTone: Record<string, Tone> = {
+  unknown: "neutral",
+  inactive: "warning",
+  configured_unverified: "warning",
+  denial_observed: "danger",
+  verified_active: "success",
+};
+
+/**
+ * Primary status: derived by the service only from real Windows evidence
+ * (policy re-read + device problem codes). A configured rule alone never
+ * shows as an active block.
+ */
+export function ProtectionPanel({ p }: { p: WindowsProtectionView | undefined }) {
+  const { t, tx, lang } = useI18n();
+  const state = p?.state ?? "unknown";
+  const tone = protectionTone[state] ?? "neutral";
+  const Icon = state === "verified_active" ? ShieldCheck : state === "denial_observed" ? ShieldAlert : state === "inactive" ? ShieldOff : ShieldQuestion;
+  const ring: Record<Tone, string> = {
+    success: "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40",
+    danger: "border-rose-300 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/40",
+    warning: "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40",
+    neutral: "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900",
+    info: "border-cyan-200 bg-cyan-50 dark:border-cyan-900 dark:bg-cyan-950/40",
+    synthetic: "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900",
+  };
+  return (
+    <section className={`rounded-lg border p-4 ${ring[tone]}`} data-testid="protection-panel" data-state={state}>
+      <div className="flex flex-wrap items-start gap-3">
+        <Icon className="mt-0.5 size-6 shrink-0" aria-hidden />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("prot.title")}</div>
+          <div className="text-lg font-semibold" data-testid="protection-label">
+            {p ? (lang === "tr" ? p.label_tr : p.label_en) : t("prot.state.unknown")}
+          </div>
+          <p className="text-sm text-slate-700 dark:text-slate-300">{p ? (lang === "tr" ? p.detail_tr : p.detail_en) : t("prot.legacy")}</p>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            <Badge tone={tone}>{tx("prot.state", state)}</Badge>
+            {p && p.denied_now > 0 ? (
+              <Badge tone="danger">
+                {t("prot.evidence")}: {t("prot.deniedNow", { n: p.denied_now })}
+              </Badge>
+            ) : (
+              <Badge>{t("prot.noEvidence")}</Badge>
+            )}
+            {!p?.automated_apply_available && <Badge tone="warning">{t("prot.autoApply")}</Badge>}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void }) {
   const { t, lang, formatTime, tx, pick, pickList } = useI18n();
@@ -29,15 +83,16 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
       {r.loading && !d && <Loading />}
       {d && (
         <>
+          <ProtectionPanel p={d.windows_protection} />
           {/* The content area is the window minus the sidebar, so five columns only
               from 2xl; at the default 1280 px window three columns keep the
               cards readable. */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
             <Stat
-              icon={<ShieldQuestion className="size-4" aria-hidden />}
-              label={t("dashboard.protection")}
+              icon={<FlaskConical className="size-4" aria-hidden />}
+              label={t("prot.simulation")}
               value={<span className="text-base">{lang === "tr" ? d.enforcement_label_tr : d.enforcement_label_en}</span>}
-              hint={<Badge tone="warning">{t("badge.notVerified")}</Badge>}
+              hint={<span className="text-xs">{t("prot.simulationNote")}</span>}
             />
             <Stat
               icon={<Server className="size-4" aria-hidden />}

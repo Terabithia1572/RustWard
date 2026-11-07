@@ -79,14 +79,35 @@ function expect<T extends ResponseBody["type"]>(r: ResponseBody, type: T): DataO
   return r.data as DataOf[T];
 }
 
+/** Round-trip timing of one request, as seen by the UI. */
+export interface IpcTiming {
+  type: Request["type"];
+  ms: number;
+  ok: boolean;
+}
+
+const now = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
 /** Typed API on top of a backend. */
 export class Api {
+  /** Most recent round trips (newest last), for the Diagnostics page. */
+  readonly timings: IpcTiming[] = [];
+
   constructor(private readonly backend: Backend) {}
 
+  private record(type: Request["type"], start: number, ok: boolean) {
+    this.timings.push({ type, ms: Math.round(now() - start), ok });
+    if (this.timings.length > 50) this.timings.shift();
+  }
+
   private async call(request: Request): Promise<ResponseBody> {
+    const start = now();
     try {
-      return await this.backend.call(request);
+      const r = await this.backend.call(request);
+      this.record(request.type, start, true);
+      return r;
     } catch (e) {
+      this.record(request.type, start, false);
       throw toApiError(e);
     }
   }

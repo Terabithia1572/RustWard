@@ -397,6 +397,9 @@ pub struct DashboardView {
     /// Recent events.
     pub recent_events: Vec<EventView>,
     /// Warnings.
+    /// Real Windows protection state (from Windows evidence only).
+    #[serde(default)]
+    pub windows_protection: WindowsProtectionView,
     pub warnings: Vec<String>,
     /// Turkish rendering of `warnings`.
     #[serde(default)]
@@ -625,6 +628,9 @@ pub struct DiagnosticsView {
     #[serde(default)]
     pub pending_native_tests_tr: Vec<String>,
     /// Application version.
+    /// Timing measurements of this service process.
+    #[serde(default)]
+    pub performance: PerformanceView,
     pub app_version: String,
 }
 
@@ -887,6 +893,12 @@ pub struct EnforcementReadinessView {
 pub struct ObservedDeviceView {
     /// Device key.
     pub device_key: String,
+    /// Kind of the latest non-simulated audit event for this device.
+    #[serde(default)]
+    pub last_event_kind: Option<String>,
+    /// Time of that event (UTC ms).
+    #[serde(default)]
+    pub last_event_ms: Option<i64>,
     /// Observation (its `instance_id` is masked).
     pub observed: rustward_enforcement::observer::ObservedDevice,
 }
@@ -989,4 +1001,47 @@ pub struct EnforcementSessionView {
     pub automated_apply_available: bool,
     /// Why automated application is not available.
     pub automated_apply_blocker: TextTrEn,
+}
+
+/// Service timing measurements (monotonic clock, milliseconds).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformanceView {
+    /// Windows device enumeration of the last refresh (no state lock held).
+    pub last_inventory_collect_ms: Option<u64>,
+    /// Applying the last refresh (decisions, audit, database) under the lock.
+    pub last_inventory_apply_ms: Option<u64>,
+    /// Slowest enumeration since start.
+    pub max_inventory_collect_ms: Option<u64>,
+    /// Refreshes since start.
+    pub inventory_refreshes: u64,
+    /// Devices in the last enumeration.
+    pub last_inventory_devices: Option<u64>,
+    /// Service start until the first inventory was ready.
+    pub first_inventory_after_start_ms: Option<i64>,
+    /// Last enforcement observation request.
+    pub last_observation_ms: Option<u64>,
+    /// Last guided verification (including its fresh enumeration).
+    pub last_verification_ms: Option<u64>,
+}
+
+/// Real Windows protection state for the dashboard. Derived only from the
+/// live Windows policy, Device Manager states and the guided session; never
+/// from RustWard's simulated decisions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsProtectionView {
+    /// `verified_active`, `denial_observed`, `configured_unverified`,
+    /// `inactive`, `unknown`.
+    pub state: String,
+    /// Turkish label.
+    pub label_tr: String,
+    /// English label.
+    pub label_en: String,
+    /// Turkish detail (scope, evidence, what is missing).
+    pub detail_tr: String,
+    /// English detail.
+    pub detail_en: String,
+    /// Devices whose installation Windows denies right now.
+    pub denied_now: u32,
+    /// Automated policy application by RustWard is available.
+    pub automated_apply_available: bool,
 }

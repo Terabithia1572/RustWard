@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FlaskConical } from "lucide-react";
-import type { CapabilityReport, CapabilityStatus, SimulationView } from "../api/types";
+import type { CapabilityReport, CapabilityStatus, PerformanceView, SimulationView } from "../api/types";
+import type { IpcTiming } from "../api/client";
 import { Badge, Button, Card, ErrorNotice, Loading, PageHeader, type Tone } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
@@ -45,6 +46,36 @@ function List({ items, tone = "neutral" }: { items: string[]; tone?: "neutral" |
   );
 }
 
+const clock = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
+
+/** Service timings plus what the UI measured itself. */
+function PerformanceCard({ p, timings, renderMs }: { p: PerformanceView | undefined; timings: IpcTiming[]; renderMs: number | null }) {
+  const { t } = useI18n();
+  const ms = (v: number | null | undefined) => (v === null || v === undefined ? t("diag.perf.none") : `${v} ms`);
+  const ok = timings.filter((x) => x.ok);
+  const last = ok.at(-1);
+  const max = ok.reduce((m, x) => Math.max(m, x.ms), 0);
+  return (
+    <Card title={t("diag.perf")}>
+      <p className="mb-2 text-xs text-slate-500">{t("diag.perf.note")}</p>
+      <dl className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:gap-x-6 dark:divide-slate-800" data-testid="performance">
+        <Row label={t("diag.perf.collect")}>{ms(p?.last_inventory_collect_ms)}</Row>
+        <Row label={t("diag.perf.maxCollect")}>{ms(p?.max_inventory_collect_ms)}</Row>
+        <Row label={t("diag.perf.apply")}>{ms(p?.last_inventory_apply_ms)}</Row>
+        <Row label={t("diag.perf.firstAfterStart")}>{ms(p?.first_inventory_after_start_ms)}</Row>
+        <Row label={t("diag.perf.refreshes")}>{p?.inventory_refreshes ?? 0}</Row>
+        <Row label={t("diag.perf.devices")}>{p?.last_inventory_devices ?? "—"}</Row>
+        <Row label={t("diag.perf.observation")}>{ms(p?.last_observation_ms)}</Row>
+        <Row label={t("diag.perf.verification")}>{ms(p?.last_verification_ms)}</Row>
+        <Row label={t("diag.perf.ipc")}>
+          {last ? `${last.ms} ms (${last.type}) · max ${max} ms / ${ok.length}` : t("diag.perf.none")}
+        </Row>
+        <Row label={t("diag.perf.render")}>{ms(renderMs)}</Row>
+      </dl>
+    </Card>
+  );
+}
+
 export function DiagnosticsPage() {
   const { t, tx, lang, formatTime, pick, pickList } = useI18n();
   const api = useApi();
@@ -52,6 +83,12 @@ export function DiagnosticsPage() {
   const sim = useAction();
   const [result, setResult] = useState<SimulationView | null>(null);
   const d = r.data;
+  // UI latency: from mounting the page to the first rendered service data.
+  const mounted = useRef(clock());
+  const [renderMs, setRenderMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (d && renderMs === null) setRenderMs(Math.round(clock() - mounted.current));
+  }, [d, renderMs]);
 
   return (
     <div className="space-y-4">
@@ -161,6 +198,8 @@ export function DiagnosticsPage() {
               </div>
             </Card>
           </div>
+
+          <PerformanceCard p={d.performance} timings={api.timings} renderMs={renderMs} />
 
           <Card
             title={t("diag.enforcement")}

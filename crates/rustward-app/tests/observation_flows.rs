@@ -319,3 +319,160 @@ fn unreadable_policy_never_claims_no_rule_and_records_nothing() {
         assert_ne!(d.observed.evidence, EvidenceLevel::InstallDenied);
     }
 }
+
+struct SlowInv(DeviceSnapshot);
+impl InventorySource for SlowInv {
+    fn collect(&mut self) -> Result<(DeviceSnapshot, Vec<String>), String> {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        Ok((self.0.clone(), vec![]))
+    }
+    fn kind(&self) -> &'static str {
+        "live"
+    }
+}
+
+#[test]
+fn a_slow_windows_enumeration_does_not_block_other_requests() {
+    let clock = Arc::new(ManualClock::new(1_794_047_400_000));
+    let s = Arc::new(
+        AppService::new(
+            Store::open_in_memory(clock.clone()).unwrap(),
+            clock,
+            Box::new(SlowInv(DeviceSnapshot::from_json(OBSERVED).unwrap())),
+            AppConfig {
+                backend: BackendKind::DevBackend,
+                allow_synthetic: false,
+                backup_dir: None,
+                database_location: "dev_temp".into(),
+                app_version: "test".into(),
+            },
+            &default_policy_state().unwrap(),
+        )
+        .unwrap()
+        .with_policy_source(Box::new(Pol(Arc::new(Mutex::new(
+            PolicySnapshot::default(),
+        ))))),
+    );
+    let bg = {
+        let s = s.clone();
+        std::thread::spawn(move || s.refresh_inventory().unwrap())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let t = std::time::Instant::now();
+    s.handle(&Request::GetDashboard, &identity(false)).unwrap();
+    s.handle(&Request::GetEnforcementObservation, &identity(false))
+        .unwrap();
+    assert!(
+        t.elapsed() < std::time::Duration::from_millis(700),
+        "requests waited for the enumeration: {:?}",
+        t.elapsed()
+    );
+    bg.join().unwrap();
+    let ResponseBody::Diagnostics(d) = s
+        .handle(&Request::GetDiagnostics, &identity(false))
+        .unwrap()
+    else {
+        panic!()
+    };
+    let p = &d.performance;
+    assert_eq!(p.inventory_refreshes, 1);
+    assert!(p.last_inventory_collect_ms.unwrap() >= 1400, "{p:?}");
+    assert!(p.last_observation_ms.is_some());
+    assert_eq!(p.last_inventory_devices, Some(10));
+}
+
+fn protection(r: &Rig) -> rustward_ipc::messages::WindowsProtectionView {
+    match r.call(Request::GetDashboard, false).unwrap() {
+        ResponseBody::Dashboard(d) => d.windows_protection,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn dashboard_protection_state_follows_real_windows_evidence_only() {
+    let r = rig();
+    r.refresh();
+    let p = protection(&r);
+    assert_eq!(p.state, "inactive");
+    assert!(!p.automated_apply_available);
+    let key = kingston_key(&r.observe());
+
+    // Rule configured, Kingston still installed and working: not verified.
+    r.policy(true);
+    r.kingston(true, None);
+    assert_eq!(protection(&r).state, "configured_unverified");
+
+    // Real denial without a RustWard session.
+    r.kingston(true, Some(1));
+    let p = protection(&r);
+    assert_eq!(p.state, "denial_observed");
+    assert_eq!(p.denied_now, 1);
+
+    // Through a guided session: prepare on the baseline, apply, verify.
+    r.policy(false);
+    r.kingston(true, None);
+    let ResponseBody::EnforcementSession(v) = r
+        .call(
+            Request::PrepareEnforcementSession {
+                device_key: key,
+                retroactive: true,
+            },
+            true,
+        )
+        .unwrap()
+    else {
+        panic!()
+    };
+    let id = v.session.unwrap().session_id;
+    r.policy(true);
+    r.kingston(true, Some(1));
+    r.call(
+        Request::VerifyEnforcementApplied {
+            session_id: id.clone(),
+        },
+        true,
+    )
+    .unwrap();
+    let p = protection(&r);
+    assert_eq!(p.state, "verified_active", "{p:?}");
+    assert!(
+        p.detail_tr
+            .contains("Okuma/yazma yolları ayrıca doğrulanmadı")
+    );
+
+    // Disconnected: no current evidence any more.
+    r.kingston(false, Some(1));
+    assert_eq!(protection(&r).state, "configured_unverified");
+
+    // Rolled back by the administrator, not yet verified: the guided
+    // headline asks for the rollback verification instead of claiming the
+    // policy was never changed.
+    r.policy(false);
+    r.kingston(true, None);
+    let ResponseBody::EnforcementSession(v) =
+        r.call(Request::GetEnforcementSession, false).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(v.state, "protection_inactive");
+    assert!(
+        v.state_tr.contains("Geri almayı doğrulayın"),
+        "{}",
+        v.state_tr
+    );
+    assert!(!v.state_tr.contains("henüz değiştirilmedi"));
+    // The Kingston's latest real audit event is never a simulated decision.
+    let o = r.observe();
+    let k = o
+        .devices
+        .iter()
+        .find(|d| d.observed.vid_pid.as_deref() == Some("0951:1666"))
+        .unwrap();
+    assert!(k.last_event_kind.is_some());
+    assert_ne!(k.last_event_kind.as_deref(), Some("decision_simulated"));
+
+    // Rolled back and verified: inactive.
+    r.call(Request::VerifyEnforcementRollback { session_id: id }, true)
+        .unwrap();
+    assert_eq!(protection(&r).state, "inactive");
+}

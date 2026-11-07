@@ -106,7 +106,8 @@ pub struct RefreshSummary {
 
 struct Inner {
     store: Store,
-    inventory: Box<dyn InventorySource>,
+    inventory_kind: &'static str,
+    perf: Perf,
     last: Option<DeviceSnapshot>,
     last_refresh_ms: Option<i64>,
     last_inventory_error: Option<String>,
@@ -137,8 +138,29 @@ pub const AUTH_AUDIT_LIMIT: u32 = 20;
 pub const AUTH_AUDIT_WINDOW_MS: i64 = 60_000;
 
 /// The application service.
+/// Timing measurements (monotonic clock) for diagnostics.
+#[derive(Debug, Default, Clone)]
+struct Perf {
+    last_collect_ms: Option<u64>,
+    last_apply_ms: Option<u64>,
+    max_collect_ms: Option<u64>,
+    refreshes: u64,
+    last_devices: Option<u64>,
+    first_refresh_done_ms: Option<i64>,
+    last_observation_ms: Option<u64>,
+    last_verification_ms: Option<u64>,
+}
+
+fn elapsed_ms(t: std::time::Instant) -> u64 {
+    u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
 pub struct AppService {
     inner: Mutex<Inner>,
+    /// Separate from `inner`: Windows device enumeration runs without
+    /// holding the state lock, so IPC requests are not blocked by it.
+    /// Also serializes refreshes. Lock order: `inventory` before `inner`.
+    inventory: Mutex<Box<dyn InventorySource>>,
     clock: Arc<dyn Clock>,
     config: AppConfig,
     provider: DeviceInstallRestrictionProvider,
@@ -527,7 +549,8 @@ impl AppService {
         Ok(Self {
             inner: Mutex::new(Inner {
                 store,
-                inventory,
+                inventory_kind: inventory.kind(),
+                perf: Perf::default(),
                 last: None,
                 last_refresh_ms: None,
                 last_inventory_error: None,
@@ -538,6 +561,7 @@ impl AppService {
                 staged_restore: None,
                 restore_counter: 0,
             }),
+            inventory: Mutex::new(inventory),
             clock,
             config,
             provider: DeviceInstallRestrictionProvider,
@@ -1089,14 +1113,43 @@ impl AppService {
 
     /// Collect the inventory, record detections and simulated decisions.
     pub fn refresh_inventory(&self) -> Result<RefreshSummary, IpcError> {
+        // Enumerate Windows devices WITHOUT the state lock (this is the slow
+        // part); refreshes are serialized by the inventory lock.
+        let mut inv = self
+            .inventory
+            .lock()
+            .map_err(|_| IpcError::new(ErrorCode::Internal, "inventory lock poisoned"))?;
+        let t = std::time::Instant::now();
+        let collected = inv.collect();
+        let collect_ms = elapsed_ms(t);
         let mut g = self.lock()?;
-        self.refresh_locked(&mut g)
+        drop(inv);
+        let t = std::time::Instant::now();
+        let result = self.apply_collected(&mut g, collected);
+        let apply_ms = elapsed_ms(t);
+        let now = self.clock.now_ms();
+        let p = &mut g.perf;
+        p.last_collect_ms = Some(collect_ms);
+        p.last_apply_ms = Some(apply_ms);
+        p.max_collect_ms = Some(p.max_collect_ms.unwrap_or(0).max(collect_ms));
+        p.refreshes += 1;
+        if p.first_refresh_done_ms.is_none() {
+            p.first_refresh_done_ms = Some(now - self.started_ms);
+        }
+        if let Ok(s) = &result {
+            p.last_devices = u64::try_from(s.devices).ok();
+        }
+        result
     }
 
-    fn refresh_locked(&self, g: &mut Inner) -> Result<RefreshSummary, IpcError> {
+    fn apply_collected(
+        &self,
+        g: &mut Inner,
+        collected: Result<(DeviceSnapshot, Vec<String>), String>,
+    ) -> Result<RefreshSummary, IpcError> {
         let now = self.clock.now_ms();
         let state_code = self.enforcement_state_code();
-        let (snap, warnings) = match g.inventory.collect() {
+        let (snap, warnings) = match collected {
             Ok(x) => x,
             Err(e) => {
                 g.consecutive_failures = g.consecutive_failures.saturating_add(1);
@@ -1236,6 +1289,7 @@ impl AppService {
         }
 
         let mut present_keys = Vec::new();
+        let mut rows = Vec::new();
         for (rec, dec) in snap.devices.iter().zip(decisions.iter()) {
             if !stored_category(&dec.classification.category) {
                 continue;
@@ -1244,9 +1298,10 @@ impl AppService {
             if row.present {
                 present_keys.push(row.device_key.clone());
             }
-            g.store.upsert_device(&row).map_err(storage_err)?;
+            rows.push(row);
             summary.stored += 1;
         }
+        g.store.upsert_devices(&rows).map_err(storage_err)?;
         g.store
             .mark_absent_except(&present_keys)
             .map_err(storage_err)?;
@@ -1325,9 +1380,16 @@ impl AppService {
             ));
         }
         let fixture = FixtureInventory::bundled().map_err(internal)?;
-        let mut g = self.lock()?;
-        g.inventory = Box::new(fixture);
-        self.refresh_locked(&mut g)
+        {
+            let mut inv = self
+                .inventory
+                .lock()
+                .map_err(|_| IpcError::new(ErrorCode::Internal, "inventory lock poisoned"))?;
+            let kind = fixture.kind();
+            *inv = Box::new(fixture);
+            self.lock()?.inventory_kind = kind;
+        }
+        self.refresh_inventory()
     }
 
     fn service_status(&self, g: &Inner) -> ServiceStatusView {
@@ -1550,6 +1612,7 @@ impl AppService {
             .unwrap_or(u32::MAX),
             recent_denied: denied.into_iter().take(5).map(device_view).collect(),
             recent_events: events.into_iter().map(|e| event_view(e, &names)).collect(),
+            windows_protection: self.windows_protection(g)?,
             warnings_tr,
             warnings,
             synthetic_data_present,
@@ -1671,7 +1734,7 @@ impl AppService {
             },
             windows_adapter: AdapterView {
                 platform: std::env::consts::OS.into(),
-                live_inventory_available: cfg!(windows) && g.inventory.kind() == "live",
+                live_inventory_available: cfg!(windows) && g.inventory_kind == "live",
                 last_error: g.last_inventory_error.clone(),
             },
             policy,
@@ -1702,6 +1765,16 @@ impl AppService {
                 .iter()
                 .map(|(_, tr)| (*tr).to_string())
                 .collect(),
+            performance: rustward_ipc::messages::PerformanceView {
+                last_inventory_collect_ms: g.perf.last_collect_ms,
+                last_inventory_apply_ms: g.perf.last_apply_ms,
+                max_inventory_collect_ms: g.perf.max_collect_ms,
+                inventory_refreshes: g.perf.refreshes,
+                last_inventory_devices: g.perf.last_devices,
+                first_inventory_after_start_ms: g.perf.first_refresh_done_ms,
+                last_observation_ms: g.perf.last_observation_ms,
+                last_verification_ms: g.perf.last_verification_ms,
+            },
             app_version: self.config.app_version.clone(),
         }
     }
@@ -1941,10 +2014,11 @@ impl Handler for AppService {
                 Ok(ResponseBody::Diagnostics(Box::new(self.diagnostics(&g))))
             }
             Request::GetEnforcementObservation => {
+                let t = std::time::Instant::now();
                 let mut g = self.lock()?;
-                Ok(ResponseBody::EnforcementObservation(Box::new(
-                    self.enforcement_observation(&mut g)?,
-                )))
+                let v = self.enforcement_observation(&mut g)?;
+                g.perf.last_observation_ms = Some(elapsed_ms(t));
+                Ok(ResponseBody::EnforcementObservation(Box::new(v)))
             }
             Request::GetPolicyChecklist {
                 device_key,
@@ -1971,16 +2045,26 @@ impl Handler for AppService {
                 )))
             }
             Request::VerifyEnforcementApplied { session_id } => {
+                // Independent device evidence: re-enumerate Windows devices
+                // first (outside the state lock). A failed refresh leaves
+                // the last inventory; the view reports its time.
+                let t = std::time::Instant::now();
+                let _ = self.refresh_inventory();
                 let mut g = self.lock()?;
-                Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.verify_applied(&mut g, session_id)?,
-                )))
+                let r = self.verify_applied(&mut g, session_id);
+                g.perf.last_verification_ms = Some(elapsed_ms(t));
+                Ok(ResponseBody::EnforcementSession(Box::new(r?)))
             }
             Request::VerifyEnforcementRollback { session_id } => {
+                // Independent device evidence: re-enumerate Windows devices
+                // first (outside the state lock). A failed refresh leaves
+                // the last inventory; the view reports its time.
+                let t = std::time::Instant::now();
+                let _ = self.refresh_inventory();
                 let mut g = self.lock()?;
-                Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.verify_rollback(&mut g, session_id)?,
-                )))
+                let r = self.verify_rollback(&mut g, session_id);
+                g.perf.last_verification_ms = Some(elapsed_ms(t));
+                Ok(ResponseBody::EnforcementSession(Box::new(r?)))
             }
             Request::CancelEnforcementSession { session_id } => {
                 let mut g = self.lock()?;
