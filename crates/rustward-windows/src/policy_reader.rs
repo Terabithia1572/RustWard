@@ -28,6 +28,7 @@ use windows_sys::Win32::System::SystemInformation::{GetProductInfo, OSVERSIONINF
 use rustward_enforcement::device_install::RESTRICTIONS_KEY;
 use rustward_enforcement::policy_inspect::{CapturedPolicy, OsFacts};
 use rustward_enforcement::policy_state::{PolicySnapshot, ValueRef};
+use rustward_enforcement::removable_storage::RSA_KEY;
 
 use crate::regdecode::{MAX_VALUE_BYTES, decode, name, to_wide};
 
@@ -197,7 +198,30 @@ fn os_facts() -> OsFacts {
     }
 }
 
-/// Capture the Restrictions key (values + one level of subkeys) and OS facts.
+/// Read `path` (values + one level of subkeys) into `out`. Missing key:
+/// nothing is added.
+fn capture_tree(
+    path: &str,
+    out: &mut PolicySnapshot,
+    errors: &mut Vec<String>,
+) -> Result<bool, String> {
+    let Some(root) = open_read(path)? else {
+        return Ok(false);
+    };
+    read_values(&root, path, out, errors);
+    for sub in subkeys(&root, path, errors) {
+        let sub_path = format!(r"{path}\{sub}");
+        match open_read(&sub_path) {
+            Ok(Some(k)) => read_values(&k, &sub_path, out, errors),
+            Ok(None) => {}
+            Err(e) => errors.push(e),
+        }
+    }
+    Ok(true)
+}
+
+/// Capture the Restrictions key (values + one level of subkeys), the
+/// Removable Storage Access key (same depth) and OS facts.
 ///
 /// # Errors
 /// When the key exists but cannot be opened for reading.
@@ -207,23 +231,14 @@ pub fn capture(now_ms: i64) -> Result<CapturedPolicy, String> {
         os: os_facts(),
         ..CapturedPolicy::default()
     };
-    let Some(root) = open_read(RESTRICTIONS_KEY)? else {
-        return Ok(out);
-    };
-    out.key_present = true;
-    read_values(
-        &root,
-        RESTRICTIONS_KEY,
-        &mut out.values,
-        &mut out.read_errors,
-    );
-    for sub in subkeys(&root, RESTRICTIONS_KEY, &mut out.read_errors) {
-        let path = format!(r"{RESTRICTIONS_KEY}\{sub}");
-        match open_read(&path) {
-            Ok(Some(k)) => read_values(&k, &path, &mut out.values, &mut out.read_errors),
-            Ok(None) => {}
-            Err(e) => out.read_errors.push(e),
-        }
+    // A failure on the Removable Storage key is non-fatal: the Restrictions
+    // capture stays valid and the problem is reported.
+    let mut rsa = PolicySnapshot::default();
+    if let Err(e) = capture_tree(RSA_KEY, &mut rsa, &mut out.read_errors) {
+        out.read_errors
+            .push(format!("removable storage policy: {e}"));
     }
+    out.removable_storage = rsa;
+    out.key_present = capture_tree(RESTRICTIONS_KEY, &mut out.values, &mut out.read_errors)?;
     Ok(out)
 }

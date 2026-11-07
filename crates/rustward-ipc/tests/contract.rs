@@ -61,6 +61,7 @@ fn all_requests() -> Vec<Request> {
             device_key: "k".into(),
             retroactive: false,
         },
+        Request::PrepareDefaultDenySession,
         Request::VerifyEnforcementApplied {
             session_id: "s".into(),
         },
@@ -141,6 +142,7 @@ fn all_requests() -> Vec<Request> {
             | Request::GetSettings
             | Request::RunSimulation
             | Request::PrepareEnforcementSession { .. }
+            | Request::PrepareDefaultDenySession
             | Request::VerifyEnforcementApplied { .. }
             | Request::VerifyEnforcementRollback { .. }
             | Request::CancelEnforcementSession { .. }

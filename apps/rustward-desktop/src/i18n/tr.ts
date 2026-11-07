@@ -556,6 +556,18 @@ export const tr = {
   "manufacturers.configuredNote": "Bunlar yapılandırılmış RustWard kurallarıdır; Windows erişimi değildir. Gerçek Windows sonucu Cihazlar ve Engellenen cihazlar sayfalarında görünür.",
   "manufacturers.target": "Hedef politika: SanDisk ve TÜBİTAK izinli; Kingston, Seagate, bilinmeyen ve diğer tüm USB depolama reddedilir.",
   "reason.brand_denied": "Üretici açıkça reddedildi",
+  "guided.profile.title": "Varsayılan ret profili (tüm USB depolama)",
+  "guided.profile.note": "RustWard politikasından derlenen katmanlı Aygıt Yükleme Kısıtlamaları: yeni disk kurulumları engellenir, yalnızca izinli üreticilerin kimlikleri ve dahili diskler izinlidir. Kural geriye dönük değildir; zaten kurulu cihazlar etkilenmez. Yalnızca test sanal makinesinde, anlık görüntüden sonra.",
+  "guided.profile.prepare": "Varsayılan ret profilini hazırla",
+  "guided.profile.active": "Varsayılan ret profili oturumu",
+  "obs.rsa": "Çıkarılabilir Depolama Erişimi ilkesi",
+  "obs.rsa.none": "Yapılandırılmamış",
+  "obs.rsa.denyAll": "Tüm sınıflar: tüm erişim reddi",
+  "obs.rsa.read": "Çıkarılabilir diskler: okuma reddi",
+  "obs.rsa.write": "Çıkarılabilir diskler: yazma reddi",
+  "obs.rsa.execute": "Çıkarılabilir diskler: çalıştırma reddi",
+  "obs.rsa.configuredNoDeny": "Yapılandırılmış, ret yok",
+  "obs.rsa.classWide": "Sınıf geneli: üretici ayrımı yapamaz; gerçek okuma/yazma reddi yönetici gözlemiyle doğrulanır.",
 } as const;
 
 export type TKey = keyof typeof tr;

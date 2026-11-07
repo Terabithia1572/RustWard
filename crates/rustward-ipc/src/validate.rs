@@ -138,7 +138,8 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         | Request::ApplyRetention
         | Request::CreateBackup
         | Request::RefreshInventory
-        | Request::LoadSyntheticInventory => Ok(()),
+        | Request::LoadSyntheticInventory
+        | Request::PrepareDefaultDenySession => Ok(()),
         Request::VerifyEnforcementApplied { session_id }
         | Request::VerifyEnforcementRollback { session_id }
         | Request::CancelEnforcementSession { session_id } => {

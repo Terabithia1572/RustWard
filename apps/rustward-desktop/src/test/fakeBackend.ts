@@ -526,6 +526,26 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
           last_verification_ms: null,
         });
         return { type: "enforcement_session", data: state.session };
+      case "prepare_default_deny_session":
+        state.session = sessionView("protection_inactive", {
+          session_id: "fedcba9876543210",
+          prepared_ms: 1_794_050_000_000,
+          prepared_by: "PC-TEST\\admin",
+          device_key: "default_deny_profile",
+          device_name: "Varsayılan ret profili (Aygıt Yükleme Kısıtlamaları)",
+          hardware_id: "DiskDrive {4d36e967-e325-11ce-bfc1-08002be10318} prevent + allow list (layered)",
+          retroactive: false,
+          baseline: [],
+          expected_lines: [
+            "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions\\AllowDenyLayered = REG_DWORD 1",
+            "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions\\DenyDeviceClassesRetroactive = REG_DWORD 0",
+          ],
+          kind: "default_deny_profile",
+          checklist_text: "VARSAYILAN RET PROFİLİ — YÖNETİCİ KONTROL LİSTESİ\n\"Zaten yüklü olan eşleşen aygıtlara da uygula\" İŞARETLENMEZ",
+          last_verification: null,
+          last_verification_ms: null,
+        });
+        return { type: "enforcement_session", data: state.session };
       case "verify_enforcement_applied":
         if (!state.session.session) throw { code: "not_found", message: "no active enforcement session", message_tr: "Etkin bir uygulama oturumu yok." };
         state.session = sessionView("windows_install_denied", {

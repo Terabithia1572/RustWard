@@ -28,6 +28,7 @@ pub mod observer;
 pub mod policy_eval;
 pub mod policy_inspect;
 pub mod policy_state;
+pub mod removable_storage;
 
 use serde::{Deserialize, Serialize};
 

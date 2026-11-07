@@ -85,6 +85,9 @@ impl AppService {
                 },
             ),
         };
+        let rsa = rustward_enforcement::removable_storage::removable_storage_state(
+            &cap.removable_storage,
+        );
         let mut obs = observe(&snap, &v.policy, &v.catalog, &cap);
         // Without a readable policy nothing can be correlated: never report
         // a Windows rule state then.
@@ -224,6 +227,7 @@ impl AppService {
             devices,
             newly_observed_denials: newly,
             rustward_applies_nothing: true,
+            removable_storage: rsa,
         })
     }
 

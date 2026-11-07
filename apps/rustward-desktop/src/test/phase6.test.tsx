@@ -88,3 +88,45 @@ describe("Readiness blockers", () => {
     expect(b).toHaveTextContent("Okuma/yazma engeli doğrulanmadı.");
   });
 });
+
+describe("Default-deny profile session (administrator-guided)", () => {
+  it("prepares the profile without applying anything and shows the checklist", async () => {
+    const { backend, state } = fakeBackend();
+    render(<App api={new Api(backend)} initialPage="readiness" watchMs={0} />);
+    const card = await screen.findByTestId("guided-profile");
+    expect(card).toHaveTextContent("Kural geriye dönük değildir");
+    fireEvent.click(within(card).getByRole("button", { name: /Varsayılan ret profilini hazırla/ }));
+    const text = await screen.findByTestId("guided-profile-checklist");
+    expect(text).toHaveTextContent("İŞARETLENMEZ");
+    expect(screen.getByText("Varsayılan ret profili oturumu")).toBeInTheDocument();
+    // The single-device checklist button is not offered for the profile.
+    expect(screen.queryByRole("button", { name: /Kontrol listesini göster/ })).not.toBeInTheDocument();
+    expect(state.calls.map((c) => c.type)).toContain("prepare_default_deny_session");
+    // Nothing claims a block.
+    expect(document.body.textContent).not.toContain("USB engellenmiştir");
+  });
+});
+
+describe("Removable Storage Access (class-wide, read-only report)", () => {
+  it("shows a configured removable-disk read deny as class-wide, not as protection", async () => {
+    const obs = observation([observed()]);
+    obs.removable_storage = {
+      configured: true,
+      deny_all: false,
+      disks_deny_read: true,
+      disks_deny_write: false,
+      disks_deny_execute: false,
+      other_classes: [],
+    };
+    page("readiness", { observation: obs });
+    const row = await screen.findByTestId("removable-storage");
+    expect(row).toHaveTextContent("Çıkarılabilir diskler: okuma reddi");
+    expect(row).toHaveTextContent("üretici ayrımı yapamaz");
+    expect(document.body.textContent).not.toContain(BLOCKED);
+  });
+
+  it("reports not configured by default", async () => {
+    page("readiness");
+    expect(await screen.findByTestId("removable-storage")).toHaveTextContent("Yapılandırılmamış");
+  });
+});

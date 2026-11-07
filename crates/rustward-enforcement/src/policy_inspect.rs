@@ -95,6 +95,10 @@ pub struct CapturedPolicy {
     pub values: PolicySnapshot,
     /// Non-fatal read problems (access denied on a subkey, oversized value).
     pub read_errors: Vec<String>,
+    /// Removable Storage Access policy values (key + one level of
+    /// subkeys), read-only; empty when not configured.
+    #[serde(default)]
+    pub removable_storage: PolicySnapshot,
     /// OS facts.
     pub os: OsFacts,
 }

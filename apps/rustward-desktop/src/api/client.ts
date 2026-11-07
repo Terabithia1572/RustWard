@@ -157,6 +157,10 @@ export class Api {
       "enforcement_session",
     );
   }
+  /** Prepare the default-deny profile session (layered Device Installation Restrictions). */
+  async prepareDefaultDenySession(): Promise<EnforcementSessionView> {
+    return expect(await this.call({ type: "prepare_default_deny_session" }), "enforcement_session");
+  }
   async verifyApplied(sessionId: string): Promise<EnforcementSessionView> {
     return expect(await this.call({ type: "verify_enforcement_applied", session_id: sessionId }), "enforcement_session");
   }

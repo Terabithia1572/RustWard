@@ -135,6 +135,12 @@ pub enum Request {
         /// Include the "also apply to installed devices" option.
         retroactive: bool,
     },
+    /// Prepare a guided session for the **default-deny profile**: the
+    /// layered Device Installation Restrictions plan compiled from the
+    /// RustWard policy (prevent DiskDrive class, never retroactive; allow
+    /// the allowed brands' device IDs and the internal disks). Baseline and
+    /// expected policy are saved; changes no Windows setting.
+    PrepareDefaultDenySession,
     /// Verify the administrator's Group Policy change against the plan.
     VerifyEnforcementApplied {
         /// Session id (16 hex).
@@ -281,6 +287,7 @@ impl Request {
             | Self::GetSettings
             | Self::RunSimulation => AccessLevel::ReadOnly,
             Self::PrepareEnforcementSession { .. }
+            | Self::PrepareDefaultDenySession
             | Self::VerifyEnforcementApplied { .. }
             | Self::VerifyEnforcementRollback { .. }
             | Self::CancelEnforcementSession { .. }
@@ -939,6 +946,10 @@ pub struct EnforcementObservationView {
     pub newly_observed_denials: Vec<String>,
     /// Always true: RustWard itself applies no restriction.
     pub rustward_applies_nothing: bool,
+    /// Removable Storage Access policy (read-only interpretation;
+    /// class-wide, never manufacturer-specific).
+    #[serde(default)]
+    pub removable_storage: rustward_enforcement::removable_storage::RemovableStorageState,
 }
 
 /// Group Policy checklist.
@@ -986,6 +997,12 @@ pub struct SessionView {
     pub baseline: Vec<String>,
     /// Expected registry values after the change.
     pub expected_lines: Vec<String>,
+    /// `device_deny` (one device) or `default_deny_profile`.
+    #[serde(default)]
+    pub kind: String,
+    /// Administrator checklist text (default-deny profile only).
+    #[serde(default)]
+    pub checklist_text: Option<String>,
     /// Kind of the last application verification event, if any.
     pub last_verification: Option<String>,
     /// Its time.

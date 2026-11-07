@@ -2045,6 +2045,12 @@ impl Handler for AppService {
                     self.prepare_session(&mut g, device_key, *retroactive, identity)?,
                 )))
             }
+            Request::PrepareDefaultDenySession => {
+                let mut g = self.lock()?;
+                Ok(ResponseBody::EnforcementSession(Box::new(
+                    self.prepare_profile_session(&mut g, identity)?,
+                )))
+            }
             Request::VerifyEnforcementApplied { session_id } => {
                 // Independent device evidence: re-enumerate Windows devices
                 // first (outside the state lock). A failed refresh leaves

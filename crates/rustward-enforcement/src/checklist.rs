@@ -389,3 +389,106 @@ impl PolicyChecklist {
         s
     }
 }
+
+/// Group Policy setting: (Turkish name, English name, how to fill it in).
+type Setting = (&'static str, &'static str, &'static str);
+
+/// Group Policy setting for one registry value of the default-deny profile.
+fn profile_setting(value_name: &str, sub: &str) -> Setting {
+    match (value_name, sub) {
+        ("AllowDenyLayered", _) => (
+            "Aygıt yükleme ve engelleme ilkeleri için katmanlı değerlendirme sırası uygula",
+            "Apply layered order of evaluation for Allow and Prevent device installation policies across all device match criteria",
+            "Etkin / Enabled",
+        ),
+        ("DenyDeviceClasses" | "DenyDeviceClassesRetroactive", _) | (_, "DenyDeviceClasses") => (
+            "Bu aygıt kurulum sınıflarıyla eşleşen sürücüleri kullanan aygıtların yüklenmesini engelle",
+            "Prevent installation of devices using drivers that match these device setup classes",
+            "Etkin; \"Zaten yüklü olan eşleşen aygıtlara da uygula\" İŞARETLENMEZ / Enabled; \"Also apply to matching devices that are already installed\" UNCHECKED",
+        ),
+        ("AllowDeviceIDs", _) | (_, "AllowDeviceIDs") => (
+            "Bu aygıt kimliklerinden herhangi biriyle eşleşen aygıtların yüklenmesine izin ver",
+            "Allow installation of devices that match any of these device IDs",
+            "Etkin / Enabled",
+        ),
+        ("AllowInstanceIDs", _) | (_, "AllowInstanceIDs") => (
+            "Bu aygıt örneği kimliklerinden herhangi biriyle eşleşen aygıtların yüklenmesine izin ver",
+            "Allow installation of devices that match any of these device instance IDs",
+            "Etkin / Enabled",
+        ),
+        _ => ("(bilinmeyen ayar)", "(unknown setting)", ""),
+    }
+}
+
+/// Administrator checklist for the **default-deny profile** (layered
+/// Device Installation Restrictions). Text only: nothing is applied.
+///
+/// `not_covered` lists already-installed devices the profile does not
+/// affect (the class rule is never retroactive).
+#[must_use]
+pub fn default_deny_profile_text(
+    changes: &[crate::PlannedChange],
+    not_covered: &[String],
+) -> String {
+    use std::fmt::Write as _;
+    let mut groups: Vec<(Setting, Vec<String>)> = Vec::new();
+    for c in changes {
+        let sub = c
+            .key
+            .strip_prefix(RESTRICTIONS_KEY)
+            .unwrap_or("")
+            .trim_start_matches('\\');
+        let setting = profile_setting(&c.value_name, sub);
+        let entry = if sub.is_empty() {
+            format!("{} = {} {}", c.value_name, c.value_type, c.data)
+        } else {
+            format!("{sub}\\{} = {}", c.value_name, c.data)
+        };
+        match groups.iter_mut().find(|(s, _)| s.0 == setting.0) {
+            Some((_, v)) => v.push(entry),
+            None => groups.push((setting, vec![entry])),
+        }
+    }
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "VARSAYILAN RET PROFİLİ — YÖNETİCİ KONTROL LİSTESİ (yalnızca test sanal makinesi)\n\
+         DEFAULT-DENY PROFILE — ADMINISTRATOR CHECKLIST (test virtual machine only)\n\n\
+         RustWard bu ayarları uygulamaz. Önce VMware anlık görüntüsü alın.\n\
+         RustWard does not apply these settings. Take a VMware snapshot first.\n\n\
+         gpedit.msc > Bilgisayar Yapılandırması > Yönetim Şablonları > Sistem > Aygıt Yükleme > Aygıt Yükleme Kısıtlamaları\n\
+         Computer Configuration > Administrative Templates > System > Device Installation > Device Installation Restrictions\n"
+    );
+    for (i, ((tr, en, how), entries)) in groups.iter().enumerate() {
+        let _ = writeln!(s, "{}. {tr}\n   {en}\n   {how}", i + 1);
+        for e in entries {
+            let _ = writeln!(s, "   - {e}");
+        }
+        s.push('\n');
+    }
+    let _ = writeln!(
+        s,
+        "Sonra yönetici komut isteminde: gpupdate /force — ardından RustWard'da \"Uygulamayı doğrula\".\n\
+         Then in an administrator command prompt: gpupdate /force — then \"Verify application\" in RustWard.\n\n\
+         Geri alma: yukarıdaki ayarların tümünü \"Yapılandırılmadı\" yapın, gpupdate /force, \"Geri almayı doğrula\".\n\
+         Rollback: set every setting above to \"Not Configured\", gpupdate /force, \"Verify rollback\".\n"
+    );
+    let _ = writeln!(
+        s,
+        "SINIRLAR / LIMITS\n\
+         - Sınıf kuralı geriye dönük DEĞİLDİR: zaten kurulu cihazlar erişilebilir kalır.\n  The class rule is NOT retroactive: already-installed devices stay accessible.\n\
+         - Eşleşme cihazın kendi bildirdiği kimlik dizelerine dayanır; kimlik doğrulaması yoktur.\n  Matching relies on identity strings the device reports about itself; nothing is authenticated.\n\
+         - Kurulum reddi, okuma/yazma engelinin kanıtı değildir.\n  An installation denial is not proof of a read/write denial.\n\
+         - Yeni eklenen her dahili veya sanal disk de (izin listesinde değilse) engellenir.\n  Any newly added internal or virtual disk not on the allow list is blocked too."
+    );
+    if !not_covered.is_empty() {
+        let _ = writeln!(
+            s,
+            "\nPROFİLİN ETKİLEMEDİĞİ, ZATEN KURULU VE POLİTİKANIN REDDETTİĞİ CİHAZLAR\nALREADY-INSTALLED DEVICES THE POLICY DENIES BUT THE PROFILE DOES NOT AFFECT"
+        );
+        for d in not_covered {
+            let _ = writeln!(s, "   - {d}");
+        }
+    }
+    s
+}

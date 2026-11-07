@@ -63,6 +63,10 @@
     },
     {
       "access": "administrator",
+      "type": "prepare_default_deny_session"
+    },
+    {
+      "access": "administrator",
       "type": "verify_enforcement_applied"
     },
     {

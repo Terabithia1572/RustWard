@@ -55,6 +55,7 @@ export type Request =
   | { type: "get_policy_checklist"; device_key: string; retroactive: boolean }
   | { type: "get_enforcement_session" }
   | { type: "prepare_enforcement_session"; device_key: string; retroactive: boolean }
+  | { type: "prepare_default_deny_session" }
   | { type: "verify_enforcement_applied"; session_id: string }
   | { type: "verify_enforcement_rollback"; session_id: string }
   | { type: "cancel_enforcement_session"; session_id: string }
@@ -96,6 +97,7 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "get_settings",
   "run_simulation",
   "prepare_enforcement_session",
+  "prepare_default_deny_session",
   "verify_enforcement_applied",
   "verify_enforcement_rollback",
   "cancel_enforcement_session",
@@ -120,6 +122,7 @@ export const REQUEST_TYPES: readonly RequestType[] = [
 /** Requests that require an elevated administrator (server-enforced). */
 export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "prepare_enforcement_session",
+  "prepare_default_deny_session",
   "verify_enforcement_applied",
   "verify_enforcement_rollback",
   "cancel_enforcement_session",
@@ -736,6 +739,17 @@ export interface EnforcementObservationView {
   devices: ObservedDeviceView[];
   newly_observed_denials: string[];
   rustward_applies_nothing: boolean;
+  /** Removable Storage Access policy (class-wide; absent from older services). */
+  removable_storage?: RemovableStorageState;
+}
+
+export interface RemovableStorageState {
+  configured: boolean;
+  deny_all: boolean;
+  disks_deny_read: boolean;
+  disks_deny_write: boolean;
+  disks_deny_execute: boolean;
+  other_classes: string[];
 }
 
 export interface PolicyChecklist {
@@ -788,6 +802,10 @@ export interface SessionView {
   retroactive: boolean;
   baseline: string[];
   expected_lines: string[];
+  /** `device_deny` (one device) or `default_deny_profile`. */
+  kind?: string;
+  /** Administrator checklist (default-deny profile only). */
+  checklist_text?: string | null;
   last_verification: string | null;
   last_verification_ms: number | null;
 }

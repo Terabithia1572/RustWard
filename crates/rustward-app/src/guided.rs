@@ -38,6 +38,8 @@ const APPLY_BAD: &str = "enforcement_session_apply_mismatch";
 const ROLLBACK_OK: &str = "enforcement_session_rollback_verified";
 const ROLLBACK_BAD: &str = "enforcement_session_rollback_mismatch";
 const CANCELLED: &str = "enforcement_session_cancelled";
+/// Pseudo device key of a default-deny profile session.
+pub(crate) const PROFILE_KEY: &str = "default_deny_profile";
 
 /// Normalized policy: DWORDs and other values by name, list entries as an
 /// upper-case set (Group Policy may renumber list entries).
@@ -62,6 +64,13 @@ pub fn normalize(p: &PolicySnapshot) -> BTreeMap<String, String> {
                 } else {
                     format!("{sub}\\{}", r.name)
                 };
+                // "Also apply to installed devices" unchecked: Group Policy
+                // may write 0 or nothing; both mean "not retroactive".
+                if name.to_ascii_lowercase().ends_with("retroactive")
+                    && matches!(d, RegData::Dword(0))
+                {
+                    continue;
+                }
                 let v = match d {
                     RegData::Dword(v) => v.to_string(),
                     RegData::Sz(s) => s.clone(),
@@ -332,6 +341,145 @@ impl AppService {
         self.session_view(g)
     }
 
+    /// Prepare a default-deny profile session (administrator). Compiles the
+    /// layered Device Installation Restrictions plan from the RustWard
+    /// policy, saves the baseline and the exact expected policy and audits
+    /// both. Writes nothing to Windows.
+    pub(crate) fn prepare_profile_session(
+        &self,
+        g: &mut Inner,
+        identity: &ClientIdentity,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        use rustward_enforcement::checklist::default_deny_profile_text;
+        use rustward_enforcement::policy_state::{apply_ops, forward_ops, merge_plan};
+        use rustward_enforcement::{EnforcementProvider as _, PlanInputs, PreconditionStatus};
+
+        if Self::active_session(g)?.is_some() {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                "another enforcement session is active",
+            ));
+        }
+        let v = Self::validated(&g.store)?;
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        let captured = self
+            .policy_source
+            .capture(self.clock.now_ms())
+            .map_err(|e| {
+                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+            })?;
+        let mut env = Self::env_facts();
+        env.os_build = captured.os.build.zip(captured.os.ubr);
+        let inputs = PlanInputs {
+            policy: &v.policy,
+            catalog: &v.catalog,
+            snapshot: &snap,
+            env: &env,
+        };
+        let plan = merge_plan(&captured.values, &self.provider.plan(inputs));
+        // Only the preconditions that make an administrator-applied profile
+        // unsafe or meaningless block preparation; the remaining ones gate
+        // automated activation, which stays BLOCKED anyway.
+        const GUIDED_REQUIRED: [&str; 3] =
+            ["edition", "layering_supported", "internal_disks_protected"];
+        let unmet: Vec<String> = plan
+            .preconditions
+            .iter()
+            .filter(|p| {
+                GUIDED_REQUIRED.contains(&p.id.as_str()) && p.status == PreconditionStatus::NotMet
+            })
+            .map(|p| p.id.clone())
+            .collect();
+        if !unmet.is_empty() {
+            return Err(IpcError::new(
+                ErrorCode::ValidationFailed,
+                format!(
+                    "default-deny profile preconditions not met: {}",
+                    unmet.join(", ")
+                ),
+            ));
+        }
+        let has = |name: &str| plan.changes.iter().any(|c| c.value_name == name);
+        if !has("DenyDeviceClasses") || !has("AllowDenyLayered") {
+            return Err(IpcError::new(
+                ErrorCode::ValidationFailed,
+                "the RustWard policy does not compile to a default-deny profile",
+            ));
+        }
+        // Never retroactive class rules (the system disk is a DiskDrive).
+        if plan
+            .changes
+            .iter()
+            .any(|c| c.value_name.to_ascii_lowercase().ends_with("retroactive") && c.data != "0")
+        {
+            return Err(IpcError::new(
+                ErrorCode::ValidationFailed,
+                "the profile must not contain a retroactive rule",
+            ));
+        }
+        let dry = self.provider.dry_run(&plan, inputs);
+        let forward = forward_ops(&captured.values, &plan)
+            .map_err(|e| IpcError::new(ErrorCode::ValidationFailed, e))?;
+        let after = apply_ops(&captured.values, &forward);
+        let baseline = normalize(&captured.values);
+        let expected = normalize(&after);
+        if expected == baseline {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                "the Windows policy already equals the default-deny profile",
+            ));
+        }
+        let lines: Vec<String> = plan
+            .changes
+            .iter()
+            .map(|c| {
+                format!(
+                    "HKLM\\{}\\{} = {} {}",
+                    c.key, c.value_name, c.value_type, c.data
+                )
+            })
+            .collect();
+        let not_covered: Vec<String> = dry
+            .already_installed_denied
+            .iter()
+            .map(|i| mask_instance_id(i))
+            .collect();
+        let text = default_deny_profile_text(&plan.changes, &not_covered);
+        let now = self.clock.now_ms();
+        let id = sha256_hex(format!("{PROFILE_KEY}|{now}|{baseline:?}|{expected:?}").as_bytes())
+            [..16]
+            .to_string();
+        let details = serde_json::json!({
+            "session_id": id,
+            "kind": PROFILE_KEY,
+            "device_key": PROFILE_KEY,
+            "device_name": "Varsayılan ret profili (Aygıt Yükleme Kısıtlamaları)",
+            "hardware_id": "DiskDrive {4d36e967-e325-11ce-bfc1-08002be10318} prevent + allow list (layered)",
+            "retroactive": false,
+            "baseline": baseline,
+            "expected": expected,
+            "expected_lines": lines,
+            "checklist_text": text,
+            "already_installed_not_covered": not_covered,
+            "enforcement_gaps": dry.enforcement_gaps.iter().map(|i| mask_instance_id(i)).collect::<Vec<_>>(),
+            "over_blocking": dry.over_blocking.iter().map(|i| mask_instance_id(i)).collect::<Vec<_>>(),
+            "prepared_by": identity.actor(),
+            "applied_by": "administrator_gpedit_not_rustward",
+        });
+        self.session_event(
+            g,
+            Severity::Warning,
+            PREPARED,
+            format!(
+                "enforcement session {id} prepared for the default-deny profile ({} planned values) by {}; previous policy saved; the administrator applies the checklist in Group Policy",
+                plan.changes.len(),
+                identity.actor()
+            ),
+            details,
+        )?;
+        self.session_view(g)
+    }
+
     /// Verify that the administrator's change matches the plan exactly.
     pub(crate) fn verify_applied(
         &self,
@@ -353,11 +501,27 @@ impl AppService {
         if live == expected {
             let obs = self.enforcement_observation(g)?;
             let target = obs.devices.iter().find(|x| x.device_key == key);
-            let evidence = target.map_or("not_observed", |t| match t.observed.evidence {
-                EvidenceLevel::InstallDenied => "install_denied",
-                EvidenceLevel::PolicyOnly => "policy_only",
-                EvidenceLevel::None => "none",
-            });
+            let denied_now = obs
+                .devices
+                .iter()
+                .filter(|x| {
+                    x.observed.present == Some(true)
+                        && x.observed.evidence == EvidenceLevel::InstallDenied
+                })
+                .count();
+            let evidence = if key == PROFILE_KEY {
+                if denied_now > 0 {
+                    "install_denied"
+                } else {
+                    "policy_only"
+                }
+            } else {
+                target.map_or("not_observed", |t| match t.observed.evidence {
+                    EvidenceLevel::InstallDenied => "install_denied",
+                    EvidenceLevel::PolicyOnly => "policy_only",
+                    EvidenceLevel::None => "none",
+                })
+            };
             self.session_event(
                 g,
                 Severity::Warning,
@@ -368,6 +532,7 @@ impl AppService {
                     "device_key": key,
                     "device_name": s(d, "device_name"),
                     "evidence": evidence,
+                    "devices_denied_now": denied_now,
                     "problem_code": target.and_then(|t| t.observed.problem_code),
                     "read_write_tested": false,
                 }),
@@ -529,6 +694,10 @@ impl AppService {
         let expected = map_of(&d["expected"]);
         let key = s(&d, "device_key");
         let obs = self.enforcement_observation(g)?;
+        let profile = key == PROFILE_KEY;
+        let any_denied = obs.devices.iter().any(|x| {
+            x.observed.present == Some(true) && x.observed.evidence == EvidenceLevel::InstallDenied
+        });
         let target: Option<ObservedDeviceView> =
             obs.devices.into_iter().find(|x| x.device_key == key);
         let (configured, at_baseline, differences, policy_error) = match &live {
@@ -536,9 +705,13 @@ impl AppService {
             Err(e) => (false, false, Vec::new(), Some(e.message.clone())),
         };
         let denied = configured
-            && target
-                .as_ref()
-                .is_some_and(|t| t.observed.evidence == EvidenceLevel::InstallDenied);
+            && if profile {
+                any_denied
+            } else {
+                target
+                    .as_ref()
+                    .is_some_and(|t| t.observed.evidence == EvidenceLevel::InstallDenied)
+            };
         let error = policy_error.is_none() && !configured && !at_baseline;
         let recovery = error || (a.last_rollback_bad.is_some() && !at_baseline);
         let yn = |b: bool| if b { "yes" } else { "no" };
@@ -651,6 +824,15 @@ impl AppService {
                     .unwrap_or(false),
                 baseline: baseline.iter().map(|(k, v)| format!("{k} = {v}")).collect(),
                 expected_lines: lines,
+                kind: if profile {
+                    PROFILE_KEY.into()
+                } else {
+                    "device_deny".into()
+                },
+                checklist_text: d
+                    .get("checklist_text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
                 last_verification: a.last_apply.as_ref().map(|e| e.kind.clone()),
                 last_verification_ms: a.last_apply.as_ref().map(|e| e.utc_ms),
             }),
@@ -827,6 +1009,17 @@ impl AppService {
                 format!("{} connected device(s) report a generic, missing or conflicting identity; the manufacturer cannot be determined.", summary.unverified_identity),
             ));
         }
+        let rsa = rustward_enforcement::removable_storage::removable_storage_state(
+            &cap.removable_storage,
+        );
+        if readable && rsa.disks_restricted() {
+            blockers.push(blocker(
+                "removable_storage_class_wide",
+                "limitation",
+                "Çıkarılabilir Depolama Erişimi ilkesi tüm çıkarılabilir diskleri kısıtlıyor: üretici ayrımı yapamaz, izinli üreticilerin cihazları da kısıtlanır. Gerçek okuma/yazma reddi yalnızca yönetici gözlemiyle doğrulanır.".into(),
+                "The Removable Storage Access policy restricts all removable disks: it cannot tell manufacturers apart, so allowed manufacturers' devices are restricted too. A real read/write denial is only confirmed by administrator observation.".into(),
+            ));
+        }
         blockers.push(blocker(
             "read_write_unverified",
             "limitation",
@@ -885,11 +1078,37 @@ impl AppService {
             ));
         }
         let names: Vec<String> = denied.iter().map(|d| d.name.clone()).collect();
+        let mut profile_verified = false;
         let verified = Self::active_session(g)?.is_some_and(|a| {
             let key = s(&a.prepared.details, "device_key");
-            a.last_apply.as_ref().is_some_and(|e| e.kind == APPLY_OK)
-                && denied.iter().any(|d| device_key(&d.instance_id) == key)
+            let applied = a.last_apply.as_ref().is_some_and(|e| e.kind == APPLY_OK);
+            if key == PROFILE_KEY {
+                // Still compared live: the policy must equal the profile now.
+                profile_verified = applied
+                    && self
+                        .live_normalized()
+                        .is_ok_and(|l| l == map_of(&a.prepared.details["expected"]));
+                profile_verified
+            } else {
+                applied && denied.iter().any(|d| device_key(&d.instance_id) == key)
+            }
         });
+        if verified && profile_verified {
+            return Ok(mk(
+                "verified_active",
+                "Varsayılan ret profili doğrulandı (yalnızca yeni kurulumlar)",
+                "Default-deny profile verified (new installations only)",
+                format!(
+                    "Gerçek Windows kanıtı: yönetici onaylı oturumda varsayılan ret profili birebir doğrulandı ve Windows şu cihazların kurulumunu engelliyor: {}. Zaten kurulu cihazlar etkilenmez; okuma/yazma yolları ayrıca doğrulanmadı; kimlikler cihazın kendi bildirdiği dizelerdir.",
+                    names.join(", ")
+                ),
+                format!(
+                    "Real Windows evidence: the default-deny profile was verified in an administrator-approved session and Windows denies installation of: {}. Already-installed devices are not affected; read/write paths not verified; identities are self-reported strings.",
+                    names.join(", ")
+                ),
+                n,
+            ));
+        }
         if verified {
             Ok(mk(
                 "verified_active",

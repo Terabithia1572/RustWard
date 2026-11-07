@@ -100,6 +100,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             device_key: "0".repeat(32),
             retroactive: true,
         },
+        Request::PrepareDefaultDenySession,
         Request::VerifyEnforcementApplied {
             session_id: "0".repeat(16),
         },
@@ -172,6 +173,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
         assert_eq!(r.access_level(), AccessLevel::Administrator, "{}", r.name());
         match r {
             Request::PrepareEnforcementSession { .. }
+            | Request::PrepareDefaultDenySession
             | Request::VerifyEnforcementApplied { .. }
             | Request::VerifyEnforcementRollback { .. }
             | Request::CancelEnforcementSession { .. }
@@ -343,6 +345,11 @@ fn no_privileged_request_succeeds_without_an_elevated_administrator_on_the_admin
                 caller.account
             );
             attempts += 1;
+            // Stay below the per-minute audit cap so every attempt is
+            // itemised, however many privileged requests exist.
+            if attempts % u64::from(rustward_app::AUTH_AUDIT_LIMIT / 2) == 0 {
+                clock.advance(rustward_app::AUTH_AUDIT_WINDOW_MS);
+            }
         }
         // Stay below the per-minute audit cap so every attempt is itemised.
         clock.advance(rustward_app::AUTH_AUDIT_WINDOW_MS);
