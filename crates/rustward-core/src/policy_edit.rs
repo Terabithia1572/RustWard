@@ -430,6 +430,40 @@ fn check_name_conflicts(
     Ok(())
 }
 
+/// Combine catalog and policy warnings without emitting redundant duplicate
+/// `brand_not_enforceable` entries when an unidentifiable brand is also in
+/// the policy allowlist.
+#[must_use]
+pub fn combined_warnings(
+    catalog: &ValidatedCatalog,
+    policy: &ValidatedPolicy,
+) -> Vec<(&'static str, String)> {
+    let first_quoted = |s: &str| -> Option<String> {
+        let start = s.find('"')? + 1;
+        let end = s[start..].find('"')? + start;
+        Some(s[start..end].to_owned())
+    };
+    let policy_unenforceable_brands: Vec<String> = policy
+        .warnings()
+        .iter()
+        .filter(|w| w.code == "brand_not_enforceable")
+        .filter_map(|w| first_quoted(&w.detail))
+        .collect();
+    let mut out = Vec::new();
+    for w in catalog.warnings() {
+        if w.code == "brand_not_enforceable"
+            && first_quoted(&w.detail).is_some_and(|b| policy_unenforceable_brands.contains(&b))
+        {
+            continue;
+        }
+        out.push((w.code, w.detail.clone()));
+    }
+    for w in policy.warnings() {
+        out.push((w.code, w.detail.clone()));
+    }
+    out
+}
+
 /// Next local catalog version: `base+local.N`.
 #[must_use]
 pub fn next_catalog_version(current: &str) -> String {
@@ -571,12 +605,9 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
     next.policy.policy_version = current.policy.policy_version.saturating_add(1);
 
     let validated = next.validate()?;
-    let warnings = validated
-        .catalog
-        .warnings()
-        .iter()
-        .map(|w| w.detail.clone())
-        .chain(validated.policy.warnings().iter().map(|w| w.detail.clone()))
+    let warnings = combined_warnings(&validated.catalog, &validated.policy)
+        .into_iter()
+        .map(|(_, detail)| detail)
         .collect();
 
     let before = snapshot_brand(current, &brand_id);

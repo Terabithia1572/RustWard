@@ -170,6 +170,7 @@ fn reason_code(r: &DecisionReason) -> &'static str {
         DecisionReason::BrandAllowed { .. } => "brand_allowed",
         DecisionReason::BrandDenied { .. } => "brand_denied",
         DecisionReason::BrandNotAllowed { .. } => "brand_not_allowed",
+        DecisionReason::ConflictingIdentifiers { .. } => "conflicting_identifiers",
         DecisionReason::UnknownManufacturer { .. } => "unknown_manufacturer",
         DecisionReason::GenericVendorIdentity { .. } => "generic_vendor_identity",
         DecisionReason::MissingEnforceableIdentity => "missing_enforceable_identity",

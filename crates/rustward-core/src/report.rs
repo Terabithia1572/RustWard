@@ -23,6 +23,7 @@ use crate::device::{DeviceSnapshot, SnapshotSource};
 use crate::evaluate::{Decision, DecisionReason, Evidence, Verdict, evaluate_snapshot};
 use crate::plan::{check_consistency, compile_plan};
 use crate::policy::ValidatedPolicy;
+use crate::policy_edit::combined_warnings;
 
 /// The only enforcement state a Phase 1 report can carry.
 pub const ENFORCEMENT_NOT_ACTIVE: &str = "NOT ACTIVE";
@@ -61,6 +62,15 @@ pub enum ManufacturerMatch {
         /// Brand id.
         brand_id: String,
     },
+    /// INQUIRY vendor conflicts with USB VID manufacturer.
+    ConflictingIdentifiers {
+        /// INQUIRY brand id.
+        inquiry_brand: String,
+        /// Hex USB VID.
+        usb_vid: String,
+        /// Catalog brand(s) owning `usb_vid`.
+        vid_brands: Vec<String>,
+    },
     /// INQUIRY vendor not in the catalog.
     NotInCatalog {
         /// Vendor as displayed.
@@ -84,6 +94,15 @@ impl From<&DecisionReason> for ManufacturerMatch {
             | DecisionReason::BrandDenied { brand_id }
             | DecisionReason::BrandNotAllowed { brand_id } => Self::Matched {
                 brand_id: brand_id.clone(),
+            },
+            DecisionReason::ConflictingIdentifiers {
+                inquiry_brand,
+                usb_vid,
+                vid_brands,
+            } => Self::ConflictingIdentifiers {
+                inquiry_brand: inquiry_brand.clone(),
+                usb_vid: usb_vid.clone(),
+                vid_brands: vid_brands.clone(),
             },
             DecisionReason::UnknownManufacturer { vendor } => Self::NotInCatalog {
                 vendor: vendor.clone(),
@@ -417,11 +436,9 @@ pub fn build_report(
         policy_version: policy.policy().policy_version,
         catalog_version: catalog.catalog().catalog_version.clone(),
         summary,
-        configuration_warnings: catalog
-            .warnings()
-            .iter()
-            .map(|w| w.detail.clone())
-            .chain(policy.warnings().iter().map(|w| w.detail.clone()))
+        configuration_warnings: combined_warnings(catalog, policy)
+            .into_iter()
+            .map(|(_, detail)| detail)
             .collect(),
         read_warnings: if sanitize {
             Vec::new()
@@ -460,6 +477,14 @@ fn category_label(c: &DeviceCategory) -> String {
 fn match_label(m: &ManufacturerMatch) -> String {
     match m {
         ManufacturerMatch::Matched { brand_id } => format!("matched `{brand_id}`"),
+        ManufacturerMatch::ConflictingIdentifiers {
+            inquiry_brand,
+            usb_vid,
+            vid_brands,
+        } => format!(
+            "conflicting (`{inquiry_brand}` vs VID `{usb_vid}` -> `{}`)",
+            vid_brands.join(",")
+        ),
         ManufacturerMatch::NotInCatalog { vendor } => format!("not in catalog (`{vendor}`)"),
         ManufacturerMatch::GenericVendor { vendor } => format!("generic vendor (`{vendor}`)"),
         ManufacturerMatch::NoEnforceableIdentity => "no enforceable identity".into(),

@@ -129,6 +129,20 @@ pub fn explain(decision: &Decision) -> Explanation {
             ),
             format!("Catalog match: brand \"{brand_id}\"; not allowlisted or rule disabled."),
         ),
+        DecisionReason::ConflictingIdentifiers {
+            inquiry_brand,
+            usb_vid,
+            vid_brands,
+        } => (
+            format!(
+                "Kimlik çelişkisi: SCSI INQUIRY üreticisi \"{inquiry_brand}\" izinli markayla eşleşiyor ancak USB VID {usb_vid} farklı katalog üreticisine ({}) ait; güvenli ret uygulandı.",
+                vid_brands.join(", ")
+            ),
+            format!(
+                "Conflicting identifiers: SCSI INQUIRY vendor \"{inquiry_brand}\" matches an allowed brand, but USB VID {usb_vid} belongs to catalog brand(s) {}; denied fail-closed.",
+                vid_brands.join(", ")
+            ),
+        ),
         DecisionReason::UnknownManufacturer { vendor } => (
             format!("Üretici \"{vendor}\" katalogda yok; varsayılan karar reddetmektir."),
             format!("Vendor \"{vendor}\" is not in the catalog; the default decision is deny."),
@@ -166,7 +180,10 @@ pub fn explain(decision: &Decision) -> Explanation {
             "Device names are hints only and do not influence the decision.".into(),
         ));
     }
-    if decision
+    if !matches!(
+        decision.reason,
+        DecisionReason::ConflictingIdentifiers { .. }
+    ) && decision
         .evidence
         .iter()
         .any(|e| e.kind == EvidenceKind::Warning && e.source == "usb_vid")
