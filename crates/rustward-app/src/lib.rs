@@ -31,7 +31,9 @@ use rustward_core::evaluate::{Decision, Verdict, evaluate_device, evaluate_snaps
 use rustward_core::explain::explain;
 use rustward_core::ids::{StorageIdNamespace, vendor_level_hardware_id};
 use rustward_core::policy::ValidatedPolicy;
-use rustward_core::policy_edit::{EditError, PolicyEdit, PolicyState, apply_edit};
+use rustward_core::policy_edit::{
+    EditError, PolicyEdit, PolicyState, apply_edit, combined_warnings,
+};
 use rustward_core::report::utc_date;
 use rustward_enforcement::{
     DeviceInstallRestrictionProvider, EnforcementProvider, EnvironmentFacts,
@@ -54,7 +56,9 @@ use rustward_storage::{
 };
 
 pub use inventory::{EmptyInventory, FixtureInventory, InventorySource, LiveInventory};
-pub use policy_source::{LivePolicySource, PolicySource, StaticPolicySource};
+pub use policy_source::{
+    LivePolicySource, PolicySource, StaticPolicySource, UnavailablePolicySource,
+};
 
 /// Which host runs the application service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +320,7 @@ fn row_from(
     };
     let matched_brand = match &dec.reason {
         rustward_core::evaluate::DecisionReason::BrandAllowed { brand_id }
+        | rustward_core::evaluate::DecisionReason::BrandDenied { brand_id }
         | rustward_core::evaluate::DecisionReason::BrandNotAllowed { brand_id } => {
             Some(brand_id.clone())
         }
@@ -577,6 +582,12 @@ impl AppService {
         self
     }
 
+    pub(crate) fn capture_policy_unlocked(
+        &self,
+    ) -> Result<rustward_enforcement::policy_inspect::CapturedPolicy, String> {
+        self.policy_source.capture(self.clock.now_ms())
+    }
+
     /// Read-only enforcement readiness. Captures the policy (read-only),
     /// builds the plan merged with it, evaluates the activation gates (all
     /// refused in this build), models recovery and assesses installed
@@ -585,6 +596,7 @@ impl AppService {
         &self,
         g: &Inner,
         identity: &ClientIdentity,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementReadinessView, IpcError> {
         use rustward_enforcement::activation::{ActivationRequest, evaluate_gates};
         use rustward_enforcement::installed_assessment::{AssessmentInputs, assess};
@@ -594,7 +606,6 @@ impl AppService {
         };
         let v = Self::validated(&g.store)?;
         let snap = g.last.clone().unwrap_or_else(empty_snapshot);
-        let captured = self.policy_source.capture(self.clock.now_ms());
         let existing = captured
             .as_ref()
             .map_or_else(|_| PolicySnapshot::default(), |c| c.values.clone());
@@ -718,18 +729,11 @@ impl AppService {
         move |id: &str| map.get(id).cloned().unwrap_or_else(|| id.to_string())
     }
 
-    /// Turkish catalog + policy warnings.
+    /// Turkish catalog + policy warnings (deduplicated).
     fn warnings_tr(v: &Validated, names: l10n::Names<'_>) -> Vec<String> {
-        v.catalog
-            .warnings()
-            .iter()
-            .map(|w| l10n::issue(w.code, &w.detail, names))
-            .chain(
-                v.policy
-                    .warnings()
-                    .iter()
-                    .map(|w| l10n::issue(w.code, &w.detail, names)),
-            )
+        combined_warnings(&v.catalog, &v.policy)
+            .into_iter()
+            .map(|(code, detail)| l10n::issue(code, &detail, names))
             .collect()
     }
 
@@ -1244,36 +1248,27 @@ impl AppService {
                 .map_err(storage_err)?;
             }
         }
-        for rec in &diff.removed {
-            let Some(old_dec) = evaluate_snapshot(
-                &DeviceSnapshot {
-                    devices: vec![rec.clone()],
-                    ..old.clone()
-                },
-                &v.policy,
-                &v.catalog,
-            )
-            .into_iter()
-            .next() else {
-                continue;
-            };
-            // Removal events only for devices we track (category from the old tree).
+        if !diff.removed.is_empty() {
             let old_index = old.index();
-            let cat = classify(&old_index, rec).category;
-            if !stored_category(&cat) {
-                continue;
+            for rec in &diff.removed {
+                // Removal events only for devices we track (category from the old tree).
+                let cl = classify(&old_index, rec);
+                if !stored_category(&cl.category) {
+                    continue;
+                }
+                let old_dec = evaluate_device(cl, rec, &v.policy, &v.catalog);
+                summary.removed += 1;
+                event(
+                    &mut g.store,
+                    Severity::Info,
+                    "device_removed",
+                    Some(device_key(&rec.instance_id)),
+                    format!("{} removed", device_label(rec, &old_dec)),
+                    synthetic,
+                    serde_json::json!({}),
+                )
+                .map_err(storage_err)?;
             }
-            summary.removed += 1;
-            event(
-                &mut g.store,
-                Severity::Info,
-                "device_removed",
-                Some(device_key(&rec.instance_id)),
-                format!("{} removed", device_label(rec, &old_dec)),
-                synthetic,
-                serde_json::json!({}),
-            )
-            .map_err(storage_err)?;
         }
         for link in correlate_reenumeration(&diff) {
             event(
@@ -1457,12 +1452,9 @@ impl AppService {
 
     fn manufacturers(v: &Validated) -> ManufacturersView {
         let names = Self::names_from(v);
-        let warnings: Vec<String> = v
-            .catalog
-            .warnings()
-            .iter()
-            .map(|w| w.detail.clone())
-            .chain(v.policy.warnings().iter().map(|w| w.detail.clone()))
+        let warnings: Vec<String> = combined_warnings(&v.catalog, &v.policy)
+            .into_iter()
+            .map(|(_, detail)| detail)
             .collect();
         let warnings_tr = Self::warnings_tr(v, &names);
         let manufacturers = v
@@ -1537,7 +1529,11 @@ impl AppService {
         }
     }
 
-    fn dashboard(&self, g: &Inner) -> Result<DashboardView, IpcError> {
+    fn dashboard(
+        &self,
+        g: &Inner,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
+    ) -> Result<DashboardView, IpcError> {
         let state = self.provider.status();
         let devices = g.store.list_devices(false).map_err(storage_err)?;
         let names = Self::brand_names(&g.store);
@@ -1591,13 +1587,15 @@ impl AppService {
                 ..EventFilter::default()
             })
             .map_err(storage_err)?;
+        let windows_protection = self.windows_protection(g, captured)?;
+        let protection_verified =
+            state.is_verified_protection() || windows_protection.state == "verified_active";
         Ok(DashboardView {
             enforcement_state: state.code().into(),
             enforcement_label_tr: state.label_tr().into(),
             enforcement_label_en: state.label_en().into(),
-            protection_verified: state.is_verified_protection(),
-            not_validated_banner: (!state.is_verified_protection())
-                .then(|| NOT_VALIDATED_BANNER_TR.into()),
+            protection_verified,
+            not_validated_banner: (!protection_verified).then(|| NOT_VALIDATED_BANNER_TR.into()),
             service: self.service_status(g),
             workstation_id,
             policy_version,
@@ -1613,7 +1611,7 @@ impl AppService {
             .unwrap_or(u32::MAX),
             recent_denied: denied.into_iter().take(5).map(device_view).collect(),
             recent_events: events.into_iter().map(|e| event_view(e, &names)).collect(),
-            windows_protection: self.windows_protection(g)?,
+            windows_protection,
             warnings_tr,
             warnings,
             synthetic_data_present,
@@ -1657,12 +1655,9 @@ impl AppService {
                     errors: Vec::new(),
                     errors_tr: Vec::new(),
                     warnings_tr: Self::warnings_tr(&v, &Self::brand_names(&g.store)),
-                    warnings: v
-                        .catalog
-                        .warnings()
-                        .iter()
-                        .map(|w| w.detail.clone())
-                        .chain(v.policy.warnings().iter().map(|w| w.detail.clone()))
+                    warnings: combined_warnings(&v.catalog, &v.policy)
+                        .into_iter()
+                        .map(|(_, detail)| detail)
                         .collect(),
                 },
                 Some(v),
@@ -1946,8 +1941,9 @@ impl Handler for AppService {
     ) -> Result<ResponseBody, IpcError> {
         match request {
             Request::GetDashboard => {
+                let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
-                Ok(ResponseBody::Dashboard(self.dashboard(&g)?))
+                Ok(ResponseBody::Dashboard(self.dashboard(&g, captured)?))
             }
             Request::ListDevices { include_absent } => {
                 let g = self.lock()?;
@@ -2016,8 +2012,9 @@ impl Handler for AppService {
             }
             Request::GetEnforcementObservation => {
                 let t = std::time::Instant::now();
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
-                let v = self.enforcement_observation(&mut g)?;
+                let v = self.enforcement_observation(&mut g, captured)?;
                 g.perf.last_observation_ms = Some(elapsed_ms(t));
                 Ok(ResponseBody::EnforcementObservation(Box::new(v)))
             }
@@ -2025,64 +2022,72 @@ impl Handler for AppService {
                 device_key,
                 retroactive,
             } => {
+                let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
                 Ok(ResponseBody::PolicyChecklist(Box::new(
-                    self.policy_checklist(&g, device_key, *retroactive)?,
+                    self.policy_checklist(&g, device_key, *retroactive, captured)?,
                 )))
             }
             Request::GetEnforcementSession => {
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
                 Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.session_view(&mut g)?,
+                    self.session_view(&mut g, captured)?,
                 )))
             }
             Request::PrepareEnforcementSession {
                 device_key,
                 retroactive,
             } => {
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
                 Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.prepare_session(&mut g, device_key, *retroactive, identity)?,
+                    self.prepare_session(&mut g, device_key, *retroactive, identity, captured)?,
                 )))
             }
             Request::PrepareDefaultDenySession => {
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
                 Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.prepare_profile_session(&mut g, identity)?,
+                    self.prepare_profile_session(&mut g, identity, captured)?,
                 )))
             }
             Request::VerifyEnforcementApplied { session_id } => {
                 // Independent device evidence: re-enumerate Windows devices
-                // first (outside the state lock). A failed refresh leaves
-                // the last inventory; the view reports its time.
+                // and capture Windows policy first (outside the state lock).
+                // A failed refresh leaves the last inventory; the view reports its time.
                 let t = std::time::Instant::now();
                 let _ = self.refresh_inventory();
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
-                let r = self.verify_applied(&mut g, session_id);
+                let r = self.verify_applied(&mut g, session_id, captured);
                 g.perf.last_verification_ms = Some(elapsed_ms(t));
                 Ok(ResponseBody::EnforcementSession(Box::new(r?)))
             }
             Request::VerifyEnforcementRollback { session_id } => {
                 // Independent device evidence: re-enumerate Windows devices
-                // first (outside the state lock). A failed refresh leaves
-                // the last inventory; the view reports its time.
+                // and capture Windows policy first (outside the state lock).
+                // A failed refresh leaves the last inventory; the view reports its time.
                 let t = std::time::Instant::now();
                 let _ = self.refresh_inventory();
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
-                let r = self.verify_rollback(&mut g, session_id);
+                let r = self.verify_rollback(&mut g, session_id, captured);
                 g.perf.last_verification_ms = Some(elapsed_ms(t));
                 Ok(ResponseBody::EnforcementSession(Box::new(r?)))
             }
             Request::CancelEnforcementSession { session_id } => {
+                let captured = self.capture_policy_unlocked();
                 let mut g = self.lock()?;
                 Ok(ResponseBody::EnforcementSession(Box::new(
-                    self.cancel_session(&mut g, session_id)?,
+                    self.cancel_session(&mut g, session_id, captured)?,
                 )))
             }
             Request::GetEnforcementReadiness => {
+                let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
                 Ok(ResponseBody::EnforcementReadiness(Box::new(
-                    self.enforcement_readiness(&g, identity)?,
+                    self.enforcement_readiness(&g, identity, captured)?,
                 )))
             }
             Request::GetSettings => {

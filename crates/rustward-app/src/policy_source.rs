@@ -42,3 +42,21 @@ impl PolicySource for StaticPolicySource {
         "fixture"
     }
 }
+
+/// An explicitly unavailable policy source (isolated cross-platform unit and
+/// integration tests that must not inspect the host machine's registry).
+#[derive(Debug, Default, Clone)]
+pub struct UnavailablePolicySource(pub String);
+
+impl PolicySource for UnavailablePolicySource {
+    fn capture(&self, _now_ms: i64) -> Result<CapturedPolicy, String> {
+        Err(if self.0.is_empty() {
+            "policy source unavailable in isolated test".into()
+        } else {
+            self.0.clone()
+        })
+    }
+    fn name(&self) -> &'static str {
+        "unavailable"
+    }
+}

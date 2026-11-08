@@ -69,11 +69,11 @@ impl AppService {
     pub(crate) fn enforcement_observation(
         &self,
         g: &mut Inner,
+        captured: Result<CapturedPolicy, String>,
     ) -> Result<EnforcementObservationView, IpcError> {
         let v = Self::validated(&g.store)?;
         let snap = g.last.clone().unwrap_or_else(empty_snapshot);
         let now = self.clock.now_ms();
-        let captured = self.policy_source.capture(now);
         let (policy_source, policy_error, cap) = match captured {
             Ok(c) => (self.policy_source.name().to_string(), None, c),
             Err(e) => (
@@ -237,6 +237,7 @@ impl AppService {
         g: &Inner,
         key: &str,
         retroactive: bool,
+        captured: Result<CapturedPolicy, String>,
     ) -> Result<PolicyChecklistView, IpcError> {
         let v = Self::validated(&g.store)?;
         let snap = g.last.clone().unwrap_or_else(empty_snapshot);
@@ -248,12 +249,9 @@ impl AppService {
             .ok_or_else(|| {
                 IpcError::new(ErrorCode::NotFound, "device not in the current inventory")
             })?;
-        let captured = self
-            .policy_source
-            .capture(self.clock.now_ms())
-            .map_err(|e| {
-                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
-            })?;
+        let captured = captured.map_err(|e| {
+            IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+        })?;
         let checklist = device_deny_checklist(
             &snap,
             &v.policy,

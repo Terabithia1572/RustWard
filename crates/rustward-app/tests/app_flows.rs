@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use rustward_app::{
     AppConfig, AppService, BackendKind, EmptyInventory, FixtureInventory, InventorySource,
-    default_policy_state,
+    UnavailablePolicySource, default_policy_state,
 };
 use rustward_core::catalog::{BrandIdentifier, IdentifierKind, Verification};
 use rustward_core::device::DeviceSnapshot;
@@ -75,6 +75,7 @@ fn service_with(
         &default_policy_state().unwrap(),
     )
     .unwrap()
+    .with_policy_source(Box::new(UnavailablePolicySource::default()))
 }
 
 fn mem_service() -> AppService {
@@ -1188,4 +1189,167 @@ fn enforcement_readiness_is_read_only_and_reports_inspection_and_assessment() {
     // Reading changed nothing: no policy version, no audit event.
     assert_eq!(policy_version(&s), version);
     assert_eq!(event_kinds(&s), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn live_policy_source_reads_windows_registry_read_only_without_mutating_anything() {
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = AppService::new(
+        Store::open_in_memory(clock.clone()).unwrap(),
+        clock,
+        Box::new(EmptyInventory),
+        config(true, None),
+        &default_policy_state().unwrap(),
+    )
+    .unwrap();
+    call(&s, Request::LoadSyntheticInventory);
+    let version = policy_version(&s);
+    let before = event_kinds(&s);
+    let ResponseBody::EnforcementReadiness(v) = call(&s, Request::GetEnforcementReadiness) else {
+        panic!()
+    };
+    assert_eq!(v.inspection_source, "windows_registry_read_only");
+    assert!(v.inspection.is_some());
+    assert!(v.inspection_error.is_none());
+    assert!(!v.actual_enforcement.activation_available);
+    assert_eq!(policy_version(&s), version);
+    assert_eq!(event_kinds(&s), before);
+}
+
+#[test]
+fn denylist_matched_brand_conflicting_vid_and_deduplicated_warnings() {
+    use rustward_core::device::{DeviceRecord, SNAPSHOT_SCHEMA_VERSION, SnapshotSource};
+    use std::collections::HashSet;
+
+    struct CustomInv(DeviceSnapshot);
+    impl InventorySource for CustomInv {
+        fn collect(&mut self) -> Result<(DeviceSnapshot, Vec<String>), String> {
+            Ok((self.0.clone(), vec![]))
+        }
+        fn kind(&self) -> &'static str {
+            "synthetic"
+        }
+    }
+
+    let snap = DeviceSnapshot {
+        schema_version: SNAPSHOT_SCHEMA_VERSION,
+        source: SnapshotSource::Synthetic {
+            description: "denylist and conflict check".into(),
+        },
+        devices: vec![
+            DeviceRecord {
+                instance_id: "USB\\VID_0951&PID_1666\\K001".into(),
+                hardware_ids: vec!["USB\\VID_0951&PID_1666".into()],
+                class_name: Some("USB".into()),
+                enumerator: Some("USB".into()),
+                service: Some("USBSTOR".into()),
+                present: Some(true),
+                ..DeviceRecord::default()
+            },
+            DeviceRecord {
+                instance_id: "USBSTOR\\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0&REV_PMAP\\K001&0"
+                    .into(),
+                hardware_ids: vec![
+                    "USBSTOR\\DiskKingstonDataTraveler_3.0PMAP".into(),
+                    "USBSTOR\\DiskKingstonDataTraveler_3.0".into(),
+                    "USBSTOR\\DiskKingston".into(),
+                ],
+                class_guid: Some("{4d36e967-e325-11ce-bfc1-08002be10318}".into()),
+                class_name: Some("DiskDrive".into()),
+                enumerator: Some("USBSTOR".into()),
+                service: Some("disk".into()),
+                parent_instance_id: Some("USB\\VID_0951&PID_1666\\K001".into()),
+                present: Some(true),
+                ..DeviceRecord::default()
+            },
+            DeviceRecord {
+                instance_id: "USB\\VID_0951&PID_9999\\SPOOFK1".into(),
+                hardware_ids: vec!["USB\\VID_0951&PID_9999".into()],
+                class_name: Some("USB".into()),
+                enumerator: Some("USB".into()),
+                service: Some("USBSTOR".into()),
+                present: Some(true),
+                ..DeviceRecord::default()
+            },
+            DeviceRecord {
+                instance_id: "USBSTOR\\DISK&VEN_SANDISK&PROD_ULTRA&REV_1.00\\SPOOFK1&0".into(),
+                hardware_ids: vec![
+                    "USBSTOR\\DiskSanDisk_Ultra___________1.00".into(),
+                    "USBSTOR\\DiskSanDisk_Ultra___________".into(),
+                    "USBSTOR\\DiskSanDisk_".into(),
+                ],
+                class_guid: Some("{4d36e967-e325-11ce-bfc1-08002be10318}".into()),
+                class_name: Some("DiskDrive".into()),
+                enumerator: Some("USBSTOR".into()),
+                service: Some("disk".into()),
+                parent_instance_id: Some("USB\\VID_0951&PID_9999\\SPOOFK1".into()),
+                present: Some(true),
+                ..DeviceRecord::default()
+            },
+        ],
+    };
+
+    let clock = Arc::new(ManualClock::new(1_793_836_800_000));
+    let s = service_with(
+        Store::open_in_memory(clock.clone()).unwrap(),
+        clock,
+        Box::new(CustomInv(snap)),
+        true,
+        None,
+    );
+    call(&s, Request::RefreshInventory);
+
+    let devs = devices(&s);
+    let kingston = devs
+        .iter()
+        .find(|d| d.usb_vid_pid.as_deref() == Some("0951:1666"))
+        .unwrap();
+    assert_eq!(kingston.simulated_decision, "deny");
+    assert_eq!(kingston.reason, "brand_denied");
+    assert_eq!(kingston.matched_brand.as_deref(), Some("kingston"));
+
+    let conflict = devs
+        .iter()
+        .find(|d| d.usb_vid_pid.as_deref() == Some("0951:9999"))
+        .unwrap();
+    assert_eq!(conflict.simulated_decision, "deny");
+    assert_eq!(conflict.reason, "conflicting_identifiers");
+    assert_eq!(conflict.matched_brand, None);
+
+    let ResponseBody::Explanation(exp) = call(
+        &s,
+        Request::ExplainDevice {
+            device_key: conflict.device_key.clone(),
+        },
+    ) else {
+        panic!()
+    };
+    assert!(
+        exp.explanation.summary_tr.contains("Kimlik çelişkisi"),
+        "{}",
+        exp.explanation.summary_tr
+    );
+    assert!(!exp.explanation.summary_tr.contains("[çevrilmedi]"));
+
+    let ResponseBody::Manufacturers(m) = call(&s, Request::ListManufacturers) else {
+        panic!()
+    };
+    let unique_tr: HashSet<&String> = m.warnings_tr.iter().collect();
+    assert_eq!(
+        unique_tr.len(),
+        m.warnings_tr.len(),
+        "manufacturer warnings_tr must not contain duplicate entries: {:?}",
+        m.warnings_tr
+    );
+    let ResponseBody::Diagnostics(diag) = call(&s, Request::GetDiagnostics) else {
+        panic!()
+    };
+    let unique_diag_tr: HashSet<&String> = diag.policy.warnings_tr.iter().collect();
+    assert_eq!(
+        unique_diag_tr.len(),
+        diag.policy.warnings_tr.len(),
+        "diagnostics warnings_tr must not contain duplicate entries: {:?}",
+        diag.policy.warnings_tr
+    );
 }

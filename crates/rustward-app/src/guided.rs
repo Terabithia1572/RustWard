@@ -215,13 +215,12 @@ impl AppService {
         }))
     }
 
-    fn live_normalized(&self) -> Result<BTreeMap<String, String>, IpcError> {
-        let c = self
-            .policy_source
-            .capture(self.clock.now_ms())
-            .map_err(|e| {
-                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
-            })?;
+    fn normalized_from(
+        captured: &Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
+    ) -> Result<BTreeMap<String, String>, IpcError> {
+        let c = captured.as_ref().map_err(|e| {
+            IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+        })?;
         Ok(normalize(&c.values))
     }
 
@@ -272,6 +271,7 @@ impl AppService {
         key: &str,
         retroactive: bool,
         identity: &ClientIdentity,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementSessionView, IpcError> {
         if Self::active_session(g)?.is_some() {
             return Err(IpcError::new(
@@ -289,12 +289,9 @@ impl AppService {
             .ok_or_else(|| {
                 IpcError::new(ErrorCode::NotFound, "device not in the current inventory")
             })?;
-        let captured = self
-            .policy_source
-            .capture(self.clock.now_ms())
-            .map_err(|e| {
-                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
-            })?;
+        let captured = captured.map_err(|e| {
+            IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+        })?;
         let checklist = device_deny_checklist(
             &snap,
             &v.policy,
@@ -338,7 +335,7 @@ impl AppService {
             ),
             details,
         )?;
-        self.session_view(g)
+        self.session_view(g, Ok(captured))
     }
 
     /// Prepare a default-deny profile session (administrator). Compiles the
@@ -349,6 +346,7 @@ impl AppService {
         &self,
         g: &mut Inner,
         identity: &ClientIdentity,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementSessionView, IpcError> {
         use rustward_enforcement::checklist::default_deny_profile_text;
         use rustward_enforcement::policy_state::{apply_ops, forward_ops, merge_plan};
@@ -362,12 +360,9 @@ impl AppService {
         }
         let v = Self::validated(&g.store)?;
         let snap = g.last.clone().unwrap_or_else(empty_snapshot);
-        let captured = self
-            .policy_source
-            .capture(self.clock.now_ms())
-            .map_err(|e| {
-                IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
-            })?;
+        let captured = captured.map_err(|e| {
+            IpcError::new(ErrorCode::Unavailable, format!("policy not readable: {e}"))
+        })?;
         let mut env = Self::env_facts();
         env.os_build = captured.os.build.zip(captured.os.ubr);
         let inputs = PlanInputs {
@@ -477,7 +472,7 @@ impl AppService {
             ),
             details,
         )?;
-        self.session_view(g)
+        self.session_view(g, Ok(captured))
     }
 
     /// Verify that the administrator's change matches the plan exactly.
@@ -485,10 +480,11 @@ impl AppService {
         &self,
         g: &mut Inner,
         session_id: &str,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementSessionView, IpcError> {
         let a = Self::require(g, session_id)?;
         let d = &a.prepared.details;
-        let live = self.live_normalized()?;
+        let live = Self::normalized_from(&captured)?;
         let baseline = map_of(&d["baseline"]);
         let expected = map_of(&d["expected"]);
         if live == baseline {
@@ -499,7 +495,7 @@ impl AppService {
         }
         let key = s(d, "device_key");
         if live == expected {
-            let obs = self.enforcement_observation(g)?;
+            let obs = self.enforcement_observation(g, captured.clone())?;
             let target = obs.devices.iter().find(|x| x.device_key == key);
             let denied_now = obs
                 .devices
@@ -550,7 +546,7 @@ impl AppService {
                 }),
             )?;
         }
-        self.session_view(g)
+        self.session_view(g, captured)
     }
 
     /// Verify that the previous policy is back.
@@ -558,14 +554,15 @@ impl AppService {
         &self,
         g: &mut Inner,
         session_id: &str,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementSessionView, IpcError> {
         let a = Self::require(g, session_id)?;
         let d = &a.prepared.details;
-        let live = self.live_normalized()?;
+        let live = Self::normalized_from(&captured)?;
         let baseline = map_of(&d["baseline"]);
         let key = s(d, "device_key");
         if live == baseline {
-            let obs = self.enforcement_observation(g)?;
+            let obs = self.enforcement_observation(g, captured.clone())?;
             let status = obs
                 .devices
                 .iter()
@@ -595,7 +592,7 @@ impl AppService {
                 }),
             )?;
         }
-        self.session_view(g)
+        self.session_view(g, captured)
     }
 
     /// Cancel a session whose change was never applied.
@@ -603,9 +600,10 @@ impl AppService {
         &self,
         g: &mut Inner,
         session_id: &str,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<EnforcementSessionView, IpcError> {
         let a = Self::require(g, session_id)?;
-        let live = self.live_normalized()?;
+        let live = Self::normalized_from(&captured)?;
         if live != map_of(&a.prepared.details["baseline"]) {
             return Err(IpcError::new(
                 ErrorCode::Conflict,
@@ -619,13 +617,17 @@ impl AppService {
             format!("enforcement session {session_id} cancelled; the Windows policy was not changed"),
             serde_json::json!({ "session_id": session_id, "device_key": s(&a.prepared.details, "device_key") }),
         )?;
-        self.session_view(g)
+        self.session_view(g, captured)
     }
 
     /// Current session state (read-only towards Windows).
-    pub(crate) fn session_view(&self, g: &mut Inner) -> Result<EnforcementSessionView, IpcError> {
+    pub(crate) fn session_view(
+        &self,
+        g: &mut Inner,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
+    ) -> Result<EnforcementSessionView, IpcError> {
         let active = Self::active_session(g)?;
-        let live = self.live_normalized();
+        let live = Self::normalized_from(&captured);
         let step = |code: &str, tr: &str, en: &str, status: &str| LadderStepView {
             code: code.into(),
             label_tr: tr.into(),
@@ -693,7 +695,7 @@ impl AppService {
         let baseline = map_of(&d["baseline"]);
         let expected = map_of(&d["expected"]);
         let key = s(&d, "device_key");
-        let obs = self.enforcement_observation(g)?;
+        let obs = self.enforcement_observation(g, captured)?;
         let profile = key == PROFILE_KEY;
         let any_denied = obs.devices.iter().any(|x| {
             x.observed.present == Some(true) && x.observed.evidence == EvidenceLevel::InstallDenied
@@ -854,6 +856,7 @@ impl AppService {
     pub(crate) fn windows_protection(
         &self,
         g: &Inner,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<rustward_ipc::messages::WindowsProtectionView, IpcError> {
         use rustward_core::catalog::Verification;
         use rustward_core::policy::PolicyMode;
@@ -870,7 +873,6 @@ impl AppService {
         };
         let v = Self::validated(&g.store)?;
         let now = self.clock.now_ms();
-        let captured = self.policy_source.capture(now);
         let readable = captured.is_ok();
         let cap = captured.unwrap_or(CapturedPolicy {
             captured_ms: now,
@@ -1085,9 +1087,8 @@ impl AppService {
             if key == PROFILE_KEY {
                 // Still compared live: the policy must equal the profile now.
                 profile_verified = applied
-                    && self
-                        .live_normalized()
-                        .is_ok_and(|l| l == map_of(&a.prepared.details["expected"]));
+                    && readable
+                    && normalize(&cap.values) == map_of(&a.prepared.details["expected"]);
                 profile_verified
             } else {
                 applied && denied.iter().any(|d| device_key(&d.instance_id) == key)

@@ -105,15 +105,26 @@ pub trait DeviceSource {
     fn read_property(&self, device: &Self::Device, key: PropKey, buf: &mut [u8]) -> RawRead;
 }
 
+/// Initial stack-allocated buffer size for `SetupDiGetDevicePropertyW` so
+/// typical device strings and GUIDs succeed in a single Win32 call without a
+/// separate sizing syscall or per-property heap allocation.
+const INITIAL_PROPERTY_PROBE_BYTES: usize = 512;
+
 /// Read one property with buffer growth. `Ok(None)` = property absent.
 pub fn get_property<S: DeviceSource>(
     source: &S,
     device: &S::Device,
     key: PropKey,
 ) -> Result<Option<PropValue>, InventoryError> {
-    let mut buf: Vec<u8> = Vec::new();
-    for _ in 0..PROPERTY_READ_ATTEMPTS {
-        match source.read_property(device, key, &mut buf) {
+    let mut stack_buf = [0u8; INITIAL_PROPERTY_PROBE_BYTES];
+    let mut heap_buf: Vec<u8> = Vec::new();
+    for attempt in 0..PROPERTY_READ_ATTEMPTS {
+        let buf: &mut [u8] = if attempt == 0 {
+            &mut stack_buf
+        } else {
+            &mut heap_buf
+        };
+        match source.read_property(device, key, buf) {
             RawRead::Ok { prop_type, len } => {
                 let used = usize::try_from(len).unwrap_or(usize::MAX).min(buf.len());
                 return Ok(Some(decode_property(prop_type, &buf[..used])));
@@ -133,7 +144,7 @@ pub fn get_property<S: DeviceSource>(
                 if needed == 0 || needed <= buf.len() {
                     return Err(InventoryError::PropertySizeInconsistent);
                 }
-                buf = vec![0u8; needed];
+                heap_buf = vec![0u8; needed];
             }
             RawRead::Err { code, .. } => {
                 return Err(InventoryError::Win32 {
@@ -376,6 +387,28 @@ mod tests {
             devs[0].parent_instance_id, None,
             "absent property is None, not an error"
         );
+    }
+
+    #[test]
+    fn reads_property_larger_than_stack_probe_via_heap_growth() {
+        let long_id = format!("USBSTOR\\{}", "A".repeat(400));
+        let mut d = device("USBSTOR\\Disk&Ven_SanDisk\\1&0");
+        let encoded = multi(&[long_id.as_str(), "GenDisk"]);
+        assert!(
+            encoded.len() > INITIAL_PROPERTY_PROBE_BYTES,
+            "must exceed stack probe size to exercise heap fallback"
+        );
+        d.insert(
+            PropKey::HardwareIds,
+            Prop::Value(DEVPROP_TYPE_STRING_LIST, encoded),
+        );
+        let mut m = Mock {
+            devices: vec![d],
+            ..Mock::default()
+        };
+        let (devs, warnings) = enumerate_all(&mut m).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(devs[0].hardware_ids, [long_id.as_str(), "GenDisk"]);
     }
 
     #[test]

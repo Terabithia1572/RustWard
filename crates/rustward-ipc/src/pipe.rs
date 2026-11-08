@@ -83,10 +83,21 @@ use crate::transport::{Transport, TransportError};
 use crate::{AccessLevel, ClientIdentity, IdentitySource};
 
 const PIPE_BUFFER: u32 = 64 * 1024;
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Once the first byte of a frame has arrived, the rest must follow within
 /// this time (otherwise the frame is incomplete and the connection closed).
 const FRAME_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn poll_backoff(attempt: u32, deadline: Instant) {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return;
+    }
+    match attempt {
+        0..=7 => std::thread::yield_now(),
+        8..=23 => std::thread::sleep(Duration::from_millis(1).min(remaining)),
+        _ => std::thread::sleep(Duration::from_millis(5).min(remaining)),
+    }
+}
 /// Rights a client needs: read, write data. Never `GENERIC_WRITE`, which
 /// includes `FILE_CREATE_PIPE_INSTANCE`.
 const CLIENT_ACCESS: u32 = GENERIC_READ | FILE_WRITE_DATA;
@@ -744,15 +755,18 @@ impl PipeConnection {
     /// an empty pipe.
     fn read_exact_until(&self, out: &mut [u8], deadline: Instant) -> Result<(), TransportError> {
         let mut filled = 0usize;
+        let mut empty_polls = 0u32;
         while filled < out.len() {
             let avail = self.available()?;
             if avail == 0 {
                 if Instant::now() >= deadline {
                     return Err(TransportError::Timeout);
                 }
-                std::thread::sleep(POLL_INTERVAL);
+                poll_backoff(empty_polls, deadline);
+                empty_polls = empty_polls.saturating_add(1);
                 continue;
             }
+            empty_polls = 0;
             let want = (out.len() - filled).min(usize::try_from(avail).unwrap_or(usize::MAX));
             let want_u32 = u32::try_from(want).unwrap_or(u32::MAX);
             let mut read = 0u32;
@@ -815,11 +829,13 @@ impl Transport for PipeConnection {
         // Wait for the first byte without consuming anything, so a Timeout
         // never splits a frame (contract of `rpc::serve_connection_until`).
         let wait_until = Instant::now() + timeout;
+        let mut empty_polls = 0u32;
         while self.available()? == 0 {
             if Instant::now() >= wait_until {
                 return Err(TransportError::Timeout);
             }
-            std::thread::sleep(POLL_INTERVAL);
+            poll_backoff(empty_polls, wait_until);
+            empty_polls = empty_polls.saturating_add(1);
         }
         let deadline = Instant::now() + FRAME_COMPLETION_TIMEOUT;
         let incomplete = |e: TransportError| match e {
@@ -848,5 +864,124 @@ impl Drop for PipeConnection {
                 DisconnectNamedPipe(self.handle.0);
             }
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod windows_tests {
+    use super::*;
+    use crate::frame::encode;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+
+    fn unique_pipe_name(tag: &str) -> String {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        format!(r"\\.\pipe\RustWard\test-{tag}-{}-{n}", std::process::id())
+    }
+
+    #[test]
+    fn windows_named_pipe_impersonation_squatting_and_roundtrip_latency() {
+        // SDDL allowing Authenticated Users + Administrators + LocalSystem so
+        // non-elevated test processes can bind and connect to this test pipe.
+        let sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)";
+        let pipe_name = unique_pipe_name("rpc");
+        let listener =
+            std::sync::Arc::new(PipeListener::new(&pipe_name, sddl, AccessLevel::ReadOnly));
+
+        let server_listener = std::sync::Arc::clone(&listener);
+        let server = std::thread::spawn(move || {
+            let mut conn = server_listener.accept().expect("accept");
+            // First frame triggers pipe impersonation context on Windows.
+            let first = conn.recv(Duration::from_secs(5)).expect("recv 0");
+            let id = conn.client_identity().expect("impersonate client");
+            assert!(!id.account.is_empty());
+            assert!(id.sid.as_deref().is_some_and(|s| s.starts_with("S-1-5-")));
+            assert_eq!(id.source, IdentitySource::NamedPipeToken);
+            assert_eq!(id.channel_max_access, AccessLevel::ReadOnly);
+            conn.send(&first).expect("echo 0");
+
+            for _ in 1..20 {
+                let req = conn.recv(Duration::from_secs(5)).expect("recv");
+                conn.send(&req).expect("echo");
+            }
+        });
+
+        // Wait briefly for server to enter ConnectNamedPipe, then connect.
+        let mut client = loop {
+            let name_w = wide(&pipe_name);
+            // SAFETY: NUL-terminated wide string.
+            let h = unsafe {
+                CreateFileW(
+                    name_w.as_ptr(),
+                    CLIENT_ACCESS,
+                    0,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                    ptr::null_mut(),
+                )
+            };
+            if h != INVALID_HANDLE_VALUE {
+                break PipeConnection {
+                    handle: OwnedHandle(h),
+                    server_side: false,
+                    max_access: AccessLevel::ReadOnly,
+                };
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+
+        // Verify a second listener with FILE_FLAG_FIRST_PIPE_INSTANCE is rejected (anti-squatting).
+        let squatter = PipeListener::new(&pipe_name, sddl, AccessLevel::ReadOnly);
+        assert!(
+            squatter.create_instance(true).is_err(),
+            "FILE_FLAG_FIRST_PIPE_INSTANCE must reject duplicate pipe creation"
+        );
+
+        let frame =
+            encode(&serde_json::json!({"id": 1, "request": {"type": "get_dashboard"}})).unwrap();
+        let t0 = Instant::now();
+        for _ in 0..20 {
+            client.send(&frame).expect("client send");
+            let reply = client.recv(Duration::from_secs(5)).expect("client recv");
+            assert_eq!(reply, frame);
+        }
+        let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "PERF_NAMED_PIPE_20_CALLS: total={total_ms:.2}ms avg={:.2}ms/call",
+            total_ms / 20.0
+        );
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn production_connect_rejects_non_service_pipe_impostor() {
+        let sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)";
+        let pipe_name = unique_pipe_name("impostor");
+        let listener =
+            std::sync::Arc::new(PipeListener::new(&pipe_name, sddl, AccessLevel::ReadOnly));
+        let l2 = std::sync::Arc::clone(&listener);
+        let srv = std::thread::spawn(move || {
+            if let Ok(mut conn) = l2.accept() {
+                let _ = conn.recv(Duration::from_millis(300));
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let res = loop {
+            match PipeConnection::connect(&pipe_name, Duration::from_millis(200)) {
+                Err(TransportError::Disconnected) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                other => break other,
+            }
+        };
+        assert!(
+            matches!(res, Err(TransportError::PeerRejected(_))),
+            "non-service pipe server must be rejected: {res:?}"
+        );
+        let _ = srv.join();
     }
 }

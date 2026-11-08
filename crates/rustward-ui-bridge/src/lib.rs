@@ -60,7 +60,9 @@ mod dev {
             let clock: Arc<dyn Clock> = Arc::new(SystemClock);
             let store = Store::open(&dir.join("rustward-dev.db"), Arc::clone(&clock))
                 .map_err(|e| e.to_string())?;
-            let inventory: Box<dyn InventorySource> = if cfg!(windows) {
+            let force_empty = std::env::var("RUSTWARD_DEV_INVENTORY")
+                .is_ok_and(|v| v.eq_ignore_ascii_case("empty"));
+            let inventory: Box<dyn InventorySource> = if cfg!(windows) && !force_empty {
                 Box::new(LiveInventory)
             } else {
                 Box::new(EmptyInventory)
@@ -79,10 +81,15 @@ mod dev {
                 &default_policy_state()?,
             )
             .map_err(|e| e.to_string())?;
-            // Development only: a SYNTHETIC policy capture file can stand in
-            // for the read-only Windows registry capture (inspection source
-            // "fixture"). Never used by the service or a release build.
+            // Development only: a SYNTHETIC policy capture file (or explicit
+            // "unavailable" sentinel for hermetic integration tests) can stand
+            // in for the read-only Windows registry capture. Never used by the
+            // service or a release build.
             let app = match std::env::var_os("RUSTWARD_DEV_POLICY_CAPTURE") {
+                Some(val) if val.to_string_lossy().eq_ignore_ascii_case("unavailable") => app
+                    .with_policy_source(Box::new(rustward_app::UnavailablePolicySource(
+                        "policy inspection requires Windows (disabled in isolated test)".into(),
+                    ))),
                 Some(path) => {
                     let text = std::fs::read_to_string(&path)
                         .map_err(|e| format!("RUSTWARD_DEV_POLICY_CAPTURE: {e}"))?;
@@ -222,11 +229,17 @@ fn call_service_pipe(request: Request) -> Result<ResponseBody, IpcError> {
         AccessLevel::ReadOnly => PIPE_NAME_STATUS,
         AccessLevel::Administrator => PIPE_NAME_ADMIN,
     };
+    let timeout = match &request {
+        Request::RefreshInventory
+        | Request::VerifyEnforcementApplied { .. }
+        | Request::VerifyEnforcementRollback { .. } => Duration::from_secs(25),
+        _ => DEFAULT_TIMEOUT,
+    };
     let conn = PipeConnection::connect(pipe, Duration::from_secs(5)).map_err(|e| match e {
         TransportError::Disconnected => unreachable_reason(pipe == PIPE_NAME_ADMIN),
         other => rustward_ipc::rpc::ClientError::Transport(other).into_ipc_error(),
     })?;
-    Client::new(conn, DEFAULT_TIMEOUT)
+    Client::new(conn, timeout)
         .call(request)
         .map_err(rustward_ipc::rpc::ClientError::into_ipc_error)
 }
