@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Builds the RustWard Windows desktop application (Tauri 2, MSVC) and puts the
   verified executables into dist\. Started by BUILD-RUSTWARD.cmd.
@@ -261,6 +261,24 @@ $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
     })
 if ($running.Count -gt 0) {
     Exit-Build 15 ("dist klasöründeki RustWard çalışıyor: " + (($running | ForEach-Object { $_.ProcessName }) -join ', ')) 'Açık RustWard pencerelerini kapatıp BUILD-RUSTWARD.cmd dosyasını yeniden çalıştırın.'
+}
+
+# Non-destructive read-only isolation check: detect any external RustWard service
+# or process on this machine (for example from an earlier workspace or VM test)
+# without stopping, modifying or touching it.
+$extSvc = Get-Service -Name 'RustWardService' -ErrorAction SilentlyContinue
+if ($extSvc) {
+    Write-Info ("UYARI (yalıtım denetimi): Bu makinede harici 'RustWardService' Windows hizmeti algılandı (Durum: {0}). Bu derleme hizmete DOKUNMAZ ve üzerine kurulum yapmaz." -f $extSvc.Status)
+}
+else {
+    Write-Info 'Yalıtım denetimi: Bu makinede kurulu RustWardService hizmeti yok (temiz).'
+}
+$extProc = @(Get-Process -Name 'rustward-service', 'RustWard', 'rustward-desktop', 'RustWard-Onizleme' -ErrorAction SilentlyContinue | Where-Object {
+        -not $_.Path -or -not $_.Path.StartsWith($Dist, [StringComparison]::OrdinalIgnoreCase)
+    })
+if ($extProc.Count -gt 0) {
+    $extList = ($extProc | ForEach-Object { "{0}(PID={1})" -f $_.ProcessName, $_.Id }) -join ', '
+    Write-Info "UYARI (yalıtım denetimi): Çalışma alanı dışında çalışan RustWard süreci algılandı: $extList. Bu derleme bu süreçlere dokunmaz."
 }
 
 # ---------------------------------------------------------------- 2. npm ci
