@@ -51,6 +51,11 @@ export function GuidedSessionCard() {
   const [device, setDevice] = useState("");
   const [retro, setRetro] = useState(false);
   const [checklist, setChecklist] = useState<PolicyChecklistView | null>(null);
+  const [mismatchError, setMismatchError] = useState<{
+    requested: string;
+    actual: string;
+  } | null>(null);
+  const [rollbackDone, setRollbackDone] = useState(false);
   const v = view ?? r.data;
 
   // What is running, for progress feedback: verifications re-read the whole
@@ -59,6 +64,11 @@ export function GuidedSessionCard() {
   const run = async (
     fn: () => Promise<EnforcementSessionView>,
     p: "prepare" | "verify" = "verify",
+    opts?: {
+      expectedDeviceKey?: string;
+      expectedRetroactive?: boolean;
+      isRollback?: boolean;
+    },
   ) => {
     setPhase(p);
     try {
@@ -66,6 +76,29 @@ export function GuidedSessionCard() {
       if (res) {
         setView(res);
         setChecklist(null);
+        if (p === "prepare") {
+          setRollbackDone(false);
+          if (
+            opts?.expectedRetroactive !== undefined &&
+            (!res.session ||
+              res.session.retroactive !== opts.expectedRetroactive ||
+              (opts.expectedDeviceKey !== undefined &&
+                res.session.device_key !== opts.expectedDeviceKey))
+          ) {
+            setMismatchError({
+              requested: String(opts.expectedRetroactive),
+              actual: res.session ? String(res.session.retroactive) : "none",
+            });
+          } else {
+            setMismatchError(null);
+          }
+        } else if (opts?.isRollback) {
+          setMismatchError(null);
+          setRollbackDone(!res.session);
+        } else {
+          setRollbackDone(false);
+          if (!res.session) setMismatchError(null);
+        }
         obs.reload();
       }
     } finally {
@@ -107,9 +140,53 @@ export function GuidedSessionCard() {
                 ? v.automated_apply_blocker.tr
                 : v.automated_apply_blocker.en}
             </p>
-            <p className="font-medium" data-testid="guided-state">
-              {lang === "tr" ? v.state_tr : v.state_en}
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium" data-testid="guided-state">
+                {lang === "tr" ? v.state_tr : v.state_en}
+              </p>
+              <div
+                className="flex flex-wrap items-center gap-1.5"
+                data-testid="guided-status-badges"
+              >
+                {v.state === "windows_install_denied" ? (
+                  <>
+                    <Badge tone="success">{t("status.windowsBlockVerified")}</Badge>
+                    <Badge tone="warning">{t("status.accessNotVerified")}</Badge>
+                  </>
+                ) : v.state === "windows_restriction_configured" ? (
+                  <Badge tone="info">{t("status.windowsPolicyActive")}</Badge>
+                ) : v.session ? (
+                  <>
+                    <Badge tone="info">{t("status.policyReady")}</Badge>
+                    <Badge tone="warning">{t("status.protectionInactive")}</Badge>
+                  </>
+                ) : (
+                  <>
+                    <Badge tone="info">{t("status.simulation")}</Badge>
+                    <Badge tone="warning">{t("status.protectionInactive")}</Badge>
+                  </>
+                )}
+              </div>
+            </div>
+            {rollbackDone && !v.session && (
+              <div
+                className="flex flex-wrap items-center gap-2 rounded-md border border-cyan-200 bg-cyan-50 p-2 text-cyan-950 dark:border-cyan-900 dark:bg-cyan-950/40 dark:text-cyan-200"
+                role="status"
+                data-testid="guided-rollback-completed"
+              >
+                <Badge tone="info">{t("status.rollbackCompleted")}</Badge>
+                <span>{t("guided.rollbackDoneNote")}</span>
+              </div>
+            )}
+            {mismatchError && (
+              <div
+                className="rounded-md border border-rose-300 bg-rose-50 p-2 text-rose-900 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-200"
+                role="alert"
+                data-testid="retroactive-mismatch-error"
+              >
+                {t("guided.retroactiveMismatch", mismatchError)}
+              </div>
+            )}
             <ul
               className="grid gap-1 sm:grid-cols-2"
               data-testid="guided-ladder"
@@ -162,7 +239,14 @@ export function GuidedSessionCard() {
                     icon={<ClipboardCheck className="size-4" aria-hidden />}
                     busy={action.busy}
                     onClick={() =>
-                      void run(() => api.prepareDefaultDenySession(), "prepare")
+                      void run(
+                        () => api.prepareDefaultDenySession(),
+                        "prepare",
+                        {
+                          expectedDeviceKey: "default_deny_profile",
+                          expectedRetroactive: false,
+                        },
+                      )
                     }
                   >
                     {t("guided.profile.prepare")}
@@ -208,6 +292,10 @@ export function GuidedSessionCard() {
                         void run(
                           () => api.prepareSession(device, retro),
                           "prepare",
+                          {
+                            expectedDeviceKey: device,
+                            expectedRetroactive: retro,
+                          },
                         )
                       }
                     >
@@ -231,6 +319,14 @@ export function GuidedSessionCard() {
                   <dt className="text-slate-500">{t("guided.hardwareId")}</dt>
                   <dd className="break-all font-mono text-[11px]">
                     {v.session.hardware_id}
+                  </dd>
+                  <dt className="text-slate-500">
+                    {t("guided.retroactiveLabel")}
+                  </dt>
+                  <dd data-testid="session-retroactive">
+                    {v.session.retroactive
+                      ? t("guided.retroactiveYes")
+                      : t("guided.retroactiveNo")}
                   </dd>
                   <dt className="text-slate-500">{t("guided.prepared")}</dt>
                   <dd>
@@ -302,6 +398,7 @@ export function GuidedSessionCard() {
                   )}
                   <Button
                     icon={<CheckCircle2 className="size-4" aria-hidden />}
+                    disabled={Boolean(mismatchError)}
                     busy={action.busy}
                     onClick={() =>
                       void run(() => api.verifyApplied(v.session!.session_id))
@@ -313,7 +410,11 @@ export function GuidedSessionCard() {
                     icon={<RotateCcw className="size-4" aria-hidden />}
                     busy={action.busy}
                     onClick={() =>
-                      void run(() => api.verifyRollback(v.session!.session_id))
+                      void run(
+                        () => api.verifyRollback(v.session!.session_id),
+                        "verify",
+                        { isRollback: true },
+                      )
                     }
                   >
                     {t("guided.verifyRollback")}

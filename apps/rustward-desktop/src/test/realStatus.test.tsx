@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Api } from "../api/client";
 import { App, type PageId } from "../App";
-import { deniedKingston, fakeBackend, observation, observed, sessionView, type FakeState } from "./fakeBackend";
+import { deniedKingston, device, fakeBackend, observation, observed, sessionView, type FakeState } from "./fakeBackend";
 
 const BLOCKED = "USB engellenmiştir. İşlem kayıt altına alınmıştır.";
 
@@ -99,6 +99,44 @@ describe("Engellenen cihazlar", () => {
     });
     expect(await screen.findByText("Şu an Windows'un kurulumunu reddettiği bağlı cihaz yok.")).toBeInTheDocument();
   });
+
+  it("moves a rolled-back denial into historical denials and separates simulated and unknown-identity sections", async () => {
+    page("blocked", {
+      devices: [
+        device({ device_key: "k-deny", vendor: "Kingston", reason: "brand_denied", matched_brand: "Kingston" }),
+        device({ device_key: "k-conflict", vendor: "SanDisk", usb_vid_pid: "0951:1666", reason: "conflicting_identifiers" }),
+      ],
+      observation: observation([
+        observed({
+          evidence: "none",
+          windows_rule: { outcome: "not_restricted" },
+          history: {
+            observed_ms: 1_794_047_470_000,
+            problem_code: 28,
+            rule_entry: "USBSTOR\\DiskKingstonDataTraveler_3.0____",
+          },
+        }),
+      ]),
+    });
+
+    const realSec = await screen.findByTestId("blocked-real");
+    expect(realSec).toHaveTextContent("Şu an Windows'un kurulumunu reddettiği bağlı cihaz yok.");
+
+    const histSec = screen.getByTestId("blocked-history");
+    expect(within(histSec).getByTestId("history-denied-k-deny")).toHaveTextContent("Kingston DataTraveler 3.0 USB Device");
+    expect(within(histSec).getByTestId("history-denied-k-deny")).toHaveTextContent("GERİ ALMA TAMAMLANDI");
+
+    const simSec = screen.getByTestId("blocked-sim");
+    expect(within(simSec).getAllByText("SIMÜLASYON").length).toBeGreaterThanOrEqual(2);
+    expect(within(simSec).getByText("Üretici açıkça reddedildi")).toBeInTheDocument();
+
+    const unkSec = screen.getByTestId("blocked-unknown");
+    expect(within(unkSec).getByTestId("unknown-device-k-conflict")).toHaveTextContent(
+      "Kimlik çelişkisi (INQUIRY üreticisi ile USB VID farklı)",
+    );
+    expect(within(unkSec).queryByTestId("unknown-device-k-deny")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(BLOCKED);
+  });
 });
 
 describe("Devices page identity and real status", () => {
@@ -113,6 +151,23 @@ describe("Devices page identity and real status", () => {
     expect(last).toHaveTextContent("Son olay: Takıldı");
     const status = within(last.parentElement!);
     expect(status.getByText("USBSTOR\\DiskKingstonDataTraveler_3.0____")).toBeInTheDocument();
+  });
+
+  it("renders BOT/UASP transport stack labels and live SetupAPI driver/problem badges", async () => {
+    page("devices", {
+      devices: [
+        device({ device_key: "k-deny", storage_type: "bulk_only" }),
+        device({ device_key: "k-obs-1", storage_type: "uasp", simulated_decision: "allow", reason: "brand_allowed" }),
+      ],
+      observation: observation([
+        deniedKingston(),
+        observed({ driver_installed: true, problem_code: null }),
+      ]),
+    });
+    expect(await screen.findByText(/BOT \(USBSTOR\)/)).toBeInTheDocument();
+    expect(screen.getByText(/UASP \(SCSI\)/)).toBeInTheDocument();
+    expect(screen.getByText("Sorun kodu 28")).toBeInTheDocument();
+    expect(screen.getByText("Sürücü kurulu")).toBeInTheDocument();
   });
 });
 

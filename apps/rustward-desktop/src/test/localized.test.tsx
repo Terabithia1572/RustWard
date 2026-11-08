@@ -76,9 +76,71 @@ describe("Administrator-guided Windows enforcement", () => {
 
     await user.click(within(card).getByRole("button", { name: "Geri almayı doğrula" }));
     await within(card).findByRole("button", { name: "Oturumu hazırla" });
+    expect(within(card).getByTestId("guided-rollback-completed")).toHaveTextContent("GERİ ALMA TAMAMLANDI");
     // No request in this flow writes anything but RustWard's own audit log.
     const types = state.calls.map((c) => c.type);
     expect(types).toContain("verify_enforcement_applied");
     expect(types).toContain("verify_enforcement_rollback");
+  });
+
+  it("confirms retroactive false vs true round-trip and labels preview checklist", async () => {
+    const { state, user } = page("readiness");
+    const checklist = await screen.findByTestId("checklist");
+    expect(checklist).toHaveTextContent("Salt okunur önizleme — oturum başlatmaz");
+
+    const card = await screen.findByTestId("guided-session");
+    expect(within(card).getByTestId("guided-status-badges")).toHaveTextContent("SIMÜLASYON");
+    expect(within(card).getByTestId("guided-status-badges")).toHaveTextContent("KORUMA ETKİN DEĞİL");
+
+    const select = await within(card).findByLabelText("Cihaz");
+    await within(card).findByRole("option", { name: /Kingston DataTraveler 3.0 USB Device/ });
+    await user.selectOptions(select, "k-deny");
+    // Leave retroactive unchecked (false).
+    await user.click(within(card).getByRole("button", { name: "Oturumu hazırla" }));
+    expect(state.calls).toContainEqual({ type: "prepare_enforcement_session", device_key: "k-deny", retroactive: false });
+    expect(await within(card).findByTestId("session-retroactive")).toHaveTextContent("Hayır (retroactive: false");
+    expect(within(card).getByTestId("guided-status-badges")).toHaveTextContent("POLİTİKA HAZIR");
+
+    // Cancel and re-prepare with retroactive checked (true).
+    await user.click(within(card).getByRole("button", { name: "Oturumu iptal et" }));
+    const selectAgain = await within(card).findByLabelText("Cihaz");
+    await user.selectOptions(selectAgain, "k-deny");
+    await user.click(within(card).getByLabelText("Kurulu cihazlara da uygula (geriye dönük)"));
+    await user.click(within(card).getByRole("button", { name: "Oturumu hazırla" }));
+    expect(state.calls).toContainEqual({ type: "prepare_enforcement_session", device_key: "k-deny", retroactive: true });
+    expect(await within(card).findByTestId("session-retroactive")).toHaveTextContent("Evet (retroactive: true");
+  });
+
+  it("blocks verification when the persisted session retroactive flag mismatches the requested selection", async () => {
+    const { backend } = fakeBackend();
+    const faultyBackend = {
+      async call(req: Parameters<typeof backend.call>[0]) {
+        const res = await backend.call(req);
+        if (req.type === "prepare_enforcement_session" && res.type === "enforcement_session" && res.data.session) {
+          // Simulate Bug A regression: backend ignores retroactive=true and returns false.
+          return {
+            ...res,
+            data: {
+              ...res.data,
+              session: { ...res.data.session, retroactive: false },
+            },
+          };
+        }
+        return res;
+      },
+    };
+    const user = userEvent.setup();
+    render(<App api={new Api(faultyBackend)} initialPage="readiness" />);
+    const card = await screen.findByTestId("guided-session");
+    const select = await within(card).findByLabelText("Cihaz");
+    await within(card).findByRole("option", { name: /Kingston DataTraveler 3.0 USB Device/ });
+    await user.selectOptions(select, "k-deny");
+    await user.click(within(card).getByLabelText("Kurulu cihazlara da uygula (geriye dönük)"));
+    await user.click(within(card).getByRole("button", { name: "Oturumu hazırla" }));
+
+    const alert = await within(card).findByTestId("retroactive-mismatch-error");
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("istenen retroactive=true, kaydedilen retroactive=false");
+    expect(within(card).getByRole("button", { name: "Uygulamayı doğrula" })).toBeDisabled();
   });
 });

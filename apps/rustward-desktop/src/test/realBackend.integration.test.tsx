@@ -34,7 +34,7 @@ async function boot(page: PageId, caller: "admin" | "user" = "admin", synthetic 
     } else {
       const admin = startRealBackend("admin", real.dataDir);
       await admin.call({ type: "load_synthetic_inventory" });
-      admin.close();
+      await admin.close();
     }
   }
   const user = userEvent.setup();
@@ -50,8 +50,8 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => {
-  real?.close();
+afterEach(async () => {
+  await real?.close();
   real = undefined;
   vi.restoreAllMocks();
 });
@@ -300,4 +300,16 @@ describe("real backend: enforcement readiness (read-only)", () => {
     render(<App api={new Api(real.backend)} initialPage="readiness" />);
     expect(await screen.findByTestId("actual-enforcement")).toHaveTextContent("koruma etkin değil");
   });
+
+  it.runIf(process.platform === "win32")(
+    "reads live Windows DeviceInstall\\Restrictions read-only on Windows without mutating anything",
+    async () => {
+      real = startRealBackend("admin", undefined, { policyCapture: "live" });
+      const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
+      expect(v.inspection_source).toBe("windows_registry_read_only");
+      expect(v.inspection).not.toBeNull();
+      expect(v.inspection_error).toBeNull();
+      expect(v.actual_enforcement.activation_available).toBe(false);
+    },
+  );
 });

@@ -172,7 +172,7 @@ export function DevicesPage() {
                         {tx("category", d.category)}
                         {d.storage_type && (
                           <div className="text-xs text-slate-500">
-                            {t("devices.interface")}: {d.storage_type}
+                            {t("devices.interface")}: {tx("devices.transport", d.storage_type)}
                           </div>
                         )}
                       </td>
@@ -192,6 +192,31 @@ export function DevicesPage() {
                       </td>
                       <td className="px-3 py-2">
                         <Badge tone={d.present ? "info" : "neutral"}>{d.present ? t("devices.present") : t("devices.absent")}</Badge>
+                        {STORAGE.has(d.category) && observed.has(d.device_key) && (() => {
+                          const o = observed.get(d.device_key)!.observed;
+                          if (o.problem_code != null) {
+                            return (
+                              <div className="mt-1">
+                                <Badge tone="danger">{t("devices.driver.problem", { code: o.problem_code })}</Badge>
+                              </div>
+                            );
+                          }
+                          if (o.driver_installed === true) {
+                            return (
+                              <div className="mt-1">
+                                <Badge tone="neutral">{t("devices.driver.installed")}</Badge>
+                              </div>
+                            );
+                          }
+                          if (o.driver_installed === false) {
+                            return (
+                              <div className="mt-1">
+                                <Badge tone="warning">{t("devices.driver.notInstalled")}</Badge>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                         <div className="mt-1 text-[11px] text-slate-500">{formatTime(d.last_seen_ms)}</div>
                       </td>
                       <td className="px-3 py-2">

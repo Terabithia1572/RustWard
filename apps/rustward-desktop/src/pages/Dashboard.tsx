@@ -46,6 +46,18 @@ export function ProtectionPanel({ p }: { p: WindowsProtectionView | undefined })
           <p className="text-sm text-slate-700 dark:text-slate-300">{p ? (lang === "tr" ? p.detail_tr : p.detail_en) : t("prot.legacy")}</p>
           <div className="flex flex-wrap gap-1.5 pt-1">
             <Badge tone={tone}>{tx("prot.state", state)}</Badge>
+            {(state === "verified_active" || state === "denial_observed") && (
+              <>
+                <Badge tone={tone}>{t("status.windowsBlockVerified")}</Badge>
+                <Badge tone="warning">{t("status.accessNotVerified")}</Badge>
+              </>
+            )}
+            {state === "configured_unverified" && (
+              <Badge tone="info">{t("status.windowsPolicyActive")}</Badge>
+            )}
+            {state === "inactive" && (
+              <Badge tone="warning">{t("status.protectionInactive")}</Badge>
+            )}
             {p && p.denied_now > 0 ? (
               <Badge tone="danger">
                 {t("prot.evidence")}: {t("prot.deniedNow", { n: p.denied_now })}

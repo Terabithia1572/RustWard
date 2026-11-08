@@ -309,7 +309,10 @@ function ChecklistSection({ v }: { v: EnforcementObservationView }) {
       className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800"
       data-testid="checklist"
     >
-      <h3 className="text-sm font-semibold">{t("obs.checklist.title")}</h3>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold">{t("obs.checklist.title")}</h3>
+        <Badge tone="info">{t("obs.checklist.previewOnly")}</Badge>
+      </div>
       <p className="text-xs text-slate-600 dark:text-slate-300">
         {t("obs.checklist.note")}
       </p>

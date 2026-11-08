@@ -16,23 +16,31 @@ export interface RealBackend {
   /** Direct call bypassing the UI (to check what the backend stored). */
   call(request: Request): Promise<ResponseBody>;
   dataDir: string;
-  close(): void;
+  close(): Promise<void>;
 }
 
 /** Start a real backend over a fresh SQLite database. */
 export function startRealBackend(
   caller: "admin" | "user" = "admin",
   dataDir?: string,
-  options: { policyCapture?: string } = {},
+  options: { policyCapture?: string; liveInventory?: boolean } = {},
 ): RealBackend {
   if (!STDIO_BACKEND) {
     throw new Error("RUSTWARD_STDIO_BACKEND is not set (run scripts/verify-all.sh or see docs/TEST-RESULTS.md)");
   }
   const dir = dataDir ?? mkdtempSync(join(tmpdir(), "rustward-ui-int-"));
   const env = { ...process.env };
-  delete env.RUSTWARD_DEV_POLICY_CAPTURE;
-  // A SYNTHETIC policy capture file stands in for the read-only registry read.
-  if (options.policyCapture) env.RUSTWARD_DEV_POLICY_CAPTURE = options.policyCapture;
+  // Isolate tests from the host machine's live USB hardware and Group Policy
+  // unless a test explicitly opts into live read-only Windows inspection.
+  env.RUSTWARD_DEV_INVENTORY = options.liveInventory ? "live" : "empty";
+  if (options.policyCapture === "live") {
+    delete env.RUSTWARD_DEV_POLICY_CAPTURE;
+  } else if (options.policyCapture) {
+    // A SYNTHETIC policy capture file stands in for the read-only registry read.
+    env.RUSTWARD_DEV_POLICY_CAPTURE = options.policyCapture;
+  } else {
+    env.RUSTWARD_DEV_POLICY_CAPTURE = "unavailable";
+  }
   const child: ChildProcessWithoutNullStreams = spawn(STDIO_BACKEND, [dir, caller], { stdio: "pipe", env });
   const pending: Array<{ resolve: (v: ResponseBody) => void; reject: (e: unknown) => void }> = [];
   let stderr = "";
@@ -74,11 +82,29 @@ export function startRealBackend(
     backend: { call },
     call,
     dataDir: dir,
-    close() {
+    async close() {
       closed = true;
+      rl.close();
       child.stdin.end();
+      const exited =
+        child.exitCode !== null || child.signalCode !== null
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, 2000);
+              child.once("close", () => {
+                clearTimeout(timer);
+                resolve();
+              });
+            });
       child.kill();
-      if (!dataDir) rmSync(dir, { recursive: true, force: true });
+      await exited;
+      if (!dataDir) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        } catch {
+          // Best-effort cleanup on Windows if an indexer briefly holds a file handle.
+        }
+      }
     },
   };
 }
