@@ -302,6 +302,16 @@ export function DevicesPage() {
                       </td>
                       <td className="px-3 py-2">
                         <DecisionBadge decision={d.simulated_decision} />
+                        {d.device_override === "denied" && (
+                          <div className="mt-1">
+                            <Badge tone="danger">{t("devices.override.denied")}</Badge>
+                          </div>
+                        )}
+                        {d.device_override === "allowed" && (
+                          <div className="mt-1">
+                            <Badge tone="success">{t("devices.override.allowed")}</Badge>
+                          </div>
+                        )}
                         {d.simulated_decision !== "not_applicable" && (
                           <div className="mt-1 text-[11px] text-slate-500">{tx("reason", d.reason)}</div>
                         )}
@@ -442,7 +452,9 @@ export function DevicesPage() {
                   variant="primary"
                   busy={action.busy}
                   onClick={async () => {
-                    const res = await action.run(() => api.restoreDevicePolicy());
+                    const res = await action.run(() =>
+                      api.restoreDevicePolicy({ deviceKey: selectedDevice.device_key })
+                    );
                     if (res) {
                       setUnblockModalOpen(false);
                       setNotice(t("devices.action.unblockSuccess"));

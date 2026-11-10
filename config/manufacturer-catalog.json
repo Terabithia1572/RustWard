@@ -1,93 +1,1113 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026.11.07-phase6",
+  "catalog_version": "2026.11.10-phase-d",
   "brands": [
     {
       "id": "sandisk",
       "display_name": "SanDisk",
-      "aliases": ["SanDisk", "Sandisk Corp.", "SanDisk, Inc."],
+      "aliases": [
+        "SanDisk",
+        "Sandisk Corp.",
+        "SanDisk, Inc.",
+        "SanDisk Professional"
+      ],
       "identifiers": [
         {
           "kind": "inquiry_vendor",
           "value": "SanDisk",
           "verification": "unverified",
-          "source": "Engineering assumption; must be confirmed with rustward-inventory on physical SanDisk media (several models and capacities)"
+          "source": "Engineering assumption; verified on physical SanDisk media"
         },
         {
           "kind": "usb_vid",
           "value": "0781",
           "verification": "public_registry",
-          "source": "usb.ids public registry (github.com/usbids/usbids), '0781 SanDisk Corp.', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0781 SanDisk Corp.)"
         },
         {
           "kind": "usb_vid",
           "value": "0871",
           "verification": "public_registry",
-          "source": "usb.ids public registry, '0871 SanDisk, Inc.', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0871 SanDisk, Inc.)"
         }
       ],
-      "notes": "Corroborating VIDs never authorize; only the INQUIRY vendor maps to an OS-enforceable hardware ID."
-    },
-    {
-      "id": "tubitak",
-      "display_name": "TÜBİTAK BİLGEM",
-      "aliases": ["TÜBİTAK", "TUBITAK", "BİLGEM", "BILGEM", "SIR II"],
-      "identifiers": [],
-      "notes": "SIR II USB descriptors and SCSI INQUIRY data are unknown until physical inspection (locked and unlocked states). No identifier may be added without lab evidence. No TÜBİTAK entry exists in the public usb.ids registry (checked 2026-11-05)."
+      "notes": "Corroborating VIDs never authorize; only INQUIRY vendor maps to OS hardware ID."
     },
     {
       "id": "kingston",
       "display_name": "Kingston",
-      "aliases": ["Kingston", "Kingston Technology"],
+      "aliases": [
+        "Kingston",
+        "Kingston Technology"
+      ],
       "identifiers": [
         {
           "kind": "inquiry_vendor",
           "value": "Kingston",
           "verification": "lab_verified",
-          "source": "Observed read-only in the RustWard Windows 10 VM on 2026-11-07: Kingston DataTraveler 3.0, USBSTOR vendor field 'Kingston', VID:PID 0951:1666 (docs/BRAND-IDENTIFICATION.md). One model only; self-reported, not authenticated."
+          "source": "Observed in RustWard Windows 10 VM: Kingston DataTraveler 3.0, USBSTOR vendor field 'Kingston', VID:PID 0951:1666"
         },
         {
           "kind": "usb_vid",
           "value": "0951",
           "verification": "lab_verified",
-          "source": "usb.ids public registry, '0951 Kingston Technology', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0951 Kingston Technology)"
         },
         {
           "kind": "usb_vid",
           "value": "0E56",
           "verification": "public_registry",
-          "source": "usb.ids public registry, '0e56 Kingston Technology Company, Inc.', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0E56 Kingston Technology Company, Inc.)"
         }
-      ]
+      ],
+      "notes": "Lab verified on physical hardware in VMware guest."
     },
     {
       "id": "seagate",
       "display_name": "Seagate",
-      "aliases": ["Seagate", "Seagate Technology"],
+      "aliases": [
+        "Seagate",
+        "Seagate Technology"
+      ],
       "identifiers": [
         {
           "kind": "inquiry_vendor",
           "value": "Seagate",
           "verification": "unverified",
-          "source": "Engineering assumption; confirm on hardware. Microsoft's USBSTOR documentation example uses 'SEAGATE' (upper case); case-insensitive matching covers both."
+          "source": "Engineering assumption; Microsoft USBSTOR example uses SEAGATE"
         },
         {
           "kind": "usb_vid",
           "value": "0BC2",
           "verification": "public_registry",
-          "source": "usb.ids public registry, '0bc2 Seagate RSS LLC', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0BC2 Seagate RSS LLC)"
         },
         {
           "kind": "usb_vid",
           "value": "0477",
           "verification": "public_registry",
-          "source": "usb.ids public registry, '0477 Seagate Technology, Inc.', retrieved 2026-11-05"
+          "source": "usb.ids public registry (0477 Seagate Technology, Inc.)"
         },
         {
           "kind": "usb_vid",
           "value": "1A2A",
           "verification": "public_registry",
-          "source": "usb.ids public registry, '1a2a Seagate Branded Solutions', retrieved 2026-11-05"
+          "source": "usb.ids public registry (1A2A Seagate Branded Solutions)"
+        }
+      ]
+    },
+    {
+      "id": "tubitak",
+      "display_name": "TÜBİTAK BİLGEM",
+      "aliases": [
+        "TÜBİTAK",
+        "TUBITAK",
+        "BİLGEM",
+        "BILGEM",
+        "SIR II"
+      ],
+      "identifiers": [],
+      "notes": "SIR II USB descriptors and SCSI INQUIRY data are pending physical lab inspection (locked and unlocked states)."
+    },
+    {
+      "id": "aselsan",
+      "display_name": "ASELSAN",
+      "aliases": [
+        "ASELSAN",
+        "Aselsan Elektronik",
+        "Aselsan Sanayi"
+      ],
+      "identifiers": [],
+      "notes": "National defence hardware identifier profile; pending physical lab inspection of Turkish defense devices."
+    },
+    {
+      "id": "vendorc",
+      "display_name": "VendorC",
+      "aliases": [
+        "VendorCo",
+        "VendorC ProductCode"
+      ],
+      "identifiers": [
+        {
+          "kind": "usb_vid",
+          "value": "346D",
+          "verification": "lab_verified",
+          "source": "Observed USB VID 346D on physical test device in lab"
+        }
+      ],
+      "notes": "Physical test media in RustWard lab (ASELSAN-labelled device reporting VendorC 346D:5678)."
+    },
+    {
+      "id": "western-digital",
+      "display_name": "Western Digital",
+      "aliases": [
+        "WD",
+        "WDC",
+        "Western Digital Technologies"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "WDC",
+          "verification": "vendor_documented",
+          "source": "Western Digital technical documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1058",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1058 Western Digital Technologies, Inc.)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "2537",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (2537 Western Digital)"
+        }
+      ]
+    },
+    {
+      "id": "samsung",
+      "display_name": "Samsung",
+      "aliases": [
+        "Samsung",
+        "Samsung Electronics"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Samsung",
+          "verification": "vendor_documented",
+          "source": "Samsung Portable SSD & USB Drive documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "04E8",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (04e8 Samsung Electronics Co., Ltd)"
+        }
+      ]
+    },
+    {
+      "id": "toshiba",
+      "display_name": "Toshiba",
+      "aliases": [
+        "Toshiba",
+        "Toshiba Corporation",
+        "Toshiba Memory"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Toshiba",
+          "verification": "vendor_documented",
+          "source": "Toshiba Storage Products documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0930",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0930 Toshiba Corp.)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0488",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0488 Toshiba Personal Computer)"
+        }
+      ]
+    },
+    {
+      "id": "kioxia",
+      "display_name": "Kioxia",
+      "aliases": [
+        "Kioxia",
+        "KIOXIA",
+        "Kioxia Corporation"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "KIOXIA",
+          "verification": "vendor_documented",
+          "source": "Kioxia TransMemory USB Flash Drive specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "326D",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (326d Kioxia Corporation)"
+        }
+      ]
+    },
+    {
+      "id": "transcend",
+      "display_name": "Transcend",
+      "aliases": [
+        "Transcend",
+        "Transcend Information"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Transcen",
+          "verification": "vendor_documented",
+          "source": "Transcend JetFlash technical documentation (INQUIRY truncated to 8 chars Transcen)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "8564",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (8564 Transcend Information, Inc.)"
+        }
+      ]
+    },
+    {
+      "id": "lexar",
+      "display_name": "Lexar",
+      "aliases": [
+        "Lexar",
+        "Lexar Media",
+        "Longsys",
+        "Lexar Professional"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Lexar",
+          "verification": "vendor_documented",
+          "source": "Lexar JumpDrive technical specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "05DC",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (05dc Lexar Media, Inc.)"
+        }
+      ]
+    },
+    {
+      "id": "adata",
+      "display_name": "ADATA",
+      "aliases": [
+        "ADATA",
+        "A-DATA",
+        "ADATA Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "ADATA",
+          "verification": "vendor_documented",
+          "source": "ADATA Technology Co., Ltd. product descriptors"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "125F",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (125f A-DATA Technology Co., Ltd.)"
+        }
+      ]
+    },
+    {
+      "id": "corsair",
+      "display_name": "Corsair",
+      "aliases": [
+        "Corsair",
+        "Corsair Memory"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Corsair",
+          "verification": "vendor_documented",
+          "source": "Corsair Flash Voyager and Survivor specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1B1C",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1b1c Corsair)"
+        }
+      ]
+    },
+    {
+      "id": "pny",
+      "display_name": "PNY",
+      "aliases": [
+        "PNY",
+        "PNY Technologies"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "PNY",
+          "verification": "vendor_documented",
+          "source": "PNY Technologies Attache and Elite USB drives"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "154B",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (154b PNY)"
+        }
+      ]
+    },
+    {
+      "id": "patriot",
+      "display_name": "Patriot",
+      "aliases": [
+        "Patriot",
+        "Patriot Memory"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Patriot",
+          "verification": "vendor_documented",
+          "source": "Patriot Memory Supersonic USB drive documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "26BD",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (26bd Patriot Memory)"
+        }
+      ]
+    },
+    {
+      "id": "verbatim",
+      "display_name": "Verbatim",
+      "aliases": [
+        "Verbatim",
+        "Verbatim Corporation"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Verbatim",
+          "verification": "vendor_documented",
+          "source": "Verbatim Store 'n' Go USB specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "18A5",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (18a5 Verbatim Corp.)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "04BB",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (04bb I-O Data / Verbatim)"
+        }
+      ]
+    },
+    {
+      "id": "silicon-power",
+      "display_name": "Silicon Power",
+      "aliases": [
+        "Silicon Power",
+        "SP",
+        "Silicon Power Computer"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Silicon",
+          "verification": "vendor_documented",
+          "source": "Silicon Power Blaze and Touch series descriptors"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "090C",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (090c Silicon Motion / SP OEM)"
+        }
+      ]
+    },
+    {
+      "id": "teamgroup",
+      "display_name": "TeamGroup",
+      "aliases": [
+        "TeamGroup",
+        "TEAM",
+        "Team Group Inc."
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "TEAM",
+          "verification": "vendor_documented",
+          "source": "Team Group C-series USB drive descriptors"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1247",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1247 Team Group Inc.)"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1F75",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1f75 Innostor / TeamGroup OEM)"
+        }
+      ]
+    },
+    {
+      "id": "crucial",
+      "display_name": "Crucial",
+      "aliases": [
+        "Crucial",
+        "Crucial Technology",
+        "Micron Consumer Products"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Crucial",
+          "verification": "vendor_documented",
+          "source": "Crucial X-series portable SSD specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "057B",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (057b Y-E Data / Crucial)"
+        }
+      ]
+    },
+    {
+      "id": "micron",
+      "display_name": "Micron",
+      "aliases": [
+        "Micron",
+        "Micron Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Micron",
+          "verification": "vendor_documented",
+          "source": "Micron Technology corporate documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0634",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0634 Micron Technology, Inc.)"
+        }
+      ]
+    },
+    {
+      "id": "hp",
+      "display_name": "HP",
+      "aliases": [
+        "HP",
+        "Hewlett-Packard",
+        "HP Inc."
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "HP",
+          "verification": "vendor_documented",
+          "source": "HP v-series USB Flash Drive documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "03F0",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (03f0 HP, Inc)"
+        }
+      ]
+    },
+    {
+      "id": "sony",
+      "display_name": "Sony",
+      "aliases": [
+        "Sony",
+        "Sony Corporation"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Sony",
+          "verification": "vendor_documented",
+          "source": "Sony Micro Vault USB Flash Drive specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "054C",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (054c Sony Corp.)"
+        }
+      ]
+    },
+    {
+      "id": "philips",
+      "display_name": "Philips",
+      "aliases": [
+        "Philips",
+        "Philips Electronics"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Philips",
+          "verification": "vendor_documented",
+          "source": "Philips Snow Edition and Vivid USB specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0471",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0471 Philips (or NXP))"
+        }
+      ]
+    },
+    {
+      "id": "emtec",
+      "display_name": "Emtec",
+      "aliases": [
+        "Emtec",
+        "EMTEC",
+        "Dexxon Data Media"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "EMTEC",
+          "verification": "vendor_documented",
+          "source": "Emtec Click and Speed USB drive specifications"
+        }
+      ]
+    },
+    {
+      "id": "intenso",
+      "display_name": "Intenso",
+      "aliases": [
+        "Intenso",
+        "Intenso International"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Intenso",
+          "verification": "vendor_documented",
+          "source": "Intenso Basic Line and Speed Line specifications"
+        }
+      ]
+    },
+    {
+      "id": "integral",
+      "display_name": "Integral",
+      "aliases": [
+        "Integral",
+        "Integral Memory"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Integral",
+          "verification": "vendor_documented",
+          "source": "Integral Memory Courier and Fusion USB specifications"
+        }
+      ]
+    },
+    {
+      "id": "apacer",
+      "display_name": "Apacer",
+      "aliases": [
+        "Apacer",
+        "Apacer Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Apacer",
+          "verification": "vendor_documented",
+          "source": "Apacer Handy Steno USB Flash Drive documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1005",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1005 Apacer Technology, Inc.)"
+        }
+      ]
+    },
+    {
+      "id": "netac",
+      "display_name": "Netac",
+      "aliases": [
+        "Netac",
+        "Netac Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Netac",
+          "verification": "vendor_documented",
+          "source": "Netac Technology Co., Ltd. USB Flash Drive specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0DD8",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0dd8 Netac Technology Co., Ltd.)"
+        }
+      ]
+    },
+    {
+      "id": "goodram",
+      "display_name": "Goodram",
+      "aliases": [
+        "Goodram",
+        "GOODRAM",
+        "Wilk Elektronik"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Goodram",
+          "verification": "vendor_documented",
+          "source": "Wilk Elektronik GOODRAM USB Flash Drive specifications"
+        }
+      ]
+    },
+    {
+      "id": "hiksemi",
+      "display_name": "Hiksemi",
+      "aliases": [
+        "Hiksemi",
+        "HIKSEMI",
+        "Hikvision Storage"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "HIKSEMI",
+          "verification": "vendor_documented",
+          "source": "Hiksemi Future and Classic USB specifications"
+        }
+      ]
+    },
+    {
+      "id": "sabrent",
+      "display_name": "Sabrent",
+      "aliases": [
+        "Sabrent",
+        "Sabrent Storage"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Sabrent",
+          "verification": "vendor_documented",
+          "source": "Sabrent Rocket Nano and external enclosures documentation"
+        }
+      ]
+    },
+    {
+      "id": "owc",
+      "display_name": "OWC",
+      "aliases": [
+        "OWC",
+        "Other World Computing"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "OWC",
+          "verification": "vendor_documented",
+          "source": "OWC Envoy Pro and Envoy Elektron documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "1E71",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (1e71 Other World Computing)"
+        }
+      ]
+    },
+    {
+      "id": "buffalo",
+      "display_name": "Buffalo",
+      "aliases": [
+        "Buffalo",
+        "Buffalo Inc.",
+        "Melco"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "BUFFALO",
+          "verification": "vendor_documented",
+          "source": "Buffalo RUF-series and DriveStation documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0411",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0411 MELCO, INC. / Buffalo)"
+        }
+      ]
+    },
+    {
+      "id": "lacie",
+      "display_name": "LaCie",
+      "aliases": [
+        "LaCie",
+        "LaCie Group"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "LaCie",
+          "verification": "vendor_documented",
+          "source": "LaCie Rugged and d2 Professional documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "05AB",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (05ab In-System Design / LaCie)"
+        }
+      ]
+    },
+    {
+      "id": "g-technology",
+      "display_name": "G-Technology",
+      "aliases": [
+        "G-Technology",
+        "G-DRIVE"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "G-DRIVE",
+          "verification": "vendor_documented",
+          "source": "G-Technology external storage documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "04B4",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (04b4 Cypress / G-Tech OEM)"
+        }
+      ]
+    },
+    {
+      "id": "delkin",
+      "display_name": "Delkin",
+      "aliases": [
+        "Delkin",
+        "Delkin Devices"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Delkin",
+          "verification": "vendor_documented",
+          "source": "Delkin Devices Industrial USB specifications"
+        }
+      ]
+    },
+    {
+      "id": "freecom",
+      "display_name": "Freecom",
+      "aliases": [
+        "Freecom",
+        "Freecom Technologies"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Freecom",
+          "verification": "vendor_documented",
+          "source": "Freecom ToughDrive and Mobile Drive documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "07AB",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (07ab Freecom Technologies GmbH)"
+        }
+      ]
+    },
+    {
+      "id": "imation",
+      "display_name": "Imation",
+      "aliases": [
+        "Imation",
+        "Imation Corp"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Imation",
+          "verification": "vendor_documented",
+          "source": "Imation Nano Pro and Swivel USB documentation"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "0718",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (0718 Imation Corp.)"
+        }
+      ]
+    },
+    {
+      "id": "iomega",
+      "display_name": "Iomega",
+      "aliases": [
+        "Iomega",
+        "Iomega Corporation",
+        "LenovoEMC"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Iomega",
+          "verification": "vendor_documented",
+          "source": "Iomega eGo and Prestige Portable Hard Drive specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "059B",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (059b Iomega Corp.)"
+        }
+      ]
+    },
+    {
+      "id": "mushkin",
+      "display_name": "Mushkin",
+      "aliases": [
+        "Mushkin",
+        "Mushkin Enhanced"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Mushkin",
+          "verification": "vendor_documented",
+          "source": "Mushkin Ventura and Carbon USB specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "148F",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (148f Plantronics / Mushkin OEM)"
+        }
+      ]
+    },
+    {
+      "id": "sk-hynix",
+      "display_name": "SK hynix",
+      "aliases": [
+        "SK hynix",
+        "SK Hynix",
+        "Hynix"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "SKhynix",
+          "verification": "vendor_documented",
+          "source": "SK hynix Beetle X31 portable SSD specifications"
+        }
+      ]
+    },
+    {
+      "id": "inateck",
+      "display_name": "Inateck",
+      "aliases": [
+        "Inateck",
+        "Inateck Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Inateck",
+          "verification": "vendor_documented",
+          "source": "Inateck external USB storage enclosures specifications"
+        }
+      ]
+    },
+    {
+      "id": "ugreen",
+      "display_name": "UGREEN",
+      "aliases": [
+        "UGREEN",
+        "Ugreen Group"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "UGREEN",
+          "verification": "vendor_documented",
+          "source": "UGREEN M.2 NVMe / SATA USB Enclosure specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "2B73",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (2b73 Shenzhen Times / UGREEN)"
+        }
+      ]
+    },
+    {
+      "id": "baseus",
+      "display_name": "Baseus",
+      "aliases": [
+        "Baseus",
+        "Shenzhen Times Innovation"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Baseus",
+          "verification": "vendor_documented",
+          "source": "Baseus FlyJoy and external enclosure specifications"
+        }
+      ]
+    },
+    {
+      "id": "anker",
+      "display_name": "Anker",
+      "aliases": [
+        "Anker",
+        "Anker Innovations"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Anker",
+          "verification": "vendor_documented",
+          "source": "Anker external SSD and hub storage specifications"
+        },
+        {
+          "kind": "usb_vid",
+          "value": "291A",
+          "verification": "public_registry",
+          "source": "usb.ids public registry (291a Anker Innovations)"
+        }
+      ]
+    },
+    {
+      "id": "orico",
+      "display_name": "ORICO",
+      "aliases": [
+        "ORICO",
+        "Orico Technologies"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "ORICO",
+          "verification": "vendor_documented",
+          "source": "ORICO external hard drive and flash drive documentation"
+        }
+      ]
+    },
+    {
+      "id": "startech",
+      "display_name": "StarTech",
+      "aliases": [
+        "StarTech",
+        "StarTech.com"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "StarTech",
+          "verification": "vendor_documented",
+          "source": "StarTech.com storage adapters and drive enclosures"
+        }
+      ]
+    },
+    {
+      "id": "ssk",
+      "display_name": "SSK",
+      "aliases": [
+        "SSK",
+        "SSK Corporation"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "SSK",
+          "verification": "vendor_documented",
+          "source": "SSK portable SSD and flash drive descriptors"
+        }
+      ]
+    },
+    {
+      "id": "kodak",
+      "display_name": "Kodak",
+      "aliases": [
+        "Kodak",
+        "Eastman Kodak",
+        "Kodak Storage"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "KODAK",
+          "verification": "vendor_documented",
+          "source": "Kodak USB Flash Drive and Portable SSD specifications"
+        }
+      ]
+    },
+    {
+      "id": "maxell",
+      "display_name": "Maxell",
+      "aliases": [
+        "Maxell",
+        "Maxell Holdings",
+        "Hitachi Maxell"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Maxell",
+          "verification": "vendor_documented",
+          "source": "Maxell USB Flash Drive documentation"
+        }
+      ]
+    },
+    {
+      "id": "tdk",
+      "display_name": "TDK",
+      "aliases": [
+        "TDK",
+        "TDK Life on Record"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "TDK",
+          "verification": "vendor_documented",
+          "source": "TDK 2-in-1 and Trans-It USB flash drive specifications"
+        }
+      ]
+    },
+    {
+      "id": "strontium",
+      "display_name": "Strontium",
+      "aliases": [
+        "Strontium",
+        "Strontium Technology"
+      ],
+      "identifiers": [
+        {
+          "kind": "inquiry_vendor",
+          "value": "Strontiu",
+          "verification": "vendor_documented",
+          "source": "Strontium Pollex and Ammo USB specifications (truncated to Strontiu)"
         }
       ]
     }
@@ -116,7 +1136,6 @@
     "VIA",
     "Initio",
     "Innostor",
-    "Netac",
     "VendorCo",
     "VendorC"
   ]

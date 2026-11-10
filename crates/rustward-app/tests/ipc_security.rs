@@ -175,6 +175,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
         },
         Request::RestoreDevicePolicy {
             session_id: Some("0123456789abcdef".into()),
+            device_key: None,
         },
         Request::ApplyCompoundPolicy {
             retroactive: true,

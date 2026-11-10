@@ -322,6 +322,67 @@ pub fn parse_inquiry_identity(hardware_ids: &[String]) -> Option<InquiryIdentity
     })
 }
 
+/// Returns true if the identifier is a generic storage class or compatible ID.
+#[must_use]
+pub fn is_generic_storage_id(id: &str) -> bool {
+    let s = id.trim().to_ascii_uppercase();
+    let clean = s.trim_end_matches(['_', ' ']);
+    matches!(
+        clean,
+        "USBSTOR\\GENDISK"
+            | "GENDISK"
+            | "USBSTOR\\DISK"
+            | "DISK"
+            | "SCSI\\DISK"
+            | "USBSTOR\\RAW"
+            | "USBSTOR\\OTHER"
+            | "USBSTOR\\CDROM"
+            | "GENCDROM"
+            | "SCSI\\CDROM"
+    ) || clean.starts_with("USB\\CLASS_08")
+        || clean.starts_with("USBSTOR\\GENERIC")
+        || clean.starts_with("GENERIC_STORAGE")
+}
+
+/// Validates that a hardware identifier targets only USB storage devices and protects system disks/inputs.
+pub fn validate_storage_hardware_id(id: &str) -> Result<(), &'static str> {
+    let s = id.trim();
+    if s.is_empty() {
+        return Err("hardware ID cannot be empty");
+    }
+    if s.len() > 260 {
+        return Err("hardware ID exceeds maximum length of 260 characters");
+    }
+    if s.contains('*') || s.contains('?') || s.contains('/') || s.contains("..") {
+        return Err("wildcards, slashes, or directory traversal sequences are not allowed");
+    }
+    let upper = s.to_ascii_uppercase();
+    if !upper.starts_with("USBSTOR\\")
+        && !upper.starts_with("USB\\")
+        && !upper.starts_with("SCSI\\DISK")
+    {
+        return Err("only USB storage or USB device identifiers are supported");
+    }
+    if is_generic_storage_id(s) {
+        return Err(
+            "generic storage and compatible identifiers cannot be targeted as device identities",
+        );
+    }
+    if upper.contains("NVME")
+        || upper.contains("VMW_")
+        || upper.contains("VMWARE")
+        || upper.starts_with("PCI\\")
+        || upper.starts_with("IDE\\")
+        || upper.starts_with("ACPI\\")
+    {
+        return Err("system disk and internal buses are strictly protected and cannot be targeted");
+    }
+    if upper.starts_with("HID\\") || upper.contains("KBD") || upper.contains("MOU") {
+        return Err("input devices (keyboard, mouse) are strictly protected and cannot be targeted");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

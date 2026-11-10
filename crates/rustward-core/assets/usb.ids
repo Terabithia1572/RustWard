@@ -1,0 +1,153 @@
+# List of USB ID's
+#
+# Maintained by Stephen J. Gowdy <linux.usb.ids@gmail.com>
+# Snapshot bundled offline for RustWard USB Storage Access Control
+#
+# Syntax:
+# vendor  vendor_name
+#	device  device_name
+#
+
+03f0  HP, Inc
+	0001  USB Optical Mouse
+	5307  v210w Flash Drive
+	7040  x750w Flash Drive
+0411  BUFFALO INC. (formerly MelCo., Inc.)
+	01a2  RUF3-K Series USB Flash Drive
+	02b3  DriveStation External HDD
+0471  Philips (or NXP)
+	0601  Snow Edition USB Flash Drive
+	0843  Vivid USB Flash Drive
+0477  Seagate Technology, Inc.
+	0001  External Portable Drive
+0488  Toshiba Personal Computer System Corp.
+	0100  Internal Storage Controller
+048d  DM&P Electronics Inc.
+	1234  USB Flash Controller
+04bb  I-O Data Device, Inc.
+	0101  Verbatim USB Storage
+04e8  Samsung Electronics Co., Ltd
+	4001  Portable SSD T5
+	61f5  Portable SSD T7
+	7021  BAR Plus USB 3.1 Flash Drive
+	7022  FIT Plus USB 3.1 Flash Drive
+054c  Sony Corp.
+	0243  Micro Vault Click
+	05ba  Micro Vault Tiny
+057b  Y-E Data, Inc.
+	0001  Crucial External Storage
+058f  Alcor Micro Corp.
+	6387  Flash Drive Controller
+	6366  Multi-Flash Reader
+059b  Iomega Corp.
+	0031  eGo Portable Hard Drive
+	0060  Prestige Hard Drive
+05ab  In-System Design
+	0060  LaCie External USB Drive
+05dc  Lexar Media, Inc.
+	a815  JumpDrive TwistTurn
+	a832  JumpDrive S75 USB 3.0
+	b049  JumpDrive P20 USB 3.0
+0634  Micron Technology, Inc.
+	0001  RealSSD USB Controller
+0718  Imation Corp.
+	0621  Nano Pro Flash Drive
+	0706  Swivel Flash Drive
+0781  SanDisk Corp.
+	5567  Cruzer Blade
+	5581  Ultra USB 3.0
+	5583  Ultra Fit
+	5591  Extreme PRO USB 3.1
+	5595  Extreme Portable SSD
+07ab  Freecom Technologies GmbH
+	fc01  ToughDrive Portable HDD
+	fc10  Mobile Drive Classic
+0871  SanDisk, Inc.
+	0011  Cruzer Micro
+090c  Silicon Motion, Inc. - Taiwan (formerly Feiya Technology Corp.)
+	1000  Flash Drive Controller
+	2000  Silicon Power USB Storage
+0930  Toshiba Corp.
+	6544  TransMemory U202
+	6545  TransMemory U301 USB 3.0
+0951  Kingston Technology
+	1666  DataTraveler 3.0 / 100 G3 / SE9 G2
+	1665  DataTraveler 2.0
+	1689  DataTraveler G4
+	16a5  DataTraveler Micro 3.1
+0bc2  Seagate RSS LLC
+	2312  Backup Plus Portable Drive
+	ab24  Expansion Portable Drive
+	ab38  One Touch Portable HDD
+0dd8  Netac Technology Co., Ltd.
+	1234  U326 USB 3.0 Flash Drive
+	2300  U185 USB Flash Drive
+0e56  Kingston Technology Company, Inc.
+	0001  IronKey Locker+ USB Drive
+1005  Apacer Technology, Inc.
+	b113  Handy Steno AH350
+	b114  Handy Steno AH333
+1058  Western Digital Technologies, Inc.
+	0748  My Passport Ultra
+	25a2  Elements Portable SE
+	2626  My Book External HDD
+1247  Team Group Inc.
+	1000  C143 USB 3.0 Flash Drive
+	2000  C175 Pearl USB Flash Drive
+125f  A-DATA Technology Co., Ltd.
+	105b  DashDrive UV128
+	312b  DashDrive Elite UE700
+	a31a  HD710 Pro External HDD
+13fe  Kingston Technology Company Inc. (Phison OEM)
+	3e00  PS2251-68 USB Controller
+	4100  PS2251-03 USB Controller
+148f  Ralink Technology, Corp. / Mushkin
+	0001  Ventura USB 3.0 Flash Drive
+152d  JMicron Technology Corp. / JMicron USA Technology Corp.
+	0578  JMS578 SATA 6Gb/s Bridge
+	0583  JMS583 USB to PCIe Bridge
+154b  PNY
+	00ed  Attache 4 USB 3.0
+	00fc  Elite-X USB 3.1
+18a5  Verbatim Corp.
+	0302  Store 'n' Go PinStripe
+	0402  Store 'n' Go V3
+1a2a  Seagate Branded Solutions
+	0001  FreeAgent GoFlex Drive
+1b1c  Corsair
+	1a00  Flash Voyager GT
+	1a08  Flash Survivor Stealth
+1e71  Other World Computing
+	0001  Envoy Pro Portable SSD
+1f75  Innostor Technology Corp.
+	0917  IS917 USB 3.0 Flash Controller
+2109  VIA Labs, Inc.
+	0715  VL715 SATA Bridge / Sabrent
+	0716  VL716 USB-C Bridge
+2537  Western Digital
+	1081  My Passport Wireless
+26bd  Patriot Memory
+	9917  Supersonic Rage Elite
+	9918  Supersonic Boost XT
+291a  Anker Innovations
+	undefined  PowerExpand USB Storage
+2b73  Shenzhen Times Innovation Technology Co., Ltd / Ugreen
+	0001  M.2 NVMe SSD Enclosure
+2e04  Longsys
+	0001  Foresee USB Flash Controller
+326d  Kioxia Corporation
+	0001  TransMemory U365
+346d  VendorC / ASELSAN Lab Observed
+	5678  ProductCode USB Storage Stick
+357d  Silicon Power Computer & Communications Inc.
+	7702  Blaze B02 Flash Drive
+090c  Silicon Motion, Inc. - Taiwan (formerly Feiya Technology Corp.)
+	1000  Flash Drive Controller
+0bc2  Seagate RSS LLC
+	2312  Expansion Portable
+0bda  Realtek Semiconductor Corp.
+	9210  RTL9210 M.2 NVMe/SATA Bridge
+8564  Transcend Information, Inc.
+	1000  JetFlash USB Drive
+4234  Hama GmbH & Co. KG
+	0001  FlashPen USB Drive

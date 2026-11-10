@@ -719,6 +719,79 @@ impl Store {
         Ok(true)
     }
 
+    /// Syncs the manufacturer catalog if the active policy uses an older catalog version.
+    /// Preserves all existing allowlist and denylist configuration, bumps policy_version,
+    /// and logs a catalog_upgraded audit event.
+    pub fn sync_catalog_if_outdated(
+        &mut self,
+        latest_state: &PolicyState,
+        actor: &str,
+    ) -> Result<bool, StorageError> {
+        let active = match self.active_policy() {
+            Ok(Some(a)) => a,
+            Ok(None) | Err(StorageError::CorruptPolicy { .. }) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if active.state.catalog.catalog_version >= latest_state.catalog.catalog_version {
+            return Ok(false);
+        }
+
+        let now = self.clock.now_ms();
+        let mut new_policy = active.state.policy.clone();
+        new_policy.policy_version = new_policy.policy_version.saturating_add(1);
+        new_policy.catalog_version = latest_state.catalog.catalog_version.clone();
+
+        // Preserve any custom brands the administrator may have added
+        let mut merged_brands = latest_state.catalog.brands.clone();
+        for custom_brand in &active.state.catalog.brands {
+            if !merged_brands.iter().any(|b| b.id == custom_brand.id) {
+                merged_brands.push(custom_brand.clone());
+            }
+        }
+
+        let mut merged_catalog = latest_state.catalog.clone();
+        merged_catalog.brands = merged_brands;
+
+        let new_state = PolicyState {
+            catalog: merged_catalog,
+            policy: new_policy,
+        };
+        new_state
+            .validate()
+            .map_err(|e| StorageError::Invalid(e.to_string()))?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::insert_state_tx(&tx, &new_state, now)?;
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Info,
+                kind: "catalog_upgraded".into(),
+                device_key: None,
+                message: format!(
+                    "Manufacturer catalog upgraded from {} to {} ({} brands available) by {actor}",
+                    active.state.catalog.catalog_version,
+                    new_state.catalog.catalog_version,
+                    new_state.catalog.brands.len()
+                ),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: Some(new_state.policy.policy_version),
+                details: serde_json::json!({
+                    "from_catalog_version": active.state.catalog.catalog_version,
+                    "to_catalog_version": new_state.catalog.catalog_version,
+                    "brand_count": new_state.catalog.brands.len(),
+                }),
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(true)
+    }
+
     /// Persist an applied edit atomically: new active state, change record
     /// and audit event. Fails with [`StorageError::VersionConflict`] if the
     /// active version is not the one the edit was based on.

@@ -365,6 +365,21 @@ fn row_from(
 }
 
 fn device_view(r: &DeviceRow) -> DeviceView {
+    device_view_with_policy(r, None)
+}
+
+fn device_view_with_policy(r: &DeviceRow, policy: Option<&rustward_core::policy::ValidatedPolicy>) -> DeviceView {
+    let override_status = policy.and_then(|p| {
+        let hw = r.vendor_level_id.as_deref().unwrap_or(&r.display_id);
+        if p.device_denied(hw) {
+            Some("denied".to_string())
+        } else if p.device_allowed(hw) {
+            Some("allowed".to_string())
+        } else {
+            None
+        }
+    });
+
     DeviceView {
         device_key: r.device_key.clone(),
         display_id: r.display_id.clone(),
@@ -386,6 +401,7 @@ fn device_view(r: &DeviceRow) -> DeviceView {
         enforcement_state: r.enforcement_state.clone(),
         // No runtime enforcement evidence exists in this build.
         enforcement_verified: false,
+        device_override: override_status,
     }
 }
 
@@ -537,6 +553,9 @@ impl AppService {
     ) -> Result<Self, IpcError> {
         store
             .initialize_policy(initial_state, "rustward-setup")
+            .map_err(storage_err)?;
+        store
+            .sync_catalog_if_outdated(initial_state, "rustward-setup")
             .map_err(storage_err)?;
         let started_ms = clock.now_ms();
         store
@@ -1947,9 +1966,12 @@ impl Handler for AppService {
             }
             Request::ListDevices { include_absent } => {
                 let g = self.lock()?;
+                let v = Self::validated(&g.store).ok();
                 let rows = g.store.list_devices(!include_absent).map_err(storage_err)?;
                 Ok(ResponseBody::Devices(
-                    rows.iter().map(device_view).collect(),
+                    rows.iter()
+                        .map(|r| device_view_with_policy(r, v.as_ref().map(|x| &x.policy)))
+                        .collect(),
                 ))
             }
             Request::ListManufacturers => {
@@ -2253,8 +2275,15 @@ impl Handler for AppService {
                 )?;
                 Ok(ResponseBody::EnforcementSession(Box::new(r)))
             }
-            Request::RestoreDevicePolicy { session_id } => {
-                let r = self.restore_device_policy_direct(session_id.as_deref(), identity)?;
+            Request::RestoreDevicePolicy {
+                session_id,
+                device_key,
+            } => {
+                let r = self.restore_device_policy_direct(
+                    session_id.as_deref(),
+                    device_key.as_deref(),
+                    identity,
+                )?;
                 Ok(ResponseBody::EnforcementSession(Box::new(r)))
             }
             Request::ApplyCompoundPolicy {

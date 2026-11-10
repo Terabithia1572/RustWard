@@ -229,6 +229,27 @@ pub struct CompoundPolicyDiff {
     pub is_synchronized: bool,
 }
 
+/// Status view of an explicit device override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceOverrideView {
+    /// Target hardware ID.
+    pub hardware_id: String,
+    /// Device instance ID if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    /// Human-readable label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// True if deny override, false if allow override.
+    pub denied: bool,
+    /// Whether the rule is enabled.
+    pub enabled: bool,
+    /// Windows Group Policy status.
+    pub windows_status: WindowsPolicyStatus,
+    /// Verified physical device outcome.
+    pub device_outcome: DeviceOutcomeStatus,
+}
+
 /// Unified compound policy plan presented to the administrator and UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompoundPolicyPlanView {
@@ -238,6 +259,9 @@ pub struct CompoundPolicyPlanView {
     pub policy_version: u64,
     /// Manufacturer policy breakdown.
     pub manufacturers: Vec<ManufacturerPolicyView>,
+    /// Active device-level overrides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub device_overrides: Vec<DeviceOverrideView>,
     /// Compiled Windows policy.
     pub compiled: CompiledWindowsPolicy,
     /// Observed live Windows policy.
@@ -602,6 +626,125 @@ pub fn compile_compound_policy(
         });
     }
 
+    // Additive Device-Level Overrides:
+    // Incorporate explicitly denied devices into planned_denies without clearing or replacing manufacturer rules.
+    let mut device_override_views = Vec::new();
+    for d_rule in &inner_policy.denied_devices {
+        if !d_rule.enabled {
+            continue;
+        }
+        let hw_upper = d_rule.hardware_id.trim().to_ascii_uppercase();
+        if validate_hardware_id(&hw_upper).is_ok() && !is_generic_storage_id(&hw_upper) {
+            planned_denies.insert(hw_upper.clone());
+        }
+
+        // If instance_id or devnode exists in inventory, also add device-specific hardware IDs
+        for dev in inventory {
+            let is_match = d_rule
+                .instance_id
+                .as_deref()
+                .is_some_and(|inst| dev.instance_id.eq_ignore_ascii_case(inst))
+                || dev.has_id(&hw_upper)
+                || dev
+                    .hardware_ids
+                    .iter()
+                    .any(|h| h.trim().eq_ignore_ascii_case(&hw_upper));
+            if is_match {
+                for h in &dev.hardware_ids {
+                    let h_upper = h.trim().to_ascii_uppercase();
+                    if validate_hardware_id(&h_upper).is_ok() && !is_generic_storage_id(&h_upper) {
+                        planned_denies.insert(h_upper);
+                    }
+                }
+            }
+        }
+
+        let windows_status = if observed.active_denies.contains(&hw_upper) {
+            WindowsPolicyStatus::Applied
+        } else {
+            WindowsPolicyStatus::NotApplied
+        };
+
+        let mut outcome = DeviceOutcomeStatus::NotConnected;
+        for dev in inventory {
+            let is_match = d_rule
+                .instance_id
+                .as_deref()
+                .is_some_and(|inst| dev.instance_id.eq_ignore_ascii_case(inst))
+                || dev.has_id(&hw_upper)
+                || dev
+                    .hardware_ids
+                    .iter()
+                    .any(|h| h.trim().eq_ignore_ascii_case(&hw_upper));
+            if is_match {
+                if dev.problem_code == Some(28) {
+                    outcome = DeviceOutcomeStatus::InstallationDenied;
+                } else {
+                    outcome = DeviceOutcomeStatus::Accessible;
+                }
+                break;
+            }
+        }
+
+        device_override_views.push(DeviceOverrideView {
+            hardware_id: d_rule.hardware_id.clone(),
+            instance_id: d_rule.instance_id.clone(),
+            label: d_rule.label.clone(),
+            denied: true,
+            enabled: d_rule.enabled,
+            windows_status,
+            device_outcome: outcome,
+        });
+    }
+
+    // Incorporate explicitly allowed devices into planned_allows
+    for a_rule in &inner_policy.allowed_devices {
+        if !a_rule.enabled {
+            continue;
+        }
+        let hw_upper = a_rule.hardware_id.trim().to_ascii_uppercase();
+        if validate_hardware_id(&hw_upper).is_ok() && !is_generic_storage_id(&hw_upper) {
+            planned_allows.insert(hw_upper.clone());
+        }
+
+        let windows_status = if observed.active_allows.contains(&hw_upper) {
+            WindowsPolicyStatus::Applied
+        } else {
+            WindowsPolicyStatus::NotApplied
+        };
+
+        let mut outcome = DeviceOutcomeStatus::NotConnected;
+        for dev in inventory {
+            let is_match = a_rule
+                .instance_id
+                .as_deref()
+                .is_some_and(|inst| dev.instance_id.eq_ignore_ascii_case(inst))
+                || dev.has_id(&hw_upper)
+                || dev
+                    .hardware_ids
+                    .iter()
+                    .any(|h| h.trim().eq_ignore_ascii_case(&hw_upper));
+            if is_match {
+                if dev.problem_code == Some(28) {
+                    outcome = DeviceOutcomeStatus::DriverRecoveryNeeded;
+                } else {
+                    outcome = DeviceOutcomeStatus::Accessible;
+                }
+                break;
+            }
+        }
+
+        device_override_views.push(DeviceOverrideView {
+            hardware_id: a_rule.hardware_id.clone(),
+            instance_id: a_rule.instance_id.clone(),
+            label: a_rule.label.clone(),
+            denied: false,
+            enabled: a_rule.enabled,
+            windows_status,
+            device_outcome: outcome,
+        });
+    }
+
     // Preserve and adopt managed active GPO restrictions that are still legitimately configured
     // (e.g. Kingston remains denied when another brand is added or modified).
     // Generic IDs (like USBSTOR\GENDISK) or IDs belonging to non-denied brands are NEVER adopted.
@@ -612,6 +755,7 @@ pub fn compile_compound_policy(
         }
 
         // Only adopt if this active deny belongs to a manufacturer currently configured as ExplicitDeny
+        // OR an explicitly denied device override rule.
         let belongs_to_explicit_deny = manufacturer_views.iter().any(|m| {
             m.configured_intention == ConfiguredIntention::ExplicitDeny
                 && (m.hardware_ids.contains(active_deny)
@@ -620,7 +764,11 @@ pub fn compile_compound_policy(
                         .contains(&m.brand_id.to_ascii_uppercase()))
         });
 
-        if belongs_to_explicit_deny {
+        let belongs_to_device_deny = inner_policy.denied_devices.iter().any(|d| {
+            d.enabled && d.hardware_id.trim().eq_ignore_ascii_case(active_deny)
+        });
+
+        if belongs_to_explicit_deny || belongs_to_device_deny {
             planned_denies.insert(active_deny.clone());
         }
     }
@@ -773,6 +921,7 @@ pub fn compile_compound_policy(
         revision_id,
         policy_version: inner_policy.policy_version,
         manufacturers: manufacturer_views,
+        device_overrides: device_override_views,
         compiled,
         observed,
         diff,
@@ -827,6 +976,8 @@ mod tests {
                     note: None,
                 },
             ],
+            denied_devices: vec![],
+            allowed_devices: vec![],
         };
         ValidatedPolicy::validate(p, catalog).unwrap()
     }
@@ -916,6 +1067,7 @@ mod tests {
         let mut raw: ManufacturerCatalog =
             serde_json::from_str(include_str!("../../../config/manufacturer-catalog.json")).unwrap();
         raw.reserved_generic_vendors.retain(|v| v != "VendorC");
+        raw.brands.retain(|b| b.id != "vendorc");
         raw.brands.push(BrandEntry {
             id: "vendorc".into(),
             display_name: "VendorC".into(),
@@ -956,6 +1108,8 @@ mod tests {
                 enabled: true,
                 note: None,
             }],
+            denied_devices: vec![],
+            allowed_devices: vec![],
         };
         let pol = ValidatedPolicy::validate(p, &cat).unwrap();
 
@@ -1091,6 +1245,8 @@ mod tests {
                 enabled: true,
                 note: None,
             }],
+            denied_devices: vec![],
+            allowed_devices: vec![],
         };
         let pol = ValidatedPolicy::validate(p, &cat).unwrap();
 
@@ -1126,6 +1282,7 @@ mod tests {
         let mut raw: ManufacturerCatalog =
             serde_json::from_str(include_str!("../../../config/manufacturer-catalog.json")).unwrap();
         raw.reserved_generic_vendors.retain(|v| v != "VendorC");
+        raw.brands.retain(|b| b.id != "vendorc");
         raw.brands.push(BrandEntry {
             id: "vendorc".into(),
             display_name: "VendorC".into(),
@@ -1159,6 +1316,8 @@ mod tests {
                 note: None,
             }],
             denied_brands: vec![],
+            denied_devices: vec![],
+            allowed_devices: vec![],
         };
         let pol = ValidatedPolicy::validate(p, &cat).unwrap();
 

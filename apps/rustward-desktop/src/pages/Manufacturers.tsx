@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -361,6 +361,17 @@ function WindowsPolicyPlanSection({
                   DenyDeviceIDs: USBSTOR\DiskKingstonDataTraveler_3.0____ (0951:1666)
                 </div>
               </li>
+              {plan?.device_overrides && plan.device_overrides.filter((d) => d.denied).map((d) => (
+                <li key={d.hardware_id} className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">{d.label ?? "Cihaz Kuralı"}</span>
+                    <Badge tone="danger">Cihaz Engeli</Badge>
+                  </div>
+                  <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                    {d.hardware_id}
+                  </div>
+                </li>
+              ))}
               <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-slate-800 dark:text-slate-200">Seagate & Diğer Bilinmeyenler</span>
@@ -701,6 +712,10 @@ export function ManufacturersPage() {
   const [editing, setEditing] = useState<ManufacturerView | "new" | null>(null);
   const [removing, setRemoving] = useState<ManufacturerView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "allowed" | "denied" | "configured" | "connected">("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 12;
   const removeAction = useAction();
   const changed = (msg: string) => {
     setNotice(msg);
@@ -708,6 +723,51 @@ export function ManufacturersPage() {
   };
   const v = r.data;
   const plan = compoundPlanRes.data ?? null;
+
+  const connectedVids = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of devicesRes.data ?? []) {
+      if (d.usb_vid_pid) {
+        const vid = d.usb_vid_pid.split(":")[0]?.trim().toUpperCase();
+        if (vid) set.add(vid);
+      }
+      if (d.matched_brand) {
+        set.add(d.matched_brand.toLowerCase());
+      }
+    }
+    return set;
+  }, [devicesRes.data]);
+
+  const filtered = useMemo(() => {
+    if (!v) return [];
+    const q = query.trim().toLowerCase();
+    return v.manufacturers.filter((m) => {
+      if (filter === "allowed" && (!m.allowed || m.denied)) return false;
+      if (filter === "denied" && !m.denied) return false;
+      if (filter === "configured" && !m.allowed && !m.denied) return false;
+      if (filter === "connected") {
+        const hasConnectedVid = m.identifiers.some(
+          (i) => i.kind === "usb_vid" && connectedVids.has(i.value.toUpperCase()),
+        );
+        const hasConnectedBrand = connectedVids.has(m.id.toLowerCase());
+        if (!hasConnectedVid && !hasConnectedBrand) return false;
+      }
+
+      if (!q) return true;
+      const matchName = m.display_name.toLowerCase().includes(q);
+      const matchId = m.id.toLowerCase().includes(q);
+      const matchAliases = m.aliases.some((a) => a.toLowerCase().includes(q));
+      const matchIdents = m.identifiers.some((i) => i.value.toLowerCase().includes(q));
+      return matchName || matchId || matchAliases || matchIdents;
+    });
+  }, [v, query, filter, connectedVids]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
 
   return (
     <div className="space-y-4">
@@ -740,22 +800,88 @@ export function ManufacturersPage() {
       {r.loading && !v && <Loading />}
       {v && (
         <>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {v.manufacturers.map((m) => {
-              const mPlan = plan?.manufacturers.find((p) => p.brand_id === m.id);
-              return (
-                <ManufacturerCard
-                  key={m.id}
-                  m={m}
-                  mPlan={mPlan}
-                  view={v}
-                  onChanged={changed}
-                  onEdit={() => setEditing(m)}
-                  onRemove={() => setRemoving(m)}
-                />
-              );
-            })}
+          {/* Search & Category Filter Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex rounded-md border border-slate-300 p-0.5 dark:border-slate-700" role="group">
+                {(["all", "allowed", "denied", "configured", "connected"] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    aria-pressed={filter === f}
+                    onClick={() => {
+                      setFilter(f);
+                      setPage(1);
+                    }}
+                    className={`rounded px-2.5 py-1 text-xs font-medium ${
+                      filter === f
+                        ? "bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900"
+                        : "text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    {t(`manufacturers.filter.${f}`)}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="search"
+                aria-label={t("common.search")}
+                placeholder={t("manufacturers.searchPlaceholder")}
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setPage(1);
+                }}
+                className={`${inputClass} max-w-sm`}
+              />
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {t("manufacturers.pagination.total", { total: filtered.length })}
+            </div>
           </div>
+
+          {filtered.length === 0 ? (
+            <Empty />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              {paginated.map((m) => {
+                const mPlan = plan?.manufacturers.find((p) => p.brand_id === m.id);
+                return (
+                  <ManufacturerCard
+                    key={m.id}
+                    m={m}
+                    mPlan={mPlan}
+                    view={v}
+                    onChanged={changed}
+                    onEdit={() => setEditing(m)}
+                    onRemove={() => setRemoving(m)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-slate-200 pt-3 text-xs dark:border-slate-800">
+              <Button
+                variant="ghost"
+                disabled={currentPage <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                {t("manufacturers.pagination.prev")}
+              </Button>
+              <span className="text-slate-600 dark:text-slate-400">
+                {t("manufacturers.pagination.page")} {currentPage} {t("manufacturers.pagination.of")} {totalPages}
+              </span>
+              <Button
+                variant="ghost"
+                disabled={currentPage >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                {t("manufacturers.pagination.next")}
+              </Button>
+            </div>
+          )}
           {v.warnings.length > 0 && (
             <Card title={t("manufacturers.warnings")}>
               <ul className="list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-300">

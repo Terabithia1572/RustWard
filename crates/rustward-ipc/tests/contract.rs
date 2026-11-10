@@ -130,6 +130,7 @@ fn all_requests() -> Vec<Request> {
         },
         Request::RestoreDevicePolicy {
             session_id: Some("0123456789abcdef".into()),
+            device_key: None,
         },
         Request::GetCompoundPolicyPlan,
         Request::ApplyCompoundPolicy {

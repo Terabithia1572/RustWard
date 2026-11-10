@@ -185,11 +185,12 @@ export class Api {
     );
   }
   /** Restore device policy directly through privileged backend GPO API. */
-  async restoreDevicePolicy(options?: { sessionId?: string }): Promise<EnforcementSessionView> {
+  async restoreDevicePolicy(options?: { sessionId?: string; deviceKey?: string }): Promise<EnforcementSessionView> {
     return expect(
       await this.call({
         type: "restore_device_policy",
         session_id: options?.sessionId,
+        device_key: options?.deviceKey,
       }),
       "enforcement_session",
     );

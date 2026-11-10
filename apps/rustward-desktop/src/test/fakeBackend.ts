@@ -722,6 +722,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
               device_outcome: m.id === "kingston" ? "installation_denied" : "not_connected",
               notes: m.notes,
             })),
+            device_overrides: [],
             compiled: {
               revision_id: "a1b2c3d4e5f60718",
               deny_hardware_ids: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],

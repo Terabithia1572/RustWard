@@ -302,6 +302,7 @@ impl ValidatedCatalog {
         // Aliases never authorize, but a name shared between brands or equal
         // to a generic vendor would mislead an administrator reading hints.
         let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut seen_generic_aliases: HashSet<String> = HashSet::new();
         for brand in &catalog.brands {
             for name in std::iter::once(&brand.display_name).chain(brand.aliases.iter()) {
                 let key = crate::names::normalize_brand_name(name);
@@ -309,14 +310,17 @@ impl ValidatedCatalog {
                     continue;
                 }
                 if reserved.contains(&normalize_generic(name)) {
-                    warnings.push(CatalogIssue {
-                        severity: Severity::Warning,
-                        code: "alias_generic",
-                        detail: format!(
-                            "brand {:?}: alias {name:?} is a reserved generic vendor name",
-                            brand.id
-                        ),
-                    });
+                    let warn_key = format!("{}:{}", brand.id, normalize_generic(name));
+                    if seen_generic_aliases.insert(warn_key) {
+                        warnings.push(CatalogIssue {
+                            severity: Severity::Warning,
+                            code: "alias_generic",
+                            detail: format!(
+                                "brand {:?}: alias {name:?} is a reserved generic vendor name",
+                                brand.id
+                            ),
+                        });
+                    }
                 }
                 let entry = names.entry(key).or_default();
                 if !entry.contains(&brand.id) {
@@ -396,6 +400,113 @@ impl ValidatedCatalog {
     pub fn is_generic_vendor(&self, vendor: &str) -> bool {
         let n = normalize_generic(vendor);
         n.is_empty() || self.reserved.contains(&n)
+    }
+}
+
+/// An entry in the offline standard `usb.ids` registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsbRegistryVendor {
+    /// 16-bit USB vendor ID.
+    pub vid: u16,
+    /// 4-digit upper-case hex string (e.g. "0951").
+    pub vid_hex: String,
+    /// Human-readable vendor name as stated in usb.ids registry.
+    pub vendor_name: String,
+}
+
+/// Offline USB-IF vendor database parsed from bundled `usb.ids`.
+#[derive(Debug, Clone, Default)]
+pub struct UsbIdsRegistry {
+    vendors: HashMap<u16, String>,
+}
+
+impl UsbIdsRegistry {
+    /// Parse from text format (Stephen J. Gowdy linux-usb / usb.ids syntax).
+    #[must_use]
+    pub fn from_text(text: &str) -> Self {
+        let mut vendors = HashMap::new();
+        for line in text.lines() {
+            let line = line.trim_end();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            // Device lines start with tab; ignore them for vendor registry
+            if line.starts_with('\t') {
+                continue;
+            }
+            // Vendor line: "<4-hex-chars>  <Vendor Name>"
+            if line.len() >= 6 {
+                let vid_str = &line[..4];
+                if let Ok(vid) = u16::from_str_radix(vid_str, 16) {
+                    let name = line[4..].trim();
+                    if !name.is_empty() {
+                        vendors.insert(vid, name.to_string());
+                    }
+                }
+            }
+        }
+        Self { vendors }
+    }
+
+    /// Bundled static offline registry snapshot.
+    pub fn bundled() -> &'static Self {
+        static REGISTRY: std::sync::OnceLock<UsbIdsRegistry> = std::sync::OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            let text = include_str!("../assets/usb.ids");
+            Self::from_text(text)
+        })
+    }
+
+    /// Number of registered vendors.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.vendors.len()
+    }
+
+    /// Whether the registry is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.vendors.is_empty()
+    }
+
+    /// Lookup vendor name by numeric VID.
+    #[must_use]
+    pub fn lookup_vid(&self, vid: u16) -> Option<&str> {
+        self.vendors.get(&vid).map(String::as_str)
+    }
+
+    /// Lookup vendor name by 4-hex-digit VID string.
+    #[must_use]
+    pub fn lookup_vid_hex(&self, hex: &str) -> Option<&str> {
+        parse_vid(hex).and_then(|vid| self.lookup_vid(vid))
+    }
+
+    /// Search vendors by query substring (case-insensitive in name or hex VID).
+    #[must_use]
+    pub fn search(&self, query: &str) -> Vec<UsbRegistryVendor> {
+        let q = query.trim().to_ascii_lowercase();
+        let mut results = Vec::new();
+        for (&vid, name) in &self.vendors {
+            let hex = format!("{vid:04X}");
+            if q.is_empty()
+                || hex.to_ascii_lowercase().contains(&q)
+                || name.to_ascii_lowercase().contains(&q)
+            {
+                results.push(UsbRegistryVendor {
+                    vid,
+                    vid_hex: hex,
+                    vendor_name: name.clone(),
+                });
+            }
+        }
+        results.sort_by(|a, b| a.vendor_name.cmp(&b.vendor_name));
+        results
+    }
+
+    /// Total number of known vendors in the offline registry.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.vendors.len()
     }
 }
 
@@ -522,5 +633,19 @@ mod tests {
         assert!(c.is_generic_vendor("usb_____"));
         assert!(c.is_generic_vendor("________"));
         assert!(!c.is_generic_vendor("SanDisk_"));
+    }
+
+    #[test]
+    fn usb_ids_registry_parses_bundled_and_custom_text() {
+        let reg = UsbIdsRegistry::bundled();
+        assert!(reg.count() >= 40);
+        assert_eq!(reg.lookup_vid(0x0951), Some("Kingston Technology"));
+        assert_eq!(reg.lookup_vid_hex("0781"), Some("SanDisk Corp."));
+        assert_eq!(reg.lookup_vid_hex("1058"), Some("Western Digital Technologies, Inc."));
+        assert_eq!(reg.lookup_vid_hex("ffff"), None);
+
+        let search_results = reg.search("Kingston");
+        assert!(!search_results.is_empty());
+        assert!(search_results.iter().any(|v| v.vid == 0x0951));
     }
 }

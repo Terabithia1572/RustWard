@@ -156,11 +156,19 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
             }
             Ok(())
         }
-        Request::RestoreDevicePolicy { session_id } => {
+        Request::RestoreDevicePolicy {
+            session_id,
+            device_key,
+        } => {
             if let Some(sid) = session_id
                 && !(sid.len() == 16 && sid.bytes().all(|b| b.is_ascii_hexdigit()))
             {
                 return Err(bad("session_id must be 16 hex characters"));
+            }
+            if let Some(dk) = device_key
+                && !(dk.len() == 32 && dk.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(bad("device_key must be 32 hex characters"));
             }
             Ok(())
         }

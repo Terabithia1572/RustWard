@@ -5,8 +5,8 @@ use rustward_core::explain::Explanation;
 use rustward_core::policy_edit::ManufacturerInput;
 pub use rustward_enforcement::compound_policy::{
     CompiledWindowsPolicy, CompoundPolicyDiff, CompoundPolicyPlanView, ConfiguredIntention,
-    DeviceOutcomeStatus, IdentityCoverage, LocalizedText, ManufacturerPolicyView,
-    ObservedWindowsPolicy, WindowsPolicyStatus,
+    DeviceOutcomeStatus, DeviceOverrideView, IdentityCoverage, LocalizedText,
+    ManufacturerPolicyView, ObservedWindowsPolicy, WindowsPolicyStatus,
 };
 use rustward_enforcement::installed_assessment::InstalledAssessment;
 use rustward_enforcement::policy_inspect::PolicyInspection;
@@ -276,6 +276,9 @@ pub enum Request {
         /// Session id (16 hex), or active session if omitted.
         #[serde(default)]
         session_id: Option<String>,
+        /// Target device key (32 hex) when unblocking a specific device override.
+        #[serde(default)]
+        device_key: Option<String>,
     },
     /// Get the unified compound Windows policy plan (read-only).
     GetCompoundPolicyPlan,
@@ -431,6 +434,9 @@ pub struct DeviceView {
     pub enforcement_state: String,
     /// True only with runtime enforcement evidence (never in this build).
     pub enforcement_verified: bool,
+    /// Explicit device-level override status: "denied" | "allowed" | "none".
+    #[serde(default)]
+    pub device_override: Option<String>,
 }
 
 /// Dashboard.

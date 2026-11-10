@@ -40,6 +40,24 @@ pub struct BrandRule {
     pub note: Option<String>,
 }
 
+/// An explicit device-level restriction override rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceRule {
+    /// Target hardware ID (e.g. `USBSTOR\DiskKingstonDataTraveler_3.0____`).
+    pub hardware_id: String,
+    /// Device instance ID if known (e.g. `USBSTOR\DISK&VEN_...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    /// Human-readable label (e.g. "Kingston DataTraveler 3.0").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Whether the device override rule is currently active.
+    pub enabled: bool,
+    /// Administrator note or justification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// The policy file for one workstation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkstationPolicy {
@@ -59,6 +77,12 @@ pub struct WorkstationPolicy {
     /// empty, so policies written before Phase 6 keep their exact bytes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub denied_brands: Vec<BrandRule>,
+    /// Explicitly denied devices (additive overrides).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_devices: Vec<DeviceRule>,
+    /// Explicitly allowed devices (additive overrides).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_devices: Vec<DeviceRule>,
 }
 
 /// A policy validation finding.
@@ -233,6 +257,54 @@ impl ValidatedPolicy {
             }
         }
 
+        let mut seen_denied_dev = HashSet::new();
+        for dev_rule in &policy.denied_devices {
+            let hw_upper = dev_rule.hardware_id.trim().to_ascii_uppercase();
+            if !seen_denied_dev.insert(hw_upper) {
+                err(
+                    "device_rule_duplicate",
+                    format!("device {:?} denied more than once", dev_rule.hardware_id),
+                );
+            }
+            if let Err(e) = crate::ids::validate_storage_hardware_id(&dev_rule.hardware_id) {
+                err(
+                    "device_hardware_id_invalid",
+                    format!("device rule {:?}: {e}", dev_rule.hardware_id),
+                );
+            }
+        }
+
+        let mut seen_allowed_dev = HashSet::new();
+        for dev_rule in &policy.allowed_devices {
+            let hw_upper = dev_rule.hardware_id.trim().to_ascii_uppercase();
+            if !seen_allowed_dev.insert(hw_upper) {
+                err(
+                    "device_rule_duplicate",
+                    format!("device {:?} allowed more than once", dev_rule.hardware_id),
+                );
+            }
+            if let Err(e) = crate::ids::validate_storage_hardware_id(&dev_rule.hardware_id) {
+                err(
+                    "device_hardware_id_invalid",
+                    format!("device rule {:?}: {e}", dev_rule.hardware_id),
+                );
+            }
+            if dev_rule.enabled
+                && policy
+                    .denied_devices
+                    .iter()
+                    .any(|d| d.enabled && d.hardware_id.trim().eq_ignore_ascii_case(dev_rule.hardware_id.trim()))
+            {
+                err(
+                    "device_rule_conflict",
+                    format!(
+                        "device {:?} is both allowed and denied; remove one of the rules",
+                        dev_rule.hardware_id
+                    ),
+                );
+            }
+        }
+
         if issues.is_empty() {
             Ok(Self { policy, warnings })
         } else {
@@ -251,6 +323,28 @@ impl ValidatedPolicy {
     #[must_use]
     pub fn warnings(&self) -> &[PolicyIssue] {
         &self.warnings
+    }
+
+    /// Whether a device is explicitly denied (enabled device deny rule).
+    #[must_use]
+    pub fn device_denied(&self, hwid: &str) -> bool {
+        let clean = hwid.trim().to_ascii_uppercase();
+        self.policy.denied_devices.iter().any(|r| {
+            r.enabled
+                && (r.hardware_id.trim().eq_ignore_ascii_case(&clean)
+                    || r.instance_id.as_deref().is_some_and(|inst| inst.trim().eq_ignore_ascii_case(&clean)))
+        })
+    }
+
+    /// Whether a device is explicitly allowed (enabled device allow rule).
+    #[must_use]
+    pub fn device_allowed(&self, hwid: &str) -> bool {
+        let clean = hwid.trim().to_ascii_uppercase();
+        self.policy.allowed_devices.iter().any(|r| {
+            r.enabled
+                && (r.hardware_id.trim().eq_ignore_ascii_case(&clean)
+                    || r.instance_id.as_deref().is_some_and(|inst| inst.trim().eq_ignore_ascii_case(&clean)))
+        })
     }
 
     /// Whether a brand is explicitly denied (enabled deny rule).
@@ -334,6 +428,8 @@ mod tests {
                 })
                 .collect(),
             denied_brands: Vec::new(),
+            denied_devices: Vec::new(),
+            allowed_devices: Vec::new(),
         }
     }
 
@@ -459,7 +555,62 @@ mod tests {
         let p = policy(PolicyMode::DryRun, &[("sandisk", true)]);
         let json = serde_json::to_string(&p).unwrap();
         assert!(!json.contains("denied_brands"));
+        assert!(!json.contains("denied_devices"));
+        assert!(!json.contains("allowed_devices"));
         let back: WorkstationPolicy = serde_json::from_str(&json).unwrap();
         assert!(back.denied_brands.is_empty());
+        assert!(back.denied_devices.is_empty());
+        assert!(back.allowed_devices.is_empty());
+    }
+
+    #[test]
+    fn device_override_rules_are_validated_and_queried() {
+        let c = catalog(Verification::LabVerified);
+        let mut p = policy(PolicyMode::DryRun, &[("sandisk", true)]);
+        p.denied_devices.push(DeviceRule {
+            hardware_id: "USBSTOR\\DiskKingstonDataTraveler_3.0____".into(),
+            instance_id: Some("USBSTOR\\DISK&VEN_KINGSTON\\1".into()),
+            label: Some("Kingston DT 3.0".into()),
+            enabled: true,
+            note: Some("Additive block".into()),
+        });
+        p.allowed_devices.push(DeviceRule {
+            hardware_id: "USBSTOR\\DiskVendorC_ProductCode_____3.20".into(),
+            instance_id: Some("USBSTOR\\DISK&VEN_VENDORC\\2".into()),
+            label: Some("VendorC Stick".into()),
+            enabled: true,
+            note: Some("Explicit allow override".into()),
+        });
+
+        let v = ValidatedPolicy::validate(p.clone(), &c).unwrap();
+        assert!(v.device_denied("USBSTOR\\DiskKingstonDataTraveler_3.0____"));
+        assert!(v.device_denied("USBSTOR\\DISK&VEN_KINGSTON\\1"));
+        assert!(!v.device_denied("USBSTOR\\DiskVendorC_ProductCode_____3.20"));
+        assert!(v.device_allowed("USBSTOR\\DiskVendorC_ProductCode_____3.20"));
+        assert!(v.device_allowed("USBSTOR\\DISK&VEN_VENDORC\\2"));
+
+        // Reject generic storage ID
+        let mut bad_generic = p.clone();
+        bad_generic.denied_devices[0].hardware_id = "USBSTOR\\GenDisk".into();
+        let errs = error_codes(ValidatedPolicy::validate(bad_generic, &c).unwrap_err());
+        assert!(errs.contains(&"device_hardware_id_invalid"));
+
+        // Reject system disk ID (e.g. NVMe)
+        let mut bad_nvme = p.clone();
+        bad_nvme.denied_devices[0].hardware_id = "SCSI\\DiskNVMe____Samsung_SSD_980_1B2Q".into();
+        let errs = error_codes(ValidatedPolicy::validate(bad_nvme, &c).unwrap_err());
+        assert!(errs.contains(&"device_hardware_id_invalid"));
+
+        // Reject conflict (same hardware ID enabled in both denied and allowed)
+        let mut conflict = p;
+        conflict.allowed_devices.push(DeviceRule {
+            hardware_id: "USBSTOR\\DiskKingstonDataTraveler_3.0____".into(),
+            instance_id: None,
+            label: None,
+            enabled: true,
+            note: None,
+        });
+        let errs = error_codes(ValidatedPolicy::validate(conflict, &c).unwrap_err());
+        assert!(errs.contains(&"device_rule_conflict"));
     }
 }

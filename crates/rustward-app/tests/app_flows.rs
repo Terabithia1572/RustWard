@@ -146,15 +146,15 @@ fn manufacturer_crud_persists_across_restart() {
         );
         let v = policy_version(&s);
         assert!(matches!(
-            call(&s, Request::AddManufacturer { input: input("Western Digital", Some("WD")), allowed: true, expected_policy_version: v }),
+            call(&s, Request::AddManufacturer { input: input("Acme Storage", Some("ACME")), allowed: true, expected_policy_version: v }),
             ResponseBody::Mutation(m) if m.policy_version == v + 1
         ));
-        let mut edited = input("Western Digital", Some("WD"));
-        edited.aliases = vec!["WDC".into()];
+        let mut edited = input("Acme Storage", Some("ACME"));
+        edited.aliases = vec!["ACMEDISK".into()];
         call(
             &s,
             Request::UpdateManufacturer {
-                id: "western-digital".into(),
+                id: "acme-storage".into(),
                 input: edited,
                 expected_policy_version: v + 1,
             },
@@ -187,16 +187,16 @@ fn manufacturer_crud_persists_across_restart() {
         panic!()
     };
     assert_eq!(m.policy_version, 5);
-    let wd = m
+    let acme = m
         .manufacturers
         .iter()
-        .find(|b| b.id == "western-digital")
+        .find(|b| b.id == "acme-storage")
         .unwrap();
-    assert!(wd.allowed && wd.enabled && wd.enforceable);
-    assert_eq!(wd.aliases, ["WDC"]);
+    assert!(acme.allowed && acme.enabled && acme.enforceable);
+    assert_eq!(acme.aliases, ["ACMEDISK"]);
     assert_eq!(
-        wd.identifiers[0].vendor_level_ids,
-        ["USBSTOR\\DiskWD______", "SCSI\\DiskWD______"]
+        acme.identifiers[0].vendor_level_ids,
+        ["USBSTOR\\DiskACME____", "SCSI\\DiskACME____"]
     );
     assert!(m.manufacturers.iter().all(|b| b.id != "seagate"));
     let tub = m.manufacturers.iter().find(|b| b.id == "tubitak").unwrap();

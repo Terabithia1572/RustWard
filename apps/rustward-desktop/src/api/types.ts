@@ -78,7 +78,7 @@ export type Request =
   | { type: "prepare_restore"; file_name: string }
   | { type: "apply_restore"; restore_id: string; expected_policy_version: number }
   | { type: "apply_device_block"; session_id?: string | undefined; device_key?: string | undefined; retroactive?: boolean | undefined }
-  | { type: "restore_device_policy"; session_id?: string | undefined }
+  | { type: "restore_device_policy"; session_id?: string | undefined; device_key?: string | undefined }
   | { type: "get_compound_policy_plan" }
   | { type: "apply_compound_policy"; retroactive?: boolean | undefined; expected_policy_version: number }
   | { type: "rollback_compound_policy" }
@@ -194,6 +194,7 @@ export interface DeviceView {
   policy_version: number;
   enforcement_state: string;
   enforcement_verified: boolean;
+  device_override?: "denied" | "allowed" | "none" | null;
 }
 
 export interface EventView {
@@ -885,10 +886,20 @@ export interface CompoundPolicyDiff {
   is_synchronized: boolean;
 }
 
+export interface DeviceOverrideView {
+  hardware_id: string;
+  instance_id?: string | null;
+  label?: string | null;
+  denied: boolean;
+  enabled: boolean;
+  is_active_in_windows: boolean;
+}
+
 export interface CompoundPolicyPlanView {
   revision_id: string;
   policy_version: number;
   manufacturers: ManufacturerPolicyView[];
+  device_overrides: DeviceOverrideView[];
   compiled: CompiledWindowsPolicy;
   observed: ObservedWindowsPolicy;
   diff: CompoundPolicyDiff;

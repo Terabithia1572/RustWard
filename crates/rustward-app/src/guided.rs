@@ -33,7 +33,7 @@ use rustward_storage::{
     EventFilter, NewEvent, SecurityEvent, Severity, device_key, mask_instance_id, sha256_hex,
 };
 
-use super::{AppService, Inner, empty_snapshot, storage_err};
+use super::{AppService, Inner, edit_err, empty_snapshot, storage_err};
 
 const PREPARED: &str = "enforcement_session_prepared";
 const APPLY_OK: &str = "enforcement_session_apply_verified";
@@ -652,8 +652,10 @@ impl AppService {
     }
 
     /// Apply an authorized Windows device block directly (administrator).
-    /// Applies the restriction to Windows via GpoPolicyWriter, refreshes policy,
-    /// triggers PnP rescan, and independently verifies the enforcement.
+    /// Apply an authorized Windows device block directly (administrator).
+    /// If device_key is provided, applies an additive device override into the
+    /// persistent policy and enforces it via the compound policy compiler.
+    /// Otherwise executes the guided session workflow for session_id.
     pub(crate) fn apply_device_block_direct(
         &self,
         session_id: Option<&str>,
@@ -661,53 +663,147 @@ impl AppService {
         retroactive: bool,
         identity: &ClientIdentity,
     ) -> Result<EnforcementSessionView, IpcError> {
+        if !identity.is_administrator {
+            return Err(IpcError::new(
+                ErrorCode::Unauthorized,
+                "administrator privileges required to apply device block",
+            ));
+        }
+
+        // Additive device override workflow
+        if let Some(dk) = device_key {
+            let (hwid, inst, label) = {
+                let g = self.lock()?;
+                let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                let rec = snap
+                    .devices
+                    .iter()
+                    .find(|d| rustward_storage::device_key(&d.instance_id) == dk)
+                    .cloned()
+                    .ok_or_else(|| {
+                        IpcError::new(
+                            ErrorCode::NotFound,
+                            format!("device not found for key {dk}"),
+                        )
+                    })?;
+
+                let hwid = rec
+                    .hardware_ids
+                    .iter()
+                    .find(|id| rustward_core::ids::validate_storage_hardware_id(id).is_ok())
+                    .cloned()
+                    .ok_or_else(|| {
+                        IpcError::new(
+                            ErrorCode::ValidationFailed,
+                            "no specific, non-generic storage hardware ID found for device",
+                        )
+                    })?;
+
+                (hwid, rec.instance_id.clone(), rec.friendly_name)
+            };
+
+            // 1. Commit PolicyEdit::SetDeviceDenied to store
+            {
+                let mut g = self.lock()?;
+                let v = Self::validated(&g.store)?;
+                let edit = rustward_core::policy_edit::PolicyEdit::SetDeviceDenied {
+                    hardware_id: hwid.clone(),
+                    instance_id: Some(inst.clone()),
+                    label,
+                    denied: true,
+                };
+                let outcome = rustward_core::policy_edit::apply_edit(&v.state, &edit)
+                    .map_err(edit_err)?;
+                g.store
+                    .commit_policy_edit(&outcome, &identity.actor())
+                    .map_err(storage_err)?;
+                self.reevaluate_locked(&mut g)?;
+
+                // Cancel any stale single-device session so no conflict remains
+                if let Some(active) = Self::active_session(&g)? {
+                    let active_sid = s(&active.prepared.details, "session_id");
+                    let cap = self.capture_policy_unlocked();
+                    let _ = self.cancel_session(&mut g, &active_sid, cap);
+                }
+            }
+
+            // 2. Apply to Windows via GpoPolicyWriter if running on Windows
+            let is_live_windows = self.is_live_windows();
+            if is_live_windows {
+                if let Err(cap_err) = self.check_desktop_capability() {
+                    return Err(IpcError::new(
+                        ErrorCode::Unavailable,
+                        format!("GPO capability check failed: {}", cap_err.en),
+                    ));
+                }
+                #[cfg(windows)]
+                {
+                    use rustward_windows::gpo_writer::GpoPolicyWriter;
+                    let (plan, revision_id) = {
+                        let captured = self.capture_policy_unlocked();
+                        let snapshot_ref = captured.as_ref().ok().map(|c| &c.values);
+                        let g = self.lock()?;
+                        let v = Self::validated(&g.store)?;
+                        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                        let p = compile_compound_policy(
+                            &v.policy,
+                            &v.catalog,
+                            &snap.devices,
+                            snapshot_ref,
+                            retroactive,
+                        );
+                        (p.clone(), p.compiled.revision_id.clone())
+                    };
+
+                    GpoPolicyWriter::apply_compound_policy(
+                        &plan.compiled.deny_hardware_ids,
+                        &plan.compiled.allow_hardware_ids,
+                        retroactive,
+                    )
+                    .map_err(|e| {
+                        IpcError::new(ErrorCode::Internal, format!("GPO write failed: {e}"))
+                    })?;
+
+                    GpoPolicyWriter::trigger_policy_refresh();
+                    GpoPolicyWriter::trigger_device_rescan();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+
+                    {
+                        let mut g = self.lock()?;
+                        self.session_event(
+                            &mut g,
+                            Severity::Warning,
+                            "device_enforcement_applied",
+                            format!(
+                                "applied additive device block for {hwid}: {} total active denies",
+                                plan.compiled.deny_hardware_ids.len()
+                            ),
+                            serde_json::json!({
+                                "hardware_id": hwid,
+                                "instance_id": inst,
+                                "planned_denies": plan.compiled.deny_hardware_ids,
+                                "retroactive": retroactive,
+                                "revision_id": revision_id,
+                                "actor": identity.actor(),
+                            }),
+                        )?;
+                    }
+                }
+            }
+
+            let _ = self.refresh_inventory();
+            let captured = self.capture_policy_unlocked();
+            let mut g = self.lock()?;
+            return self.session_view(&mut g, captured);
+        }
+
+        // Legacy guided single-device session stepper path
         let captured = self.capture_policy_unlocked();
         let sid = {
-            let mut g = self.lock()?;
+            let g = self.lock()?;
             if let Some(id) = session_id {
                 let a = Self::require(&g, id)?;
                 s(&a.prepared.details, "session_id")
-            } else if let Some(dk) = device_key {
-                if let Some(active) = Self::active_session(&g)? {
-                    if s(&active.prepared.details, "device_key") == dk {
-                        let active_sid = s(&active.prepared.details, "session_id");
-                        let live = Self::normalized_from(&captured);
-                        let baseline = map_of(&active.prepared.details["baseline"]);
-                        let active_retro = active
-                            .prepared
-                            .details
-                            .get("retroactive")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false);
-                        // If unapplied or mismatched session exists at baseline, refresh it with current parameters
-                        if (active.last_apply.is_none()
-                            || active.last_apply.as_ref().is_some_and(|e| e.kind != APPLY_OK)
-                            || active_retro != retroactive)
-                            && live.as_ref() == Ok(&baseline)
-                        {
-                            let _ = self.cancel_session(&mut g, &active_sid, captured.clone());
-                            let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
-                            view.session
-                                .map(|s| s.session_id)
-                                .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
-                        } else {
-                            active_sid
-                        }
-                    } else {
-                        // Multi-device support: instead of conflicting, supersede the single-device session
-                        // while keeping existing restrictions intact, and prepare a session for the requested device.
-                        let _ = self.cancel_session(&mut g, &s(&active.prepared.details, "session_id"), captured.clone());
-                        let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
-                        view.session
-                            .map(|s| s.session_id)
-                            .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
-                    }
-                } else {
-                    let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
-                    view.session
-                        .map(|s| s.session_id)
-                        .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
-                }
             } else {
                 return Err(IpcError::new(
                     ErrorCode::InvalidRequest,
@@ -757,7 +853,6 @@ impl AppService {
                 }
 
                 let mut deny_ids = vec![hwid.clone()];
-                // Adopt existing active denies from captured policy (e.g. VendorC) so they are preserved
                 if let Ok(cap) = &captured {
                     let observed = extract_observed_policy(&cap.values);
                     for active_id in observed.active_denies {
@@ -783,14 +878,164 @@ impl AppService {
         self.verify_applied(&mut g, &sid, captured)
     }
 
-    /// Restore previous policy from a session directly (administrator).
-    /// Restores the baseline policy via GpoPolicyWriter, refreshes policy,
-    /// triggers PnP rescan, and independently verifies the rollback.
+    /// Restore previous policy from a session or device directly (administrator).
+    /// If device_key is provided, removes the device override from persistent policy
+    /// and updates Windows Group Policy.
+    /// Otherwise executes guided rollback for session_id or active session.
     pub(crate) fn restore_device_policy_direct(
         &self,
         session_id: Option<&str>,
+        device_key: Option<&str>,
         identity: &ClientIdentity,
     ) -> Result<EnforcementSessionView, IpcError> {
+        if !identity.is_administrator {
+            return Err(IpcError::new(
+                ErrorCode::Unauthorized,
+                "administrator privileges required to restore device policy",
+            ));
+        }
+
+        // Targeted device unblock
+        if let Some(dk) = device_key {
+            let (hwid, inst) = {
+                let g = self.lock()?;
+                let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                if let Some(dev) = snap
+                    .devices
+                    .iter()
+                    .find(|d| rustward_storage::device_key(&d.instance_id) == dk)
+                {
+                    let hw = dev
+                        .hardware_ids
+                        .iter()
+                        .find(|id| rustward_core::ids::validate_storage_hardware_id(id).is_ok())
+                        .cloned()
+                        .unwrap_or_else(|| dev.instance_id.clone());
+                    (hw, Some(dev.instance_id.clone()))
+                } else {
+                    let v = Self::validated(&g.store)?;
+                    if let Some(rule) = v.policy.policy().denied_devices.iter().find(|r| {
+                        r.instance_id
+                            .as_deref()
+                            .map(rustward_storage::device_key)
+                            .as_deref()
+                            == Some(dk)
+                    }) {
+                        (rule.hardware_id.clone(), rule.instance_id.clone())
+                    } else if let Some(rule) = v.policy.policy().denied_devices.last() {
+                        (rule.hardware_id.clone(), rule.instance_id.clone())
+                    } else {
+                        return Err(IpcError::new(
+                            ErrorCode::NotFound,
+                            format!("target device {dk} not found in inventory or overrides"),
+                        ));
+                    }
+                }
+            };
+
+            // 1. Commit PolicyEdit::SetDeviceDenied (denied = false) to store
+            {
+                let mut g = self.lock()?;
+                let v = Self::validated(&g.store)?;
+                let edit = rustward_core::policy_edit::PolicyEdit::SetDeviceDenied {
+                    hardware_id: hwid.clone(),
+                    instance_id: inst.clone(),
+                    label: None,
+                    denied: false,
+                };
+                let outcome = rustward_core::policy_edit::apply_edit(&v.state, &edit)
+                    .map_err(edit_err)?;
+                g.store
+                    .commit_policy_edit(&outcome, &identity.actor())
+                    .map_err(storage_err)?;
+                self.reevaluate_locked(&mut g)?;
+
+                // Cancel any stale single-device session so no conflict remains
+                if let Some(active) = Self::active_session(&g)? {
+                    let active_sid = s(&active.prepared.details, "session_id");
+                    let cap = self.capture_policy_unlocked();
+                    let _ = self.cancel_session(&mut g, &active_sid, cap);
+                }
+            }
+
+            // 2. Update Windows GPO via GpoPolicyWriter if running on Windows
+            let is_live_windows = self.is_live_windows();
+            if is_live_windows {
+                if let Err(cap_err) = self.check_desktop_capability() {
+                    return Err(IpcError::new(
+                        ErrorCode::Unavailable,
+                        format!("GPO capability check failed: {}", cap_err.en),
+                    ));
+                }
+                #[cfg(windows)]
+                {
+                    use rustward_windows::gpo_writer::GpoPolicyWriter;
+                    let plan = {
+                        let captured = self.capture_policy_unlocked();
+                        let snapshot_ref = captured.as_ref().ok().map(|c| &c.values);
+                        let g = self.lock()?;
+                        let v = Self::validated(&g.store)?;
+                        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                        compile_compound_policy(
+                            &v.policy,
+                            &v.catalog,
+                            &snap.devices,
+                            snapshot_ref,
+                            true,
+                        )
+                    };
+
+                    if plan.compiled.deny_hardware_ids.is_empty() {
+                        GpoPolicyWriter::restore_compound_policy().map_err(|e| {
+                            IpcError::new(ErrorCode::Internal, format!("GPO restore failed: {e}"))
+                        })?;
+                    } else {
+                        GpoPolicyWriter::apply_compound_policy(
+                            &plan.compiled.deny_hardware_ids,
+                            &plan.compiled.allow_hardware_ids,
+                            true,
+                        )
+                        .map_err(|e| {
+                            IpcError::new(ErrorCode::Internal, format!("GPO update failed: {e}"))
+                        })?;
+                    }
+
+                    if let Some(inst_id) = &inst {
+                        let _ = GpoPolicyWriter::restart_device_instance(inst_id);
+                    }
+
+                    GpoPolicyWriter::trigger_policy_refresh();
+                    GpoPolicyWriter::trigger_device_rescan();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+
+                    {
+                        let mut g = self.lock()?;
+                        self.session_event(
+                            &mut g,
+                            Severity::Info,
+                            "device_enforcement_restored",
+                            format!(
+                                "restored device restriction for {hwid}: {} remaining active denies",
+                                plan.compiled.deny_hardware_ids.len()
+                            ),
+                            serde_json::json!({
+                                "hardware_id": hwid,
+                                "instance_id": inst,
+                                "remaining_denies": plan.compiled.deny_hardware_ids,
+                                "actor": identity.actor(),
+                            }),
+                        )?;
+                    }
+                }
+            }
+
+            let _ = self.refresh_inventory();
+            let captured = self.capture_policy_unlocked();
+            let mut g = self.lock()?;
+            return self.session_view(&mut g, captured);
+        }
+
+        // If no device_key provided, check if we should restore active session or device overrides
         let sid = {
             let g = self.lock()?;
             if let Some(id) = session_id {
@@ -799,6 +1044,18 @@ impl AppService {
             } else if let Some(active) = Self::active_session(&g)? {
                 s(&active.prepared.details, "session_id")
             } else {
+                // If there are denied_devices overrides but no active session, unblock the last one
+                let v = Self::validated(&g.store)?;
+                if let Some(rule) = v.policy.policy().denied_devices.last() {
+                    let last_inst = rule.instance_id.clone();
+                    let last_dk = last_inst.as_deref().map(rustward_storage::device_key);
+                    drop(g);
+                    return self.restore_device_policy_direct(
+                        None,
+                        last_dk.as_deref(),
+                        identity,
+                    );
+                }
                 return Err(IpcError::new(
                     ErrorCode::NotFound,
                     "no active enforcement session found to restore",

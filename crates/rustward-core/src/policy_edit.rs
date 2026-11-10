@@ -126,6 +126,28 @@ pub enum PolicyEdit {
         /// New workstation identifier.
         workstation_id: String,
     },
+    /// Add or update an explicit device-level restriction override.
+    SetDeviceDenied {
+        /// Target hardware ID (e.g. `USBSTOR\DiskKingstonDataTraveler_3.0____`).
+        hardware_id: String,
+        /// Device instance ID if known.
+        instance_id: Option<String>,
+        /// Human-readable label.
+        label: Option<String>,
+        /// Whether the device is denied.
+        denied: bool,
+    },
+    /// Add or update an explicit device-level allow override.
+    SetDeviceAllowed {
+        /// Target hardware ID.
+        hardware_id: String,
+        /// Device instance ID if known.
+        instance_id: Option<String>,
+        /// Human-readable label.
+        label: Option<String>,
+        /// Whether the device is allowed.
+        allowed: bool,
+    },
 }
 
 impl PolicyEdit {
@@ -140,6 +162,8 @@ impl PolicyEdit {
             Self::SetDenied { .. } => "denylist_changed",
             Self::SetRuleEnabled { .. } => "rule_enabled_changed",
             Self::SetWorkstationId { .. } => "workstation_id_changed",
+            Self::SetDeviceDenied { .. } => "device_denied_changed",
+            Self::SetDeviceAllowed { .. } => "device_allowed_changed",
         }
     }
 }
@@ -596,6 +620,116 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
             new.clone_into(&mut next.policy.workstation_id);
             String::new()
         }
+        PolicyEdit::SetDeviceDenied {
+            hardware_id,
+            instance_id,
+            label,
+            denied,
+        } => {
+            let hw_clean = hardware_id.trim();
+            if hw_clean.is_empty() {
+                return Err(EditError::InvalidInput {
+                    detail: "hardware_id cannot be empty".into(),
+                });
+            }
+            if let Err(e) = crate::ids::validate_storage_hardware_id(hw_clean) {
+                return Err(EditError::InvalidInput {
+                    detail: format!("invalid hardware_id: {e}"),
+                });
+            }
+            let pos = next
+                .policy
+                .denied_devices
+                .iter()
+                .position(|d| d.hardware_id.trim().eq_ignore_ascii_case(hw_clean));
+            match (pos, *denied) {
+                (Some(idx), true) => {
+                    let d = &mut next.policy.denied_devices[idx];
+                    if d.enabled && &d.instance_id == instance_id && &d.label == label {
+                        return Err(EditError::NoChange);
+                    }
+                    d.enabled = true;
+                    if instance_id.is_some() {
+                        d.instance_id.clone_from(instance_id);
+                    }
+                    if label.is_some() {
+                        d.label.clone_from(label);
+                    }
+                }
+                (None, true) => {
+                    next.policy
+                        .allowed_devices
+                        .retain(|d| !d.hardware_id.trim().eq_ignore_ascii_case(hw_clean));
+                    next.policy.denied_devices.push(crate::policy::DeviceRule {
+                        hardware_id: hw_clean.to_string(),
+                        instance_id: instance_id.clone(),
+                        label: label.clone(),
+                        enabled: true,
+                        note: None,
+                    });
+                }
+                (Some(idx), false) => {
+                    next.policy.denied_devices.remove(idx);
+                }
+                (None, false) => return Err(EditError::NoChange),
+            }
+            hw_clean.to_string()
+        }
+        PolicyEdit::SetDeviceAllowed {
+            hardware_id,
+            instance_id,
+            label,
+            allowed,
+        } => {
+            let hw_clean = hardware_id.trim();
+            if hw_clean.is_empty() {
+                return Err(EditError::InvalidInput {
+                    detail: "hardware_id cannot be empty".into(),
+                });
+            }
+            if let Err(e) = crate::ids::validate_storage_hardware_id(hw_clean) {
+                return Err(EditError::InvalidInput {
+                    detail: format!("invalid hardware_id: {e}"),
+                });
+            }
+            let pos = next
+                .policy
+                .allowed_devices
+                .iter()
+                .position(|d| d.hardware_id.trim().eq_ignore_ascii_case(hw_clean));
+            match (pos, *allowed) {
+                (Some(idx), true) => {
+                    let d = &mut next.policy.allowed_devices[idx];
+                    if d.enabled && &d.instance_id == instance_id && &d.label == label {
+                        return Err(EditError::NoChange);
+                    }
+                    d.enabled = true;
+                    if instance_id.is_some() {
+                        d.instance_id.clone_from(instance_id);
+                    }
+                    if label.is_some() {
+                        d.label.clone_from(label);
+                    }
+                }
+                (None, true) => {
+                    next.policy
+                        .denied_devices
+                        .retain(|d| !d.hardware_id.trim().eq_ignore_ascii_case(hw_clean));
+                    next.policy.allowed_devices.push(crate::policy::DeviceRule {
+                        hardware_id: hw_clean.to_string(),
+                        instance_id: instance_id.clone(),
+                        label: label.clone(),
+                        enabled: true,
+                        note: None,
+                    });
+                }
+                (Some(idx), false) => {
+                    next.policy.allowed_devices.remove(idx);
+                }
+                (None, false) => return Err(EditError::NoChange),
+            }
+            hw_clean.to_string()
+        }
     };
 
     if catalog_changed {
@@ -635,6 +769,28 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
             "workstation id changed from {:?} to {:?}",
             current.policy.workstation_id, next.policy.workstation_id
         ),
+        PolicyEdit::SetDeviceDenied {
+            hardware_id,
+            denied,
+            ..
+        } => {
+            if *denied {
+                format!("device {hardware_id} restricted (explicit deny)")
+            } else {
+                format!("device {hardware_id} restriction removed")
+            }
+        }
+        PolicyEdit::SetDeviceAllowed {
+            hardware_id,
+            allowed,
+            ..
+        } => {
+            if *allowed {
+                format!("device {hardware_id} allowed (explicit allow)")
+            } else {
+                format!("device {hardware_id} allow removed")
+            }
+        }
     };
     let change = ChangeRecord {
         action: edit.action().to_owned(),
@@ -825,22 +981,22 @@ mod tests {
         let out = apply_edit(
             &s,
             &PolicyEdit::AddManufacturer {
-                input: input("Western Digital", vec![inquiry("WD")]),
+                input: input("Acme Storage", vec![inquiry("Acme")]),
                 allowed: true,
             },
         )
         .unwrap();
-        assert_eq!(out.change.brand_id, "western-digital");
+        assert_eq!(out.change.brand_id, "acme-storage");
         assert_eq!(out.state.policy.policy_version, 2);
         assert_eq!(
             out.state.catalog.catalog_version,
-            "2026.11.07-phase6+local.1"
+            "2026.11.10-phase-d+local.1"
         );
         assert_eq!(
             out.state.policy.catalog_version,
             out.state.catalog.catalog_version
         );
-        assert!(out.validated.policy.brand_allowed("western-digital"));
+        assert!(out.validated.policy.brand_allowed("acme-storage"));
         assert!(out.change.before.is_none());
         assert!(out.change.after.as_ref().unwrap().allowed);
         assert_eq!(s.policy.policy_version, 1, "input state untouched");
@@ -1101,5 +1257,54 @@ mod tests {
     fn catalog_version_sequence() {
         assert_eq!(next_catalog_version("v1"), "v1+local.1");
         assert_eq!(next_catalog_version("v1+local.9"), "v1+local.10");
+    }
+
+    #[test]
+    fn device_override_edits_add_remove_and_audit() {
+        let s = state();
+        let hwid = "USBSTOR\\DiskKingstonDataTraveler_3.0____";
+        let inst = "USBSTOR\\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0\\1";
+
+        // Add explicit device deny
+        let out1 = apply_edit(
+            &s,
+            &PolicyEdit::SetDeviceDenied {
+                hardware_id: hwid.into(),
+                instance_id: Some(inst.into()),
+                label: Some("Kingston 3.0".into()),
+                denied: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(out1.state.policy.policy_version, s.policy.policy_version + 1);
+        assert!(out1.validated.policy.device_denied(hwid));
+        assert!(out1.change.summary.contains("restricted"));
+
+        // No-change edit is rejected
+        let noop = apply_edit(
+            &out1.state,
+            &PolicyEdit::SetDeviceDenied {
+                hardware_id: hwid.into(),
+                instance_id: Some(inst.into()),
+                label: Some("Kingston 3.0".into()),
+                denied: true,
+            },
+        );
+        assert!(matches!(noop, Err(EditError::NoChange)));
+
+        // Remove explicit device deny
+        let out2 = apply_edit(
+            &out1.state,
+            &PolicyEdit::SetDeviceDenied {
+                hardware_id: hwid.into(),
+                instance_id: None,
+                label: None,
+                denied: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(out2.state.policy.policy_version, out1.state.policy.policy_version + 1);
+        assert!(!out2.validated.policy.device_denied(hwid));
+        assert!(out2.change.summary.contains("removed"));
     }
 }

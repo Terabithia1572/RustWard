@@ -3,7 +3,7 @@
   "workstation_id": "PC-01",
   "policy_version": 1,
   "mode": "dry_run",
-  "catalog_version": "2026.11.07-phase6",
+  "catalog_version": "2026.11.10-phase-d",
   "allowed_brands": [
     { "brand_id": "sandisk", "enabled": true, "note": "Phase 6 target: ALLOW. Identifiers not yet verified on a real SanDisk device" },
     { "brand_id": "tubitak", "enabled": true, "note": "Phase 6 target: ALLOW. No identifiers until SIR II physical inspection; its devices are denied meanwhile" }
