@@ -554,6 +554,24 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
           last_verification_ms: 1_794_050_100_000,
         });
         return { type: "enforcement_session", data: state.session };
+      case "apply_device_block": {
+        const dk = r.device_key ?? (state.session.session ? state.session.session.device_key : "k-deny");
+        state.session = sessionView("windows_install_denied", {
+          session_id: r.session_id ?? "0123456789abcdef",
+          prepared_ms: 1_794_050_000_000,
+          prepared_by: "PC-TEST\\admin",
+          device_key: dk,
+          device_name: "Kingston DataTraveler 3.0 USB Device",
+          hardware_id: "USBSTOR\\DiskKingstonDataTraveler_3.0____",
+          retroactive: r.retroactive ?? true,
+          baseline: [],
+          expected_lines: ["DenyDeviceIDs = 1 (REG_DWORD)"],
+          last_verification: "enforcement_session_apply_verified",
+          last_verification_ms: 1_794_050_100_000,
+        });
+        return { type: "enforcement_session", data: state.session };
+      }
+      case "restore_device_policy":
       case "verify_enforcement_rollback":
       case "cancel_enforcement_session":
         state.session = sessionView("policy_simulation");
@@ -685,6 +703,54 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       case "refresh_inventory":
       case "load_synthetic_inventory":
         return { type: "done", data: { message: `${r.type} done` } };
+      case "get_compound_policy_plan":
+      case "apply_compound_policy":
+      case "rollback_compound_policy":
+        return {
+          type: "compound_policy_plan",
+          data: {
+            revision_id: "a1b2c3d4e5f60718",
+            policy_version: state.version,
+            manufacturers: state.manufacturers.map((m) => ({
+              brand_id: m.id,
+              display_name: m.display_name,
+              configured_intention: m.denied ? "explicit_deny" : m.allowed ? "allowed" : "disabled",
+              identity_coverage: m.id === "tubitak" ? "unknown" : "verified",
+              hardware_ids: m.id === "kingston" ? ["USBSTOR\\DiskKingstonDataTraveler_3.0____"] : m.id === "sandisk" ? ["USBSTOR\\DiskSanDisk_"] : [],
+              windows_policy: m.denied ? "applied" : "not_applied",
+              device_outcome: m.id === "kingston" ? "installation_denied" : "not_connected",
+              notes: m.notes,
+            })),
+            compiled: {
+              revision_id: "a1b2c3d4e5f60718",
+              deny_hardware_ids: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],
+              allow_hardware_ids: ["USBSTOR\\DiskSanDisk_"],
+              retroactive: true,
+              fingerprint: "a1b2c3d4e5f60718".repeat(4),
+            },
+            observed: {
+              active_denies: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],
+              active_allows: [],
+              retroactive: true,
+              raw_gpo_present: true,
+              fingerprint: "a1b2c3d4e5f60718".repeat(4),
+            },
+            diff: {
+              added_denies: [],
+              removed_denies: [],
+              retained_denies: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],
+              is_synchronized: true,
+            },
+            safety_checklist: [
+              "Disk 0 / VMware Virtual NVMe Disk (C:) sistem diski koruma altında — GPO kapsamı dışında",
+              "USB Klavye, Fare ve Giriş Aygıtları (HID) koruma altında — GPO kapsamı dışında",
+              "Yalnızca doğrulanmış USBSTOR depolama donanım kimlikleri hedeflenir",
+              "Geniş kapsamlı DiskDrive sınıfı engelleme uygulanmaz",
+            ],
+            can_apply: true,
+            is_applied: true,
+          },
+        };
     }
   };
 

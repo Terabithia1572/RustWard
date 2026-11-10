@@ -22,6 +22,7 @@
 pub mod activation;
 pub mod assessment;
 pub mod checklist;
+pub mod compound_policy;
 pub mod device_install;
 pub mod installed_assessment;
 pub mod observer;
@@ -32,6 +33,12 @@ pub mod removable_storage;
 
 use serde::{Deserialize, Serialize};
 
+pub use compound_policy::{
+    compile_compound_policy, extract_observed_policy, validate_hardware_id,
+    CompiledWindowsPolicy, CompoundPolicyDiff, CompoundPolicyPlanView,
+    ConfiguredIntention, DeviceOutcomeStatus, IdentityCoverage, LocalizedText,
+    ManufacturerPolicyView, ObservedWindowsPolicy, WindowsPolicyStatus,
+};
 pub use device_install::DeviceInstallRestrictionProvider;
 
 /// Compile-time switch for OS policy activation. Must stay `false` until the

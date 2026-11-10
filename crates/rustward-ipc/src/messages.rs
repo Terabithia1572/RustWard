@@ -3,6 +3,11 @@
 
 use rustward_core::explain::Explanation;
 use rustward_core::policy_edit::ManufacturerInput;
+pub use rustward_enforcement::compound_policy::{
+    CompiledWindowsPolicy, CompoundPolicyDiff, CompoundPolicyPlanView, ConfiguredIntention,
+    DeviceOutcomeStatus, IdentityCoverage, LocalizedText, ManufacturerPolicyView,
+    ObservedWindowsPolicy, WindowsPolicyStatus,
+};
 use rustward_enforcement::installed_assessment::InstalledAssessment;
 use rustward_enforcement::policy_inspect::PolicyInspection;
 use rustward_enforcement::policy_state::PolicyConflict;
@@ -254,6 +259,40 @@ pub enum Request {
         /// Optimistic concurrency: the active version shown in the preview.
         expected_policy_version: u64,
     },
+    /// Apply an authorized Windows device block via Local Group Policy COM API (administrator).
+    ApplyDeviceBlock {
+        /// Optional session id (16 hex).
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Target device key (32 hex) when applying without a prior prepare step.
+        #[serde(default)]
+        device_key: Option<String>,
+        /// Include the "also apply to installed devices" option.
+        #[serde(default)]
+        retroactive: bool,
+    },
+    /// Restore previous Windows policy via Local Group Policy COM API (administrator).
+    RestoreDevicePolicy {
+        /// Session id (16 hex), or active session if omitted.
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+    /// Get the unified compound Windows policy plan (read-only).
+    GetCompoundPolicyPlan,
+    /// Apply the unified compound policy to Windows via Local Group Policy COM API (administrator).
+    ApplyCompoundPolicy {
+        /// Include the "also apply to installed devices" option.
+        #[serde(default = "default_true")]
+        retroactive: bool,
+        /// Optimistic concurrency: the active version shown in the preview.
+        expected_policy_version: u64,
+    },
+    /// Rollback compound policy restrictions in Windows Group Policy (administrator).
+    RollbackCompoundPolicy,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Access level required by a request.
@@ -285,7 +324,8 @@ impl Request {
             | Self::GetPolicyChecklist { .. }
             | Self::GetEnforcementSession
             | Self::GetSettings
-            | Self::RunSimulation => AccessLevel::ReadOnly,
+            | Self::RunSimulation
+            | Self::GetCompoundPolicyPlan => AccessLevel::ReadOnly,
             Self::PrepareEnforcementSession { .. }
             | Self::PrepareDefaultDenySession
             | Self::VerifyEnforcementApplied { .. }
@@ -306,7 +346,11 @@ impl Request {
             | Self::SetWorkstationId { .. }
             | Self::ListBackups
             | Self::PrepareRestore { .. }
-            | Self::ApplyRestore { .. } => AccessLevel::Administrator,
+            | Self::ApplyRestore { .. }
+            | Self::ApplyDeviceBlock { .. }
+            | Self::RestoreDevicePolicy { .. }
+            | Self::ApplyCompoundPolicy { .. }
+            | Self::RollbackCompoundPolicy => AccessLevel::Administrator,
         }
     }
 
@@ -753,6 +797,8 @@ pub enum ResponseBody {
     Backups(Vec<BackupView>),
     /// Restore preview (nothing applied yet).
     RestorePreview(RestorePreviewView),
+    /// Compound Windows policy plan.
+    CompoundPolicyPlan(Box<CompoundPolicyPlanView>),
 }
 
 /// A registered database backup.

@@ -140,6 +140,30 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         | Request::RefreshInventory
         | Request::LoadSyntheticInventory
         | Request::PrepareDefaultDenySession => Ok(()),
+        Request::ApplyDeviceBlock { session_id, device_key, .. } => {
+            if let Some(sid) = session_id
+                && !(sid.len() == 16 && sid.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(bad("session_id must be 16 hex characters"));
+            }
+            if let Some(dk) = device_key
+                && !(dk.len() == 32 && dk.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(bad("device_key must be 32 hex characters"));
+            }
+            if session_id.is_none() && device_key.is_none() {
+                return Err(bad("either session_id or device_key is required"));
+            }
+            Ok(())
+        }
+        Request::RestoreDevicePolicy { session_id } => {
+            if let Some(sid) = session_id
+                && !(sid.len() == 16 && sid.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(bad("session_id must be 16 hex characters"));
+            }
+            Ok(())
+        }
         Request::VerifyEnforcementApplied { session_id }
         | Request::VerifyEnforcementRollback { session_id }
         | Request::CancelEnforcementSession { session_id } => {
@@ -197,6 +221,17 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
                 Ok(())
             } else {
                 Err(bad("restore_id must be 32 hex characters"))
+            }
+        }
+        Request::GetCompoundPolicyPlan | Request::RollbackCompoundPolicy => Ok(()),
+        Request::ApplyCompoundPolicy {
+            expected_policy_version,
+            ..
+        } => {
+            if *expected_policy_version == 0 {
+                Err(bad("expected_policy_version must be at least 1"))
+            } else {
+                Ok(())
             }
         }
     }

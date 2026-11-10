@@ -76,7 +76,12 @@ export type Request =
   | { type: "set_workstation_id"; workstation_id: string; expected_policy_version: number }
   | { type: "list_backups" }
   | { type: "prepare_restore"; file_name: string }
-  | { type: "apply_restore"; restore_id: string; expected_policy_version: number };
+  | { type: "apply_restore"; restore_id: string; expected_policy_version: number }
+  | { type: "apply_device_block"; session_id?: string | undefined; device_key?: string | undefined; retroactive?: boolean | undefined }
+  | { type: "restore_device_policy"; session_id?: string | undefined }
+  | { type: "get_compound_policy_plan" }
+  | { type: "apply_compound_policy"; retroactive?: boolean | undefined; expected_policy_version: number }
+  | { type: "rollback_compound_policy" };
 
 export type RequestType = Request["type"];
 
@@ -117,6 +122,11 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "list_backups",
   "prepare_restore",
   "apply_restore",
+  "apply_device_block",
+  "restore_device_policy",
+  "get_compound_policy_plan",
+  "apply_compound_policy",
+  "rollback_compound_policy",
 ];
 
 /** Requests that require an elevated administrator (server-enforced). */
@@ -142,6 +152,10 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "list_backups",
   "prepare_restore",
   "apply_restore",
+  "apply_device_block",
+  "restore_device_policy",
+  "apply_compound_policy",
+  "rollback_compound_policy",
 ]);
 
 export interface ServiceStatusView {
@@ -447,7 +461,8 @@ export type ResponseBody =
   | { type: "done"; data: { message: string; message_tr?: string } }
   | { type: "enforcement_session"; data: EnforcementSessionView }
   | { type: "backups"; data: BackupView[] }
-  | { type: "restore_preview"; data: RestorePreviewView };
+  | { type: "restore_preview"; data: RestorePreviewView }
+  | { type: "compound_policy_plan"; data: CompoundPolicyPlanView };
 
 export type ErrorCode =
   | "invalid_request"
@@ -821,4 +836,56 @@ export interface EnforcementSessionView {
   target: ObservedDeviceView | null;
   automated_apply_available: boolean;
   automated_apply_blocker: { tr: string; en: string };
+}
+
+export type ConfiguredIntention = "allowed" | "explicit_deny" | "disabled";
+export type IdentityCoverage = "verified" | "partial" | "unknown";
+export type WindowsPolicyStatus = "applied" | "not_applied" | "conflict" | "unsupported";
+export type DeviceOutcomeStatus = "accessible" | "installation_denied" | "not_connected" | "unknown";
+
+export interface ManufacturerPolicyView {
+  brand_id: string;
+  display_name: string;
+  configured_intention: ConfiguredIntention;
+  identity_coverage: IdentityCoverage;
+  hardware_ids: string[];
+  windows_policy: WindowsPolicyStatus;
+  device_outcome: DeviceOutcomeStatus;
+  notes?: string | null;
+}
+
+export interface CompiledWindowsPolicy {
+  revision_id: string;
+  deny_hardware_ids: string[];
+  allow_hardware_ids: string[];
+  retroactive: boolean;
+  fingerprint: string;
+}
+
+export interface ObservedWindowsPolicy {
+  active_denies: string[];
+  active_allows: string[];
+  retroactive: boolean;
+  raw_gpo_present: boolean;
+  fingerprint: string;
+}
+
+export interface CompoundPolicyDiff {
+  added_denies: string[];
+  removed_denies: string[];
+  retained_denies: string[];
+  is_synchronized: boolean;
+}
+
+export interface CompoundPolicyPlanView {
+  revision_id: string;
+  policy_version: number;
+  manufacturers: ManufacturerPolicyView[];
+  compiled: CompiledWindowsPolicy;
+  observed: ObservedWindowsPolicy;
+  diff: CompoundPolicyDiff;
+  safety_checklist: string[];
+  can_apply: boolean;
+  blocker_reason?: TextTrEn | null;
+  is_applied: boolean;
 }

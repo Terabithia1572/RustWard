@@ -65,7 +65,11 @@ export function ProtectionPanel({ p }: { p: WindowsProtectionView | undefined })
             ) : (
               <Badge>{t("prot.noEvidence")}</Badge>
             )}
-            {!p?.automated_apply_available && <Badge tone="warning">{t("prot.autoApply")}</Badge>}
+            {!p?.automated_apply_available ? (
+              <Badge tone="warning">{t("prot.autoApply")}</Badge>
+            ) : (
+              <Badge tone="success">{t("prot.autoApplyActive")}</Badge>
+            )}
           </div>
         </div>
       </div>

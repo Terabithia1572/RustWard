@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { FlaskConical, RefreshCw } from "lucide-react";
-import type { DeviceView, ExplanationView } from "../api/types";
+import { FlaskConical, RefreshCw, RotateCcw, ShieldAlert } from "lucide-react";
+import type { DeviceView, ExplanationView, ObservedDeviceView } from "../api/types";
 import { Badge, Button, Card, DecisionBadge, Empty, ErrorNotice, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
 import { useI18n } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
@@ -16,14 +16,68 @@ export function deviceName(d: DeviceView): string {
   return d.friendly_name ?? ([d.vendor, d.product].filter(Boolean).join(" ") || d.display_id);
 }
 
-function ExplanationPanel({ data }: { data: ExplanationView }) {
+function ExplanationPanel({
+  data,
+  observed,
+  onBlock,
+  onUnblock,
+  actionBusy,
+}: {
+  data: ExplanationView;
+  observed?: ObservedDeviceView | undefined;
+  onBlock?: (() => void) | undefined;
+  onUnblock?: (() => void) | undefined;
+  actionBusy?: boolean | undefined;
+}) {
   const { lang, t } = useI18n();
+  const isStorage = STORAGE.has(data.device.category);
+  const isDenied = observed?.observed.evidence === "install_denied";
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <DecisionBadge decision={data.device.simulated_decision} />
-        <Badge tone="warning">{t("badge.notVerified")}</Badge>
+        {isDenied ? (
+          <Badge tone="danger">{t("status.windowsBlockVerified")}</Badge>
+        ) : (
+          <Badge tone="warning">{t("badge.notVerified")}</Badge>
+        )}
       </div>
+
+      {isStorage && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/60 space-y-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {t("devices.col.enforcement")}
+          </div>
+          {isDenied ? (
+            <div className="space-y-2">
+              <p className="text-xs text-rose-700 dark:text-rose-400 font-medium">
+                {t("status.windowsBlockVerified")}
+              </p>
+              <Button
+                variant="primary"
+                icon={<RotateCcw className="size-4" aria-hidden />}
+                busy={Boolean(actionBusy)}
+                onClick={onUnblock}
+              >
+                {t("devices.action.unblock")}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Button
+                variant="danger"
+                icon={<ShieldAlert className="size-4" aria-hidden />}
+                busy={Boolean(actionBusy)}
+                onClick={onBlock}
+              >
+                {t("devices.action.block")}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
       <p className="text-sm font-medium">{lang === "tr" ? data.explanation.summary_tr : data.explanation.summary_en}</p>
       <ol className="space-y-2 text-sm">
         {data.explanation.steps.map((s, i) => (
@@ -46,6 +100,9 @@ export function DevicesPage() {
   const [filter, setFilter] = useState<Filter>("storage");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [blockModalOpen, setBlockModalOpen] = useState(false);
+  const [unblockModalOpen, setUnblockModalOpen] = useState(false);
+  const [retroactive, setRetroactive] = useState(true);
   // Re-read when Windows reports a device or policy change.
   const epoch = useDeviceEpoch();
   const r = useResource((a) => a.devices(includeAbsent), `devices-${includeAbsent}-${epoch}`);
@@ -250,12 +307,124 @@ export function DevicesPage() {
           ) : explain.error ? (
             <ErrorNotice error={explain.error} />
           ) : explain.data ? (
-            <ExplanationPanel data={explain.data} />
+            <ExplanationPanel
+              data={explain.data}
+              observed={selected ? observed.get(selected) : undefined}
+              onBlock={() => setBlockModalOpen(true)}
+              onUnblock={() => setUnblockModalOpen(true)}
+              actionBusy={action.busy}
+            />
           ) : (
             <Loading />
           )}
         </Card>
       </div>
+
+      {blockModalOpen && (() => {
+        const selectedDevice = (r.data ?? []).find((d) => d.device_key === selected);
+        const selectedObs = selected ? observed.get(selected) : undefined;
+        if (!selectedDevice) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+            <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-semibold text-lg">
+                <ShieldAlert className="size-5" />
+                <h3>{t("devices.action.blockModalTitle")}</h3>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                {t("devices.action.blockWarning")}
+              </p>
+              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60 space-y-2 text-xs font-mono">
+                <div><span className="text-slate-500 font-sans">{t("devices.action.targetDevice")}:</span> {deviceName(selectedDevice)}</div>
+                <div className="break-all"><span className="text-slate-500 font-sans">{t("devices.action.targetHwid")}:</span> {selectedObs?.observed.hardware_id ?? selectedDevice.vendor_level_id ?? selectedDevice.display_id}</div>
+                {selectedDevice.usb_vid_pid && <div><span className="text-slate-500 font-sans">VID:PID:</span> {selectedDevice.usb_vid_pid}</div>}
+              </div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={retroactive}
+                  onChange={(e) => setRetroactive(e.target.checked)}
+                  className="mt-1 rounded border-slate-300"
+                />
+                <div>
+                  <div className="font-medium">{t("devices.action.retroactive")}</div>
+                  <div className="text-xs text-slate-500">{t("devices.action.retroactiveHint")}</div>
+                </div>
+              </label>
+              {action.error && <ErrorNotice error={action.error} />}
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="ghost" disabled={action.busy} onClick={() => setBlockModalOpen(false)}>
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="danger"
+                  busy={action.busy}
+                  onClick={async () => {
+                    const res = await action.run(() =>
+                      api.applyDeviceBlock({
+                        deviceKey: selectedDevice.device_key,
+                        retroactive,
+                      })
+                    );
+                    if (res) {
+                      setBlockModalOpen(false);
+                      setNotice(t("devices.action.blockSuccess"));
+                      r.reload();
+                      obs.reload();
+                    }
+                  }}
+                >
+                  {t("devices.action.confirmBlock")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {unblockModalOpen && (() => {
+        const selectedDevice = (r.data ?? []).find((d) => d.device_key === selected);
+        const selectedObs = selected ? observed.get(selected) : undefined;
+        if (!selectedDevice) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+            <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-semibold text-lg">
+                <RotateCcw className="size-5" />
+                <h3>{t("devices.action.unblockModalTitle")}</h3>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                {t("devices.action.unblockNote")}
+              </p>
+              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60 space-y-2 text-xs font-mono">
+                <div><span className="text-slate-500 font-sans">{t("devices.action.targetDevice")}:</span> {deviceName(selectedDevice)}</div>
+                <div className="break-all"><span className="text-slate-500 font-sans">{t("devices.action.targetHwid")}:</span> {selectedObs?.observed.hardware_id ?? selectedDevice.vendor_level_id ?? selectedDevice.display_id}</div>
+              </div>
+              {action.error && <ErrorNotice error={action.error} />}
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="ghost" disabled={action.busy} onClick={() => setUnblockModalOpen(false)}>
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="primary"
+                  busy={action.busy}
+                  onClick={async () => {
+                    const res = await action.run(() => api.restoreDevicePolicy());
+                    if (res) {
+                      setUnblockModalOpen(false);
+                      setNotice(t("devices.action.unblockSuccess"));
+                      r.reload();
+                      obs.reload();
+                    }
+                  }}
+                >
+                  {t("devices.action.confirmUnblock")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

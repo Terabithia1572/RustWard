@@ -156,6 +156,22 @@ describe("Devices", () => {
     expect(await screen.findByText("refresh_inventory done")).toBeInTheDocument();
     expect(state.calls.some((c) => c.type === "refresh_inventory")).toBe(true);
   });
+
+  it("blocks and unblocks a device through one-click dialogs", async () => {
+    const { user, state } = setup("devices");
+    const rows = await screen.findAllByText("EXAMPLEX SYNTH DRIVE");
+    await user.click(rows[0]!);
+    const blockBtn = await screen.findByRole("button", { name: "Engelle" });
+    await user.click(blockBtn);
+
+    expect(await screen.findByText("Windows USB Engelleme Onayı")).toBeInTheDocument();
+    const confirmBtn = screen.getByRole("button", { name: "Onayla ve Engelle" });
+    await user.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(state.calls.some((c) => c.type === "apply_device_block")).toBe(true);
+    });
+  });
 });
 
 describe("Allowed manufacturers", () => {

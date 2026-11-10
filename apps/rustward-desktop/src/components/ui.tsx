@@ -24,7 +24,7 @@ export function Button({
   children,
   disabled,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; icon?: ReactNode; busy?: boolean }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant | undefined; icon?: ReactNode; busy?: boolean | undefined }) {
   return (
     <button
       type="button"

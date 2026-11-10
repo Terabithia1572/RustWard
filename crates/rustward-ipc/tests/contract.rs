@@ -123,6 +123,20 @@ fn all_requests() -> Vec<Request> {
             restore_id: "0123456789abcdef0123456789abcdef".into(),
             expected_policy_version: 1,
         },
+        Request::ApplyDeviceBlock {
+            session_id: Some("0123456789abcdef".into()),
+            device_key: None,
+            retroactive: true,
+        },
+        Request::RestoreDevicePolicy {
+            session_id: Some("0123456789abcdef".into()),
+        },
+        Request::GetCompoundPolicyPlan,
+        Request::ApplyCompoundPolicy {
+            retroactive: true,
+            expected_policy_version: 1,
+        },
+        Request::RollbackCompoundPolicy,
     ];
     for r in &all {
         // Exhaustiveness guard.
@@ -161,7 +175,12 @@ fn all_requests() -> Vec<Request> {
             | Request::SetWorkstationId { .. }
             | Request::ListBackups
             | Request::PrepareRestore { .. }
-            | Request::ApplyRestore { .. } => {}
+            | Request::ApplyRestore { .. }
+            | Request::ApplyDeviceBlock { .. }
+            | Request::RestoreDevicePolicy { .. }
+            | Request::GetCompoundPolicyPlan
+            | Request::ApplyCompoundPolicy { .. }
+            | Request::RollbackCompoundPolicy => {}
         }
     }
     all

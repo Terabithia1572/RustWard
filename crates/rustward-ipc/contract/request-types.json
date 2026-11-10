@@ -140,6 +140,26 @@
     {
       "access": "administrator",
       "type": "apply_restore"
+    },
+    {
+      "access": "administrator",
+      "type": "apply_device_block"
+    },
+    {
+      "access": "administrator",
+      "type": "restore_device_policy"
+    },
+    {
+      "access": "read_only",
+      "type": "get_compound_policy_plan"
+    },
+    {
+      "access": "administrator",
+      "type": "apply_compound_policy"
+    },
+    {
+      "access": "administrator",
+      "type": "rollback_compound_policy"
     }
   ]
 }

@@ -77,6 +77,16 @@ describe("Allowed manufacturers: configured rules are not Windows access", () =>
     await waitFor(() => expect(state.calls.some((c) => c.type === "set_manufacturer_denied")).toBe(true));
     expect(await screen.findByText("Açıkça reddedildi")).toBeInTheDocument();
   });
+
+  it("renders the real Windows policy plan matrix and safety checks", async () => {
+    page("manufacturers");
+    const section = await screen.findByTestId("windows-policy-plan-section");
+    expect(section).toBeInTheDocument();
+    expect(screen.getByText("Windows USB Erişim Denetimi İlke Planı ve Uygulama")).toBeInTheDocument();
+    expect(screen.getByText("TÜBİTAK BİLGEM (SIR II)")).toBeInTheDocument();
+    expect(screen.getByText("Kingston DataTraveler 3.0")).toBeInTheDocument();
+    expect(screen.getByText(/Dahili NVMe sistemi/)).toBeInTheDocument();
+  });
 });
 
 describe("Readiness blockers", () => {

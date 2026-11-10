@@ -2035,6 +2035,10 @@ impl Handler for AppService {
                     self.session_view(&mut g, captured)?,
                 )))
             }
+            Request::GetCompoundPolicyPlan => {
+                let plan = self.get_compound_policy_plan()?;
+                Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
+            }
             Request::PrepareEnforcementSession {
                 device_key,
                 retroactive,
@@ -2236,6 +2240,38 @@ impl Handler for AppService {
                 restore_id,
                 expected_policy_version,
             } => self.apply_restore(restore_id, *expected_policy_version, identity),
+            Request::ApplyDeviceBlock {
+                session_id,
+                device_key,
+                retroactive,
+            } => {
+                let r = self.apply_device_block_direct(
+                    session_id.as_deref(),
+                    device_key.as_deref(),
+                    *retroactive,
+                    identity,
+                )?;
+                Ok(ResponseBody::EnforcementSession(Box::new(r)))
+            }
+            Request::RestoreDevicePolicy { session_id } => {
+                let r = self.restore_device_policy_direct(session_id.as_deref(), identity)?;
+                Ok(ResponseBody::EnforcementSession(Box::new(r)))
+            }
+            Request::ApplyCompoundPolicy {
+                retroactive,
+                expected_policy_version,
+            } => {
+                let plan = self.apply_compound_policy_direct(
+                    *retroactive,
+                    *expected_policy_version,
+                    identity,
+                )?;
+                Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
+            }
+            Request::RollbackCompoundPolicy => {
+                let plan = self.rollback_compound_policy_direct(identity)?;
+                Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
+            }
             Request::SetWorkstationId {
                 workstation_id,
                 expected_policy_version,

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Builds the RustWard Windows desktop application (Tauri 2, MSVC) and puts the
   verified executables into dist\. Started by BUILD-RUSTWARD.cmd.

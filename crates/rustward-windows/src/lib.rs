@@ -41,6 +41,9 @@ pub mod event_log;
 pub mod policy_reader;
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]
+pub mod gpo_writer;
+#[cfg(any(windows, feature = "host-typecheck"))]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub mod service_host;
 
 /// Read-only capture of the Device Installation Restrictions policy (see

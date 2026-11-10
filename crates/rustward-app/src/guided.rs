@@ -19,6 +19,9 @@
 use std::collections::BTreeMap;
 
 use rustward_enforcement::checklist::{device_deny_checklist, planned_deny_policy};
+use rustward_enforcement::compound_policy::{
+    compile_compound_policy, extract_observed_policy, validate_hardware_id, CompoundPolicyPlanView,
+};
 use rustward_enforcement::device_install::RESTRICTIONS_KEY;
 use rustward_enforcement::observer::EvidenceLevel;
 use rustward_enforcement::policy_state::{PolicySnapshot, RegData};
@@ -175,6 +178,34 @@ fn blocker() -> TextTrEn {
 }
 
 impl AppService {
+    pub(crate) fn is_live_windows(&self) -> bool {
+        self.policy_source.name() == "windows_registry_read_only"
+    }
+
+    /// Verifies that the Local Group Policy COM API and policy store are functional.
+    pub(crate) fn check_desktop_capability(&self) -> Result<(), TextTrEn> {
+        if !self.is_live_windows() {
+            return Err(blocker());
+        }
+        #[cfg(windows)]
+        {
+            if let Err(e) = rustward_windows::gpo_writer::GpoPolicyWriter::check_capability() {
+                return Err(TextTrEn {
+                    tr: format!("Windows Grup İlkesi (IGroupPolicyObject) COM sağlayıcısı başlatılamadı: {e}"),
+                    en: format!("Windows Group Policy (IGroupPolicyObject) COM provider failed to initialize: {e}"),
+                });
+            }
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            Err(TextTrEn {
+                tr: "Masaüstü kontrollü uygulama yalnızca Windows üzerinde desteklenir.".into(),
+                en: "Desktop-managed enforcement is only supported on Windows.".into(),
+            })
+        }
+    }
+
     fn latest(g: &Inner, kind: &str) -> Result<Option<SecurityEvent>, IpcError> {
         Ok(g.store
             .list_events(&EventFilter {
@@ -620,6 +651,433 @@ impl AppService {
         self.session_view(g, captured)
     }
 
+    /// Apply an authorized Windows device block directly (administrator).
+    /// Applies the restriction to Windows via GpoPolicyWriter, refreshes policy,
+    /// triggers PnP rescan, and independently verifies the enforcement.
+    pub(crate) fn apply_device_block_direct(
+        &self,
+        session_id: Option<&str>,
+        device_key: Option<&str>,
+        retroactive: bool,
+        identity: &ClientIdentity,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        let captured = self.capture_policy_unlocked();
+        let sid = {
+            let mut g = self.lock()?;
+            if let Some(id) = session_id {
+                let a = Self::require(&g, id)?;
+                s(&a.prepared.details, "session_id")
+            } else if let Some(dk) = device_key {
+                if let Some(active) = Self::active_session(&g)? {
+                    if s(&active.prepared.details, "device_key") == dk {
+                        let active_sid = s(&active.prepared.details, "session_id");
+                        let live = Self::normalized_from(&captured);
+                        let baseline = map_of(&active.prepared.details["baseline"]);
+                        let active_retro = active
+                            .prepared
+                            .details
+                            .get("retroactive")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        // If unapplied or mismatched session exists at baseline, refresh it with current parameters
+                        if (active.last_apply.is_none()
+                            || active.last_apply.as_ref().is_some_and(|e| e.kind != APPLY_OK)
+                            || active_retro != retroactive)
+                            && live.as_ref() == Ok(&baseline)
+                        {
+                            let _ = self.cancel_session(&mut g, &active_sid, captured.clone());
+                            let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
+                            view.session
+                                .map(|s| s.session_id)
+                                .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
+                        } else {
+                            active_sid
+                        }
+                    } else {
+                        // Multi-device support: instead of conflicting, supersede the single-device session
+                        // while keeping existing restrictions intact, and prepare a session for the requested device.
+                        let _ = self.cancel_session(&mut g, &s(&active.prepared.details, "session_id"), captured.clone());
+                        let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
+                        view.session
+                            .map(|s| s.session_id)
+                            .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
+                    }
+                } else {
+                    let view = self.prepare_session(&mut g, dk, retroactive, identity, captured.clone())?;
+                    view.session
+                        .map(|s| s.session_id)
+                        .ok_or_else(|| IpcError::new(ErrorCode::Internal, "failed to prepare session"))?
+                }
+            } else {
+                return Err(IpcError::new(
+                    ErrorCode::InvalidRequest,
+                    "either session_id or device_key is required",
+                ));
+            }
+        };
+
+        let (hwid, retro) = {
+            let g = self.lock()?;
+            let a = Self::require(&g, &sid)?;
+            let hwid = s(&a.prepared.details, "hardware_id");
+            let retro = a
+                .prepared
+                .details
+                .get("retroactive")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(retroactive);
+            (hwid, retro)
+        };
+
+        let is_live_windows = self.is_live_windows();
+        if is_live_windows {
+            if let Err(cap_err) = self.check_desktop_capability() {
+                return Err(IpcError::new(
+                    ErrorCode::Unavailable,
+                    format!("GPO capability check failed: {}", cap_err.en),
+                ));
+            }
+            #[cfg(windows)]
+            {
+                use rustward_windows::gpo_writer::GpoPolicyWriter;
+                {
+                    let mut g = self.lock()?;
+                    self.session_event(
+                        &mut g,
+                        Severity::Warning,
+                        "enforcement_mutation_started",
+                        format!("privileged backend applying Windows Group Policy restriction for {hwid}"),
+                        serde_json::json!({
+                            "session_id": sid,
+                            "hardware_id": hwid,
+                            "retroactive": retro,
+                            "actor": identity.actor(),
+                        }),
+                    )?;
+                }
+
+                let mut deny_ids = vec![hwid.clone()];
+                // Adopt existing active denies from captured policy (e.g. VendorC) so they are preserved
+                if let Ok(cap) = &captured {
+                    let observed = extract_observed_policy(&cap.values);
+                    for active_id in observed.active_denies {
+                        if !deny_ids.iter().any(|d| d.eq_ignore_ascii_case(&active_id)) {
+                            deny_ids.push(active_id);
+                        }
+                    }
+                }
+
+                GpoPolicyWriter::apply_compound_policy(&deny_ids, &[], retro).map_err(|e| {
+                    IpcError::new(ErrorCode::Internal, format!("GPO write failed: {e}"))
+                })?;
+
+                GpoPolicyWriter::trigger_policy_refresh();
+                GpoPolicyWriter::trigger_device_rescan();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let _ = self.refresh_inventory();
+        let captured = self.capture_policy_unlocked();
+        let mut g = self.lock()?;
+        self.verify_applied(&mut g, &sid, captured)
+    }
+
+    /// Restore previous policy from a session directly (administrator).
+    /// Restores the baseline policy via GpoPolicyWriter, refreshes policy,
+    /// triggers PnP rescan, and independently verifies the rollback.
+    pub(crate) fn restore_device_policy_direct(
+        &self,
+        session_id: Option<&str>,
+        identity: &ClientIdentity,
+    ) -> Result<EnforcementSessionView, IpcError> {
+        let sid = {
+            let g = self.lock()?;
+            if let Some(id) = session_id {
+                let a = Self::require(&g, id)?;
+                s(&a.prepared.details, "session_id")
+            } else if let Some(active) = Self::active_session(&g)? {
+                s(&active.prepared.details, "session_id")
+            } else {
+                return Err(IpcError::new(
+                    ErrorCode::NotFound,
+                    "no active enforcement session found to restore",
+                ));
+            }
+        };
+
+        let hwid = {
+            let g = self.lock()?;
+            let a = Self::require(&g, &sid)?;
+            s(&a.prepared.details, "hardware_id")
+        };
+
+        let is_live_windows = self.is_live_windows();
+        if is_live_windows {
+            if let Err(cap_err) = self.check_desktop_capability() {
+                return Err(IpcError::new(
+                    ErrorCode::Unavailable,
+                    format!("GPO capability check failed: {}", cap_err.en),
+                ));
+            }
+            #[cfg(windows)]
+            {
+                use rustward_windows::gpo_writer::GpoPolicyWriter;
+                {
+                    let mut g = self.lock()?;
+                    self.session_event(
+                        &mut g,
+                        Severity::Info,
+                        "enforcement_rollback_started",
+                        format!("privileged backend restoring Windows Group Policy for {hwid}"),
+                        serde_json::json!({
+                            "session_id": sid,
+                            "hardware_id": hwid,
+                            "actor": identity.actor(),
+                        }),
+                    )?;
+                }
+
+                let captured_for_restore = self.capture_policy_unlocked();
+                let mut remaining_denies = Vec::new();
+                if let Ok(cap) = &captured_for_restore {
+                    let observed = extract_observed_policy(&cap.values);
+                    for active_id in observed.active_denies {
+                        if !active_id.eq_ignore_ascii_case(&hwid) {
+                            remaining_denies.push(active_id);
+                        }
+                    }
+                }
+
+                if remaining_denies.is_empty() {
+                    GpoPolicyWriter::restore_compound_policy().map_err(|e| {
+                        IpcError::new(ErrorCode::Internal, format!("GPO restore failed: {e}"))
+                    })?;
+                } else {
+                    GpoPolicyWriter::apply_compound_policy(&remaining_denies, &[], true).map_err(|e| {
+                        IpcError::new(ErrorCode::Internal, format!("GPO update failed: {e}"))
+                    })?;
+                }
+
+                GpoPolicyWriter::trigger_policy_refresh();
+                GpoPolicyWriter::trigger_device_rescan();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let _ = self.refresh_inventory();
+        let captured = self.capture_policy_unlocked();
+        let mut g = self.lock()?;
+        self.verify_rollback(&mut g, &sid, captured)
+    }
+
+    /// Get the unified compound multi-manufacturer policy plan.
+    pub(crate) fn get_compound_policy_plan(&self) -> Result<CompoundPolicyPlanView, IpcError> {
+        let captured = self.capture_policy_unlocked();
+        let snapshot_ref = captured.as_ref().ok().map(|c| &c.values);
+        let g = self.lock()?;
+        let v = Self::validated(&g.store)?;
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        Ok(compile_compound_policy(
+            &v.policy,
+            &v.catalog,
+            &snap.devices,
+            snapshot_ref,
+            true,
+        ))
+    }
+
+    /// Apply the unified compound policy to Windows Group Policy (administrator).
+    pub(crate) fn apply_compound_policy_direct(
+        &self,
+        retroactive: bool,
+        expected_policy_version: u64,
+        identity: &ClientIdentity,
+    ) -> Result<CompoundPolicyPlanView, IpcError> {
+        if !identity.is_administrator {
+            return Err(IpcError::new(
+                ErrorCode::Unauthorized,
+                "administrator privileges required to apply compound Windows Group Policy",
+            ));
+        }
+
+        let plan = self.get_compound_policy_plan()?;
+
+        // Optimistic concurrency check
+        if expected_policy_version != 0 && plan.policy_version != expected_policy_version {
+            return Err(IpcError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "policy version conflict: expected {}, current is {}",
+                    expected_policy_version, plan.policy_version
+                ),
+            ));
+        }
+
+        // Validate all hardware IDs strictly
+        for hwid in &plan.compiled.deny_hardware_ids {
+            validate_hardware_id(hwid).map_err(|e| {
+                IpcError::new(
+                    ErrorCode::ValidationFailed,
+                    format!("invalid hardware ID in compound deny list: {hwid} ({e})"),
+                )
+            })?;
+        }
+        for hwid in &plan.compiled.allow_hardware_ids {
+            validate_hardware_id(hwid).map_err(|e| {
+                IpcError::new(
+                    ErrorCode::ValidationFailed,
+                    format!("invalid hardware ID in compound allow list: {hwid} ({e})"),
+                )
+            })?;
+        }
+
+        let is_live_windows = self.is_live_windows();
+        if is_live_windows {
+            if let Err(cap_err) = self.check_desktop_capability() {
+                return Err(IpcError::new(
+                    ErrorCode::Unavailable,
+                    format!("GPO capability check failed: {}", cap_err.en),
+                ));
+            }
+
+            #[cfg(windows)]
+            {
+                use rustward_windows::gpo_writer::GpoPolicyWriter;
+                {
+                    let mut g = self.lock()?;
+                    self.session_event(
+                        &mut g,
+                        Severity::Warning,
+                        "compound_enforcement_mutation_started",
+                        format!(
+                            "privileged backend applying compound Windows Group Policy with {} deny rules",
+                            plan.compiled.deny_hardware_ids.len()
+                        ),
+                        serde_json::json!({
+                            "revision_id": plan.compiled.revision_id,
+                            "deny_hardware_ids": plan.compiled.deny_hardware_ids,
+                            "allow_hardware_ids": plan.compiled.allow_hardware_ids,
+                            "retroactive": retroactive,
+                            "actor": identity.actor(),
+                        }),
+                    )?;
+                }
+
+                GpoPolicyWriter::apply_compound_policy(
+                    &plan.compiled.deny_hardware_ids,
+                    &plan.compiled.allow_hardware_ids,
+                    retroactive,
+                )
+                .map_err(|e| {
+                    IpcError::new(
+                        ErrorCode::Internal,
+                        format!("GPO compound write failed: {e}"),
+                    )
+                })?;
+
+                GpoPolicyWriter::trigger_policy_refresh();
+                GpoPolicyWriter::trigger_device_rescan();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let _ = self.refresh_inventory();
+        let updated_plan = self.get_compound_policy_plan()?;
+
+        {
+            let mut g = self.lock()?;
+            self.session_event(
+                &mut g,
+                Severity::Info,
+                "compound_enforcement_applied",
+                format!(
+                    "compound Windows Group Policy applied: {} active denies, sync={}",
+                    updated_plan.observed.active_denies.len(),
+                    updated_plan.diff.is_synchronized
+                ),
+                serde_json::json!({
+                    "revision_id": updated_plan.compiled.revision_id,
+                    "active_denies": updated_plan.observed.active_denies,
+                    "is_applied": updated_plan.is_applied,
+                    "actor": identity.actor(),
+                }),
+            )?;
+        }
+
+        Ok(updated_plan)
+    }
+
+    /// Roll back compound policy restrictions from Windows Group Policy (administrator).
+    pub(crate) fn rollback_compound_policy_direct(
+        &self,
+        identity: &ClientIdentity,
+    ) -> Result<CompoundPolicyPlanView, IpcError> {
+        if !identity.is_administrator {
+            return Err(IpcError::new(
+                ErrorCode::Unauthorized,
+                "administrator privileges required to roll back Windows Group Policy",
+            ));
+        }
+
+        let is_live_windows = self.is_live_windows();
+        if is_live_windows {
+            if let Err(cap_err) = self.check_desktop_capability() {
+                return Err(IpcError::new(
+                    ErrorCode::Unavailable,
+                    format!("GPO capability check failed: {}", cap_err.en),
+                ));
+            }
+
+            #[cfg(windows)]
+            {
+                use rustward_windows::gpo_writer::GpoPolicyWriter;
+                {
+                    let mut g = self.lock()?;
+                    self.session_event(
+                        &mut g,
+                        Severity::Info,
+                        "compound_enforcement_rollback_started",
+                        "privileged backend restoring previous compound Windows Group Policy restrictions".to_string(),
+                        serde_json::json!({
+                            "actor": identity.actor(),
+                        }),
+                    )?;
+                }
+
+                GpoPolicyWriter::restore_compound_policy().map_err(|e| {
+                    IpcError::new(ErrorCode::Internal, format!("GPO rollback failed: {e}"))
+                })?;
+
+                GpoPolicyWriter::trigger_policy_refresh();
+                GpoPolicyWriter::trigger_device_rescan();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let _ = self.refresh_inventory();
+        let updated_plan = self.get_compound_policy_plan()?;
+
+        {
+            let mut g = self.lock()?;
+            self.session_event(
+                &mut g,
+                Severity::Info,
+                "compound_enforcement_rollback_verified",
+                format!(
+                    "compound Windows Group Policy rollback verified: {} active denies remain",
+                    updated_plan.observed.active_denies.len()
+                ),
+                serde_json::json!({
+                    "active_denies": updated_plan.observed.active_denies,
+                    "actor": identity.actor(),
+                }),
+            )?;
+        }
+
+        Ok(updated_plan)
+    }
+
     /// Current session state (read-only towards Windows).
     pub(crate) fn session_view(
         &self,
@@ -687,8 +1145,14 @@ impl AppService {
                 differences: Vec::new(),
                 policy_error: live.err().map(|e| e.message),
                 target: None,
-                automated_apply_available: false,
-                automated_apply_blocker: blocker(),
+                automated_apply_available: self.check_desktop_capability().is_ok(),
+                automated_apply_blocker: match self.check_desktop_capability() {
+                    Ok(()) => TextTrEn {
+                        tr: "Masaüstü kontrollü uygulama etkin: RustWard yönetici onayıyla Windows Yerel Grup İlkesi (IGroupPolicyObject) kısıtlamasını doğrudan uygular ve kaldırır.".into(),
+                        en: "Desktop-managed enforcement active: RustWard applies and restores Windows Local Group Policy (IGroupPolicyObject) restrictions directly with administrator approval.".into(),
+                    },
+                    Err(e) => e,
+                },
             });
         };
         let d = a.prepared.details.clone();
@@ -845,8 +1309,14 @@ impl AppService {
             },
             policy_error,
             target,
-            automated_apply_available: false,
-            automated_apply_blocker: blocker(),
+            automated_apply_available: self.check_desktop_capability().is_ok(),
+            automated_apply_blocker: match self.check_desktop_capability() {
+                Ok(()) => TextTrEn {
+                    tr: "Masaüstü kontrollü uygulama etkin: RustWard yönetici onayıyla Windows Yerel Grup İlkesi (IGroupPolicyObject) kısıtlamasını doğrudan uygular ve kaldırır.".into(),
+                    en: "Desktop-managed enforcement active: RustWard applies and restores Windows Local Group Policy (IGroupPolicyObject) restrictions directly with administrator approval.".into(),
+                },
+                Err(e) => e,
+            },
         })
     }
 }
@@ -916,12 +1386,15 @@ impl AppService {
         }
 
         // Every reason the system is not in a verified protection state.
-        let mut blockers = vec![blocker(
-            "automatic_apply_blocked",
-            "blocked",
-            "Otomatik politika uygulama ENGELLİ: RustWard Windows politikasını kendisi yazmaz; değişiklik yalnızca yönetici onayıyla, yönetici tarafından elle yapılır.".into(),
-            "Automatic policy application is BLOCKED: RustWard never writes Windows policy itself; changes are made manually by an administrator with explicit approval.".into(),
-        )];
+        let mut blockers = Vec::new();
+        if !self.is_live_windows() {
+            blockers.push(blocker(
+                "automatic_apply_blocked",
+                "blocked",
+                "Otomatik politika uygulama ENGELLİ: RustWard Windows politikasını kendisi yazmaz; değişiklik yalnızca yönetici onayıyla, yönetici tarafından elle yapılır.".into(),
+                "Automatic policy application is BLOCKED: RustWard never writes Windows policy itself; changes are made manually by an administrator with explicit approval.".into(),
+            ));
+        }
         if !readable {
             blockers.push(blocker(
                 "policy_unreadable",
@@ -1029,6 +1502,17 @@ impl AppService {
             "Read/write denial is not verified: an installation denial is not proof of a complete read/write denial.".into(),
         ));
 
+        let cap_res = self.check_desktop_capability();
+        if let Err(err_text) = &cap_res {
+            blockers.push(blocker(
+                "gpo_provider_unavailable",
+                "limitation",
+                err_text.tr.clone(),
+                err_text.en.clone(),
+            ));
+        }
+
+        let is_auto_available = cap_res.is_ok();
         let mk = |state: &str, tr: &str, en: &str, dtr: String, den: String, n: u32| {
             rustward_ipc::messages::WindowsProtectionView {
                 state: state.into(),
@@ -1037,7 +1521,7 @@ impl AppService {
                 detail_tr: dtr,
                 detail_en: den,
                 denied_now: n,
-                automated_apply_available: false,
+                automated_apply_available: is_auto_available,
                 summary: summary.clone(),
                 blockers: blockers.clone(),
             }

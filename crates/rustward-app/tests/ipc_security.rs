@@ -168,6 +168,19 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             restore_id: "0123456789abcdef0123456789abcdef".into(),
             expected_policy_version: version,
         },
+        Request::ApplyDeviceBlock {
+            session_id: Some("0123456789abcdef".into()),
+            device_key: None,
+            retroactive: true,
+        },
+        Request::RestoreDevicePolicy {
+            session_id: Some("0123456789abcdef".into()),
+        },
+        Request::ApplyCompoundPolicy {
+            retroactive: true,
+            expected_policy_version: version,
+        },
+        Request::RollbackCompoundPolicy,
     ];
     for r in &all {
         assert_eq!(r.access_level(), AccessLevel::Administrator, "{}", r.name());
@@ -192,7 +205,11 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::SetWorkstationId { .. }
             | Request::ListBackups
             | Request::PrepareRestore { .. }
-            | Request::ApplyRestore { .. } => {}
+            | Request::ApplyRestore { .. }
+            | Request::ApplyDeviceBlock { .. }
+            | Request::RestoreDevicePolicy { .. }
+            | Request::ApplyCompoundPolicy { .. }
+            | Request::RollbackCompoundPolicy => {}
             Request::GetDashboard
             | Request::ListDevices { .. }
             | Request::ListManufacturers
@@ -206,7 +223,8 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::GetPolicyChecklist { .. }
             | Request::GetEnforcementSession
             | Request::GetSettings
-            | Request::RunSimulation => unreachable!("read-only request in privileged list"),
+            | Request::RunSimulation
+            | Request::GetCompoundPolicyPlan => unreachable!("read-only request in privileged list"),
         }
     }
     all

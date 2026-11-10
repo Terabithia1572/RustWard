@@ -378,6 +378,28 @@ export function GuidedSessionCard() {
                   <li>{t("guided.step4")}</li>
                 </ol>
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    icon={<CheckCircle2 className="size-4" aria-hidden />}
+                    busy={action.busy}
+                    onClick={() =>
+                      void run(() => api.applyDeviceBlock({ sessionId: v.session!.session_id }))
+                    }
+                  >
+                    {t("guided.directApply")}
+                  </Button>
+                  <Button
+                    icon={<RotateCcw className="size-4" aria-hidden />}
+                    busy={action.busy}
+                    onClick={() =>
+                      void run(
+                        () => api.restoreDevicePolicy({ sessionId: v.session!.session_id }),
+                        "verify",
+                        { isRollback: true },
+                      )
+                    }
+                  >
+                    {t("guided.directRollback")}
+                  </Button>
                   {v.session.kind !== "default_deny_profile" && (
                     <Button
                       icon={<ClipboardCheck className="size-4" aria-hidden />}

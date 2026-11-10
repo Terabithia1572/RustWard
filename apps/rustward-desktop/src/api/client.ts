@@ -1,5 +1,6 @@
 import type {
   BackupView,
+  CompoundPolicyPlanView,
   DashboardView,
   DeviceView,
   DiagnosticsView,
@@ -169,6 +170,47 @@ export class Api {
   }
   async cancelSession(sessionId: string): Promise<EnforcementSessionView> {
     return expect(await this.call({ type: "cancel_enforcement_session", session_id: sessionId }), "enforcement_session");
+  }
+  /** Apply device block directly through privileged backend GPO API. */
+  async applyDeviceBlock(options: { sessionId?: string; deviceKey?: string; retroactive?: boolean }): Promise<EnforcementSessionView> {
+    return expect(
+      await this.call({
+        type: "apply_device_block",
+        session_id: options.sessionId,
+        device_key: options.deviceKey,
+        retroactive: options.retroactive,
+      }),
+      "enforcement_session",
+    );
+  }
+  /** Restore device policy directly through privileged backend GPO API. */
+  async restoreDevicePolicy(options?: { sessionId?: string }): Promise<EnforcementSessionView> {
+    return expect(
+      await this.call({
+        type: "restore_device_policy",
+        session_id: options?.sessionId,
+      }),
+      "enforcement_session",
+    );
+  }
+  /** Get the unified compound multi-manufacturer policy plan. */
+  async compoundPolicyPlan(): Promise<CompoundPolicyPlanView> {
+    return expect(await this.call({ type: "get_compound_policy_plan" }), "compound_policy_plan");
+  }
+  /** Apply compound multi-manufacturer policy directly through privileged GPO API. */
+  async applyCompoundPolicy(options?: { retroactive?: boolean; expectedPolicyVersion?: number }): Promise<CompoundPolicyPlanView> {
+    return expect(
+      await this.call({
+        type: "apply_compound_policy",
+        retroactive: options?.retroactive ?? true,
+        expected_policy_version: options?.expectedPolicyVersion ?? 0,
+      }),
+      "compound_policy_plan",
+    );
+  }
+  /** Restore / rollback compound policy restrictions from Windows Group Policy. */
+  async rollbackCompoundPolicy(): Promise<CompoundPolicyPlanView> {
+    return expect(await this.call({ type: "rollback_compound_policy" }), "compound_policy_plan");
   }
   async settings(): Promise<SettingsView> {
     return expect(await this.call({ type: "get_settings" }), "settings");

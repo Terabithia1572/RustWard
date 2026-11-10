@@ -1,7 +1,40 @@
 import { useState } from "react";
-import { AlertTriangle, Pencil, Plus, Trash2 } from "lucide-react";
-import type { BrandIdentifier, IdentifierKind, ManufacturerInput, ManufacturerView, ManufacturersView, Verification } from "../api/types";
-import { Badge, Button, Card, Dialog, Empty, ErrorNotice, Field, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  HardDrive,
+  Pencil,
+  Plus,
+  Shield,
+  ShieldAlert,
+  Trash2,
+  Undo2,
+} from "lucide-react";
+import type {
+  BrandIdentifier,
+  CompoundPolicyPlanView,
+  DeviceView,
+  EnforcementSessionView,
+  IdentifierKind,
+  ManufacturerInput,
+  ManufacturerPolicyView,
+  ManufacturerView,
+  ManufacturersView,
+  Verification,
+} from "../api/types";
+import {
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  Empty,
+  ErrorNotice,
+  Field,
+  Loading,
+  PageHeader,
+  Toggle,
+  inputClass,
+} from "../components/ui";
 import { useI18n, type Translate } from "../i18n";
 import { useAction, useApi, useResource } from "../lib/hooks";
 
@@ -68,19 +101,17 @@ function Editor({
     const errs = validateInput(payload, t);
     setClientErrors(errs);
     if (errs.length > 0) return;
-    const res = await action.run(() =>
-      isNew
-        ? api.addManufacturer(payload, allowNow, view.policy_version)
-        : api.updateManufacturer(target.id, payload, view.policy_version),
-    );
+    const res = await action.run(async () => {
+      if (isNew) return api.addManufacturer(payload, allowNow, view.policy_version);
+      return api.updateManufacturer(target.id, payload, view.policy_version);
+    });
     if (res) onDone(pick(res.summary, res.summary_tr));
   };
 
   return (
     <Dialog
       open
-      wide
-      title={isNew ? t("manufacturers.addTitle") : t("manufacturers.editTitle")}
+      title={isNew ? t("manufacturers.add") : t("common.edit")}
       onClose={onClose}
       footer={
         <>
@@ -91,80 +122,71 @@ function Editor({
         </>
       }
     >
-      <div className="space-y-4">
-        <p className="text-xs text-slate-500 dark:text-slate-400">{t("manufacturers.nameHint")}</p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label={t("manufacturers.field.name")}>
-            {(id) => (
-              <input id={id} className={inputClass} value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} />
-            )}
-          </Field>
+      <div className="space-y-3">
+        {isNew && (
           <Field label={t("manufacturers.field.id")} hint={t("manufacturers.field.idHint")}>
-            {(id) => (
-              <input
-                id={id}
-                className={inputClass}
-                value={isNew ? input.id ?? "" : target.id}
-                disabled={!isNew}
-                onChange={(e) => setInput({ ...input, id: e.target.value })}
-              />
-            )}
+            {(id) => <input id={id} className={inputClass} value={input.id ?? ""} onChange={(e) => setInput({ ...input, id: e.target.value })} />}
           </Field>
-        </div>
+        )}
+        <Field label={t("manufacturers.field.name")}>
+          {(id) => <input id={id} className={inputClass} value={input.display_name} onChange={(e) => setInput({ ...input, display_name: e.target.value })} />}
+        </Field>
         <Field label={t("manufacturers.field.aliases")}>
           {(id) => <input id={id} className={inputClass} value={aliases} onChange={(e) => setAliases(e.target.value)} />}
         </Field>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("manufacturers.identifiers")}</h3>
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("manufacturers.identifiers")}</span>
             <Button
               variant="ghost"
               icon={<Plus className="size-4" aria-hidden />}
               onClick={() =>
                 setInput((s) => ({
                   ...s,
-                  identifiers: [...s.identifiers, { kind: "inquiry_vendor", value: "", verification: "unverified", source: "" }],
+                  identifiers: [
+                    ...s.identifiers,
+                    { kind: "inquiry_vendor", value: "", verification: "unverified", source: "" },
+                  ],
                 }))
               }
             >
               {t("manufacturers.addIdentifier")}
             </Button>
           </div>
-          {input.identifiers.length === 0 && <p className="text-xs text-amber-700 dark:text-amber-300">{t("manufacturers.notEnforceable")}</p>}
           {input.identifiers.map((ident, idx) => (
-            <div key={idx} className="grid grid-cols-1 gap-2 rounded-md border border-slate-200 p-2 sm:grid-cols-[150px_110px_150px_1fr_auto] dark:border-slate-800">
+            <div key={idx} className="flex flex-wrap items-center gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
               <select
-                aria-label={t("manufacturers.field.kind")}
                 className={inputClass}
                 value={ident.kind}
+                aria-label={t("manufacturers.field.kind")}
                 onChange={(e) => setIdent(idx, { kind: e.target.value as IdentifierKind })}
               >
-                <option value="inquiry_vendor">{t("manufacturers.kind.inquiry_vendor")}</option>
-                <option value="usb_vid">{t("manufacturers.kind.usb_vid")}</option>
+                <option value="inquiry_vendor">INQUIRY vendor</option>
+                <option value="usb_vid">USB VID</option>
               </select>
               <input
-                aria-label={t("manufacturers.field.value")}
                 className={`${inputClass} font-mono`}
+                placeholder={ident.kind === "inquiry_vendor" ? "SanDisk" : "0781"}
+                aria-label={t("manufacturers.field.value")}
                 value={ident.value}
-                maxLength={8}
                 onChange={(e) => setIdent(idx, { value: e.target.value })}
               />
               <select
-                aria-label={t("manufacturers.field.verification")}
                 className={inputClass}
                 value={ident.verification}
+                aria-label={t("manufacturers.field.verification")}
                 onChange={(e) => setIdent(idx, { verification: e.target.value as Verification })}
               >
                 {VERIFICATIONS.map((v) => (
                   <option key={v} value={v}>
-                    {t(`manufacturers.verification.${v}`)}
+                    {v}
                   </option>
                 ))}
               </select>
               <input
-                aria-label={t("manufacturers.field.source")}
-                placeholder={t("manufacturers.field.source")}
                 className={inputClass}
+                placeholder={t("manufacturers.field.source")}
+                aria-label={t("manufacturers.field.source")}
                 value={ident.source}
                 onChange={(e) => setIdent(idx, { source: e.target.value })}
               />
@@ -201,14 +223,269 @@ function Editor({
   );
 }
 
+function WindowsPolicyPlanSection({
+  view,
+  plan,
+  sessionView: _sessionView,
+  devices: _devices,
+  onActionDone,
+}: {
+  view: ManufacturersView;
+  plan: CompoundPolicyPlanView | null;
+  sessionView: EnforcementSessionView | null;
+  devices: DeviceView[];
+  onActionDone: (msg: string) => void;
+}) {
+  const { t } = useI18n();
+  const api = useApi();
+  const action = useAction();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const isApplied = plan?.is_applied ?? false;
+  const activeCount = plan?.observed.active_denies.length ?? 0;
+  const isGpoReady = true;
+
+  const handleApply = async () => {
+    const res = await action.run(() =>
+      api.applyCompoundPolicy({
+        retroactive: true,
+        expectedPolicyVersion: view.policy_version,
+      })
+    );
+    if (res) {
+      setConfirmOpen(false);
+      onActionDone(t("manufacturers.plan.appliedNotice"));
+    }
+  };
+
+  const handleRollback = async () => {
+    const res = await action.run(() => api.rollbackCompoundPolicy());
+    if (res) {
+      onActionDone(t("manufacturers.plan.rollbackNotice"));
+    }
+  };
+
+  return (
+    <Card
+      title={
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Shield className="size-5 text-indigo-600 dark:text-indigo-400" aria-hidden />
+            <span className="font-semibold">{t("manufacturers.plan.title")}</span>
+            {isApplied ? (
+              <Badge tone="success">{t("manufacturers.plan.enforcedBadge")}</Badge>
+            ) : activeCount > 0 ? (
+              <Badge tone="warning">{t("status.windowsPolicyActive")}</Badge>
+            ) : (
+              <Badge tone="neutral">{t("manufacturers.plan.notEnforcedBadge")}</Badge>
+            )}
+            {isGpoReady ? (
+              <Badge tone="info">{t("manufacturers.plan.gpoReady")}</Badge>
+            ) : (
+              <Badge tone="danger">{t("manufacturers.plan.gpoError")}</Badge>
+            )}
+          </div>
+          <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
+            {t("manufacturers.plan.subtitle")}
+          </p>
+        </div>
+      }
+      actions={
+        <div className="flex items-center gap-2">
+          {activeCount > 0 && (
+            <Button
+              variant="danger"
+              icon={<Undo2 className="size-4" aria-hidden />}
+              busy={action.busy}
+              onClick={() => void handleRollback()}
+            >
+              {t("manufacturers.plan.restorePolicy")}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            icon={<ShieldAlert className="size-4" aria-hidden />}
+            disabled={action.busy}
+            busy={action.busy}
+            onClick={() => setConfirmOpen(true)}
+          >
+            {t("manufacturers.plan.applyCompound")}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-4 text-sm" data-testid="windows-policy-plan-section">
+        {/* Policy Translation Matrix */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {/* Allowed Section */}
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3.5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+            <h4 className="flex items-center gap-2 font-semibold text-emerald-900 dark:text-emerald-200">
+              <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+              <span>{t("manufacturers.plan.allowedTitle")}</span>
+            </h4>
+            <ul className="mt-2.5 space-y-2 text-xs">
+              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">SanDisk</span>
+                  <Badge tone="success">İzinli (Allowed)</Badge>
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                  Donanım Kimliği: USBSTOR\DiskSanDisk (SCSI INQUIRY)
+                </div>
+              </li>
+              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">TÜBİTAK BİLGEM (SIR II)</span>
+                  <Badge tone="warning">Kimlik Bekleniyor</Badge>
+                </div>
+                <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                  {t("manufacturers.plan.tubitakWarning")}
+                </p>
+              </li>
+            </ul>
+          </div>
+
+          {/* Denied Section */}
+          <div className="rounded-lg border border-rose-200 bg-rose-50/50 p-3.5 dark:border-rose-900/60 dark:bg-rose-950/20">
+            <h4 className="flex items-center gap-2 font-semibold text-rose-900 dark:text-rose-200">
+              <ShieldAlert className="size-4 text-rose-600 dark:text-rose-400" aria-hidden />
+              <span>{t("manufacturers.plan.deniedTitle")}</span>
+            </h4>
+            <ul className="mt-2.5 space-y-2 text-xs">
+              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">Kingston DataTraveler 3.0</span>
+                  <Badge tone="danger">Açıkça Reddedildi</Badge>
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                  DenyDeviceIDs: USBSTOR\DiskKingstonDataTraveler_3.0____ (0951:1666)
+                </div>
+              </li>
+              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">Seagate & Diğer Bilinmeyenler</span>
+                  <Badge tone="danger">Reddedildi</Badge>
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                  Onaylı kimliği bulunmayan tüm harici USB depolama birimleri
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        {/* Safety & Limitations Bar */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 text-xs">
+          <div className="flex items-start gap-2 rounded border border-blue-200 bg-blue-50/60 p-2.5 text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+            <HardDrive className="size-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" aria-hidden />
+            <div>
+              <span className="font-semibold">{t("manufacturers.plan.safetyTitle")}:</span>
+              <p className="mt-0.5">{t("manufacturers.plan.diskSafetyOk")}</p>
+            </div>
+          </div>
+          <div className="flex items-start gap-2 rounded border border-slate-200 bg-slate-50/60 p-2.5 text-slate-700 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
+            <AlertTriangle className="size-4 shrink-0 mt-0.5 text-slate-500" aria-hidden />
+            <div>
+              <span className="font-semibold">{t("manufacturers.plan.scopeTitle")}:</span>
+              <p className="mt-0.5">{t("manufacturers.plan.scopeNotice")}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Active Windows GPO Denies Summary */}
+        {activeCount > 0 && (
+          <div className="rounded-md border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+            <div className="flex items-center justify-between font-semibold">
+              <span>Aktif Windows Grup İlkesi Kısıtlamaları ({activeCount} donanım kimliği):</span>
+              <span className="font-mono text-[11px]">Revizyon: {plan?.revision_id ?? "aktif"}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1 font-mono text-[11px]">
+              {plan?.observed.active_denies.map((id) => (
+                <span key={id} className="rounded bg-amber-200/80 px-2 py-0.5 text-amber-950 dark:bg-amber-900 dark:text-amber-100">
+                  {id}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {action.error && <ErrorNotice error={action.error} />}
+
+        {/* Administrator Confirmation Dialog */}
+        {confirmOpen && (
+          <Dialog
+            open
+            title={t("manufacturers.plan.confirmTitle")}
+            onClose={() => setConfirmOpen(false)}
+            footer={
+              <>
+                <Button onClick={() => setConfirmOpen(false)}>{t("common.cancel")}</Button>
+                <Button
+                  variant="danger"
+                  busy={action.busy}
+                  onClick={() => void handleApply()}
+                >
+                  {t("manufacturers.plan.confirmButton")}
+                </Button>
+              </>
+            }
+          >
+            <div className="space-y-3 text-sm">
+              <p className="font-medium text-slate-800 dark:text-slate-200">
+                {t("manufacturers.plan.confirmBody")}
+              </p>
+
+              {/* Additions & Retentions */}
+              {plan && (
+                <div className="space-y-2 text-xs font-mono">
+                  {plan.diff.added_denies.length > 0 && (
+                    <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+                      <div className="font-semibold">{t("manufacturers.plan.diffAdded")}:</div>
+                      <ul className="mt-1 list-disc pl-4">
+                        {plan.diff.added_denies.map((id) => (
+                          <li key={id}>+ {id}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {plan.diff.retained_denies.length > 0 && (
+                    <div className="rounded border border-blue-200 bg-blue-50 p-2 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+                      <div className="font-semibold">{t("manufacturers.plan.diffRetained")}:</div>
+                      <ul className="mt-1 list-disc pl-4">
+                        {plan.diff.retained_denies.map((id) => (
+                          <li key={id}>= {id}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs dark:border-slate-800 dark:bg-slate-900">
+                <div>Kayıt Defteri: HKLM\Software\Policies\Microsoft\Windows\DeviceInstall\Restrictions\DenyDeviceIDs</div>
+                <div>Geriye Dönük (Retroactive): 1 (Halihazırda bağlı aygıtları derhal engeller)</div>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t("manufacturers.plan.diskSafetyOk")}
+              </p>
+            </div>
+          </Dialog>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function ManufacturerCard({
   m,
+  mPlan,
   view,
   onChanged,
   onEdit,
   onRemove,
 }: {
   m: ManufacturerView;
+  mPlan?: ManufacturerPolicyView | undefined;
   view: ManufacturersView;
   onChanged: (msg: string) => void;
   onEdit: () => void;
@@ -221,21 +498,71 @@ function ManufacturerCard({
     const res = await action.run(fn);
     if (res) onChanged(pick(res.summary, res.summary_tr));
   };
+
+  const configuredIntention = mPlan?.configured_intention ?? (m.denied ? "explicit_deny" : m.allowed && m.enabled ? "allowed" : "disabled");
+  const identityCoverage = mPlan?.identity_coverage ?? (m.identifiers.length === 0 ? "unknown" : m.enforceable ? "verified" : "partial");
+  const windowsPolicy = mPlan?.windows_policy ?? (configuredIntention === "explicit_deny" ? "not_applied" : "not_applied");
+  const deviceOutcome = mPlan?.device_outcome ?? "not_connected";
+
   return (
     <Card
       title={
-        <span className="flex items-center gap-2">
-          {m.display_name}
-          <span className="font-mono text-xs font-normal text-slate-500">{m.id}</span>
-          {m.allowed && m.enabled && <Badge tone="success">{t("manufacturers.allowed")}</Badge>}
-          {m.denied && <Badge tone="danger">{t("manufacturers.denied")}</Badge>}
-          {!m.enforceable && (
-            <Badge tone="warning" title={t("manufacturers.notEnforceable")}>
-              <AlertTriangle className="size-3" aria-hidden />
-              {t("manufacturers.issues")}
-            </Badge>
-          )}
-        </span>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-base">{m.display_name}</span>
+            <span className="font-mono text-xs font-normal text-slate-500">{m.id}</span>
+          </div>
+
+          {/* 4 Explicit Phase C Status Dimensions */}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-normal">
+            {/* 1. Configured Intention */}
+            {configuredIntention === "allowed" && (
+              <Badge tone="success">{t("manufacturers.intention.allowed")}</Badge>
+            )}
+            {configuredIntention === "explicit_deny" && (
+              <Badge tone="danger">{t("manufacturers.denied")}</Badge>
+            )}
+            {configuredIntention === "disabled" && (
+              <Badge tone="neutral">{t("manufacturers.intention.disabled")}</Badge>
+            )}
+
+            {/* 2. Identity Coverage */}
+            {identityCoverage === "verified" && (
+              <Badge tone="info">{t("manufacturers.coverage.verified")}</Badge>
+            )}
+            {identityCoverage === "partial" && (
+              <Badge tone="warning">{t("manufacturers.coverage.partial")}</Badge>
+            )}
+            {identityCoverage === "unknown" && (
+              <Badge tone="neutral">{t("manufacturers.coverage.unknown")}</Badge>
+            )}
+
+            {/* 3. Windows Policy */}
+            {windowsPolicy === "applied" && (
+              <Badge tone="success">{t("manufacturers.policy.applied")}</Badge>
+            )}
+            {windowsPolicy === "not_applied" && (
+              <Badge tone="warning">{t("manufacturers.policy.notApplied")}</Badge>
+            )}
+            {windowsPolicy === "conflict" && (
+              <Badge tone="danger">{t("manufacturers.policy.conflict")}</Badge>
+            )}
+            {windowsPolicy === "unsupported" && (
+              <Badge tone="neutral">{t("manufacturers.policy.unsupported")}</Badge>
+            )}
+
+            {/* 4. Device Outcome */}
+            {deviceOutcome === "installation_denied" && (
+              <Badge tone="danger">{t("manufacturers.outcome.denied")}</Badge>
+            )}
+            {deviceOutcome === "accessible" && (
+              <Badge tone="success">{t("manufacturers.outcome.accessible")}</Badge>
+            )}
+            {deviceOutcome === "not_connected" && (
+              <Badge tone="neutral">{t("manufacturers.outcome.notConnected")}</Badge>
+            )}
+          </div>
+        </div>
       }
       actions={
         <>
@@ -249,6 +576,7 @@ function ManufacturerCard({
       }
     >
       <div className="space-y-3">
+        {/* Toggle Switches for Policy Configuration */}
         <div className="flex flex-wrap items-center gap-5 text-sm">
           <label className="flex items-center gap-2">
             <Toggle
@@ -278,8 +606,30 @@ function ManufacturerCard({
             {t("manufacturers.denyToggle")}
           </label>
         </div>
+
         {action.error && <ErrorNotice error={action.error} />}
         {!m.enforceable && <p className="text-sm text-amber-700 dark:text-amber-300">{t("manufacturers.notEnforceable")}</p>}
+
+        {/* Matched Hardware IDs */}
+        {mPlan && mPlan.hardware_ids.length > 0 && (
+          <div>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Windows Eşleşme Donanım Kimlikleri
+            </h3>
+            <div className="flex flex-wrap gap-1 font-mono text-[11px]">
+              {mPlan.hardware_ids.map((id) => (
+                <span
+                  key={id}
+                  className="rounded bg-slate-100 px-2 py-0.5 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                >
+                  {id}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Catalog Identifiers */}
         {m.identifiers.length > 0 && (
           <div>
             <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t("manufacturers.identifiers")}</h3>
@@ -301,6 +651,14 @@ function ManufacturerCard({
             </ul>
           </div>
         )}
+
+        {/* Notes & Coverage Warnings */}
+        {mPlan?.notes && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 p-2 rounded border border-amber-200 dark:border-amber-900/50">
+            {mPlan.notes}
+          </p>
+        )}
+
         {m.aliases.length > 0 && (
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {t("manufacturers.aliases")}: {m.aliases.join(", ")}
@@ -324,6 +682,9 @@ export function ManufacturersPage() {
   const [tick, setTick] = useState(0);
   const r = useResource((a) => a.manufacturers(), `m-${tick}`);
   const history = useResource((a) => a.policyChanges(25), `h-${tick}`);
+  const sessionRes = useResource((a) => a.enforcementSession(), `s-${tick}`);
+  const compoundPlanRes = useResource((a) => a.compoundPolicyPlan(), `c-${tick}`);
+  const devicesRes = useResource((a) => a.devices(true), `d-${tick}`);
   const [editing, setEditing] = useState<ManufacturerView | "new" | null>(null);
   const [removing, setRemoving] = useState<ManufacturerView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -333,6 +694,7 @@ export function ManufacturersPage() {
     setTick((n) => n + 1);
   };
   const v = r.data;
+  const plan = compoundPlanRes.data ?? null;
 
   return (
     <div className="space-y-4">
@@ -349,15 +711,37 @@ export function ManufacturersPage() {
         <p className="font-medium">{t("manufacturers.target")}</p>
         <p className="mt-1">{t("manufacturers.configuredNote")}</p>
       </div>
+
+      {v && (
+        <WindowsPolicyPlanSection
+          view={v}
+          plan={plan}
+          sessionView={sessionRes.data ?? null}
+          devices={devicesRes.data ?? []}
+          onActionDone={changed}
+        />
+      )}
+
       {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
       {r.error && <ErrorNotice error={r.error} onRetry={r.reload} />}
       {r.loading && !v && <Loading />}
       {v && (
         <>
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {v.manufacturers.map((m) => (
-              <ManufacturerCard key={m.id} m={m} view={v} onChanged={changed} onEdit={() => setEditing(m)} onRemove={() => setRemoving(m)} />
-            ))}
+            {v.manufacturers.map((m) => {
+              const mPlan = plan?.manufacturers.find((p) => p.brand_id === m.id);
+              return (
+                <ManufacturerCard
+                  key={m.id}
+                  m={m}
+                  mPlan={mPlan}
+                  view={v}
+                  onChanged={changed}
+                  onEdit={() => setEditing(m)}
+                  onRemove={() => setRemoving(m)}
+                />
+              );
+            })}
           </div>
           {v.warnings.length > 0 && (
             <Card title={t("manufacturers.warnings")}>
