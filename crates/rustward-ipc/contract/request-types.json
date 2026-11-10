@@ -160,6 +160,10 @@
     {
       "access": "administrator",
       "type": "rollback_compound_policy"
+    },
+    {
+      "access": "administrator",
+      "type": "recover_device"
     }
   ]
 }

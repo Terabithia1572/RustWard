@@ -137,6 +137,9 @@ fn all_requests() -> Vec<Request> {
             expected_policy_version: 1,
         },
         Request::RollbackCompoundPolicy,
+        Request::RecoverDevice {
+            device_key: "0123456789abcdef0123456789abcdef".into(),
+        },
     ];
     for r in &all {
         // Exhaustiveness guard.
@@ -180,7 +183,8 @@ fn all_requests() -> Vec<Request> {
             | Request::RestoreDevicePolicy { .. }
             | Request::GetCompoundPolicyPlan
             | Request::ApplyCompoundPolicy { .. }
-            | Request::RollbackCompoundPolicy => {}
+            | Request::RollbackCompoundPolicy
+            | Request::RecoverDevice { .. } => {}
         }
     }
     all

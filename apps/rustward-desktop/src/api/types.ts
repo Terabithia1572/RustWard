@@ -81,7 +81,8 @@ export type Request =
   | { type: "restore_device_policy"; session_id?: string | undefined }
   | { type: "get_compound_policy_plan" }
   | { type: "apply_compound_policy"; retroactive?: boolean | undefined; expected_policy_version: number }
-  | { type: "rollback_compound_policy" };
+  | { type: "rollback_compound_policy" }
+  | { type: "recover_device"; device_key: string };
 
 export type RequestType = Request["type"];
 
@@ -127,6 +128,7 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "get_compound_policy_plan",
   "apply_compound_policy",
   "rollback_compound_policy",
+  "recover_device",
 ];
 
 /** Requests that require an elevated administrator (server-enforced). */
@@ -156,6 +158,7 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "restore_device_policy",
   "apply_compound_policy",
   "rollback_compound_policy",
+  "recover_device",
 ]);
 
 export interface ServiceStatusView {
@@ -458,11 +461,16 @@ export type ResponseBody =
   | { type: "simulation"; data: SimulationView }
   | { type: "mutation"; data: MutationView }
   | { type: "export"; data: ExportView }
-  | { type: "done"; data: { message: string; message_tr?: string } }
+  | { type: "done"; data: DoneView }
   | { type: "enforcement_session"; data: EnforcementSessionView }
   | { type: "backups"; data: BackupView[] }
   | { type: "restore_preview"; data: RestorePreviewView }
   | { type: "compound_policy_plan"; data: CompoundPolicyPlanView };
+
+export interface DoneView {
+  message: string;
+  message_tr?: string;
+}
 
 export type ErrorCode =
   | "invalid_request"
@@ -841,7 +849,7 @@ export interface EnforcementSessionView {
 export type ConfiguredIntention = "allowed" | "explicit_deny" | "disabled";
 export type IdentityCoverage = "verified" | "partial" | "unknown";
 export type WindowsPolicyStatus = "applied" | "not_applied" | "conflict" | "unsupported";
-export type DeviceOutcomeStatus = "accessible" | "installation_denied" | "not_connected" | "unknown";
+export type DeviceOutcomeStatus = "accessible" | "installation_denied" | "driver_recovery_needed" | "not_connected" | "unknown";
 
 export interface ManufacturerPolicyView {
   brand_id: string;

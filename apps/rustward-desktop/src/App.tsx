@@ -18,8 +18,8 @@ import { ConnectionBar } from "./components/ConnectionBar";
 import { DenialNotifier } from "./components/Notifier";
 import { I18nProvider, translate, useI18n, type Lang } from "./i18n";
 import type { TKey } from "./i18n/tr";
-import { ApiProvider } from "./lib/hooks";
-import { DeviceWatchProvider, WATCH_POLL_MS } from "./lib/watch";
+import { ApiProvider, useResource } from "./lib/hooks";
+import { DeviceWatchProvider, WATCH_POLL_MS, useDeviceEpoch } from "./lib/watch";
 import { applyTheme, readCachedPrefs, writeCachedPrefs } from "./lib/prefs";
 import { AuditPage } from "./pages/Audit";
 import { BlockedPage } from "./pages/Blocked";
@@ -63,6 +63,10 @@ function Shell({
   onSettings: (s: SettingsView) => void;
 }) {
   const { lang, t } = useI18n();
+  const epoch = useDeviceEpoch();
+  const dashRes = useResource((api) => api.dashboard(), `shell-dash-${epoch}`);
+  const isVerified = dashRes.data?.protection_verified === true;
+
   return (
     <div className="flex h-full min-h-0">
       <nav
@@ -97,20 +101,22 @@ function Shell({
         </ul>
         <div className="flex items-center gap-2 border-t border-slate-200 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
           <Cpu className="size-3.5" aria-hidden />
-          {t("badge.simulated")} · {t("badge.notVerified")}
+          {isVerified ? "GPO Koruma Etkin" : `${t("badge.simulated")} · ${t("badge.notVerified")}`}
         </div>
       </nav>
       <main className="min-w-0 flex-1 overflow-y-auto">
-        {/* Mandatory on every page while enforcement is compiled out. */}
-        <div
-          role="status"
-          data-testid="not-activated-warning"
-          className="sticky top-0 z-10 flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-6 py-2 text-sm font-semibold text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
-        >
-          <ShieldAlert className="size-4 shrink-0" aria-hidden />
-          {translate("tr", "banner.notActivated")}
-          {lang !== "tr" && <span className="font-normal opacity-90">({t("banner.notActivated")})</span>}
-        </div>
+        {/* Shown when real enforcement is not active and verified */}
+        {!isVerified && (
+          <div
+            role="status"
+            data-testid="not-activated-warning"
+            className="sticky top-0 z-10 flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-6 py-2 text-sm font-semibold text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+          >
+            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+            {translate("tr", "banner.notActivated")}
+            {lang !== "tr" && <span className="font-normal opacity-90">({t("banner.notActivated")})</span>}
+          </div>
+        )}
         <ConnectionBar />
         <div className="mx-auto max-w-[1400px] px-6 py-5">
           {page === "dashboard" && <DashboardPage onNavigate={setPage} />}

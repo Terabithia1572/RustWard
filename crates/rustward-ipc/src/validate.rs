@@ -224,6 +224,13 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
             }
         }
         Request::GetCompoundPolicyPlan | Request::RollbackCompoundPolicy => Ok(()),
+        Request::RecoverDevice { device_key } => {
+            if device_key.len() == 32 && device_key.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Ok(())
+            } else {
+                Err(bad("device_key must be 32 hex characters"))
+            }
+        }
         Request::ApplyCompoundPolicy {
             expected_policy_version,
             ..

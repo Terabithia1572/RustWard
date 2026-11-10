@@ -28,7 +28,7 @@ use rustward_enforcement::policy_state::{PolicySnapshot, RegData};
 use rustward_ipc::messages::{
     EnforcementSessionView, LadderStepView, ObservedDeviceView, SessionView, TextTrEn,
 };
-use rustward_ipc::{ClientIdentity, ErrorCode, IpcError};
+use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, ResponseBody};
 use rustward_storage::{
     EventFilter, NewEvent, SecurityEvent, Severity, device_key, mask_instance_id, sha256_hex,
 };
@@ -977,6 +977,34 @@ impl AppService {
                 })?;
 
                 GpoPolicyWriter::trigger_policy_refresh();
+
+                // Targeted recovery: for any connected USB storage device whose manufacturer
+                // is configured as Allowed and which was in Code 28, trigger pnputil /restart-device
+                let devices_to_recover: Vec<String> = {
+                    let g = self.lock()?;
+                    let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                    snap.devices
+                        .into_iter()
+                        .filter(|d| {
+                            d.present == Some(true)
+                                && d.problem_code == Some(28)
+                                && plan.manufacturers.iter().any(|m| {
+                                    m.configured_intention
+                                        == rustward_enforcement::compound_policy::ConfiguredIntention::Allowed
+                                        && (m.hardware_ids.iter().any(|h| d.has_id(h))
+                                            || d.friendly_name.as_deref().is_some_and(|f| {
+                                                f.to_ascii_lowercase().contains(&m.brand_id.to_ascii_lowercase())
+                                            }))
+                                })
+                        })
+                        .map(|d| d.instance_id)
+                        .collect()
+                };
+
+                for inst in &devices_to_recover {
+                    let _ = GpoPolicyWriter::restart_device_instance(inst);
+                }
+
                 GpoPolicyWriter::trigger_device_rescan();
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
@@ -1006,6 +1034,54 @@ impl AppService {
         }
 
         Ok(updated_plan)
+    }
+
+    /// Targeted restart of a specific USB storage device (administrator).
+    pub(crate) fn recover_device(
+        &self,
+        target_key: &str,
+        identity: &ClientIdentity,
+    ) -> Result<ResponseBody, IpcError> {
+        if !identity.is_administrator {
+            return Err(IpcError::new(
+                ErrorCode::Unauthorized,
+                "administrator privileges required to recover device",
+            ));
+        }
+
+        let instance_id = {
+            let g = self.lock()?;
+            let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+            let dev = snap
+                .devices
+                .into_iter()
+                .find(|d| rustward_storage::device_key(&d.instance_id) == target_key)
+                .ok_or_else(|| {
+                    IpcError::new(
+                        ErrorCode::NotFound,
+                        format!("device not found for key {target_key}"),
+                    )
+                })?;
+            dev.instance_id
+        };
+
+        let is_live_windows = self.is_live_windows();
+        if is_live_windows {
+            #[cfg(windows)]
+            {
+                use rustward_windows::gpo_writer::GpoPolicyWriter;
+                GpoPolicyWriter::restart_device_instance(&instance_id)
+                    .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+                GpoPolicyWriter::trigger_device_rescan();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+
+        let _ = self.refresh_inventory();
+        Ok(ResponseBody::Done {
+            message: "Device restarted successfully".into(),
+            message_tr: "Aygıt başarıyla yeniden başlatıldı".into(),
+        })
     }
 
     /// Roll back compound policy restrictions from Windows Group Policy (administrator).
@@ -1564,6 +1640,37 @@ impl AppService {
             ));
         }
         let names: Vec<String> = denied.iter().map(|d| d.name.clone()).collect();
+
+        // Check if compound policy is currently applied and active in Windows
+        let compound_verified = {
+            let snap_devices = snap.devices.clone();
+            let plan = rustward_enforcement::compound_policy::compile_compound_policy(
+                &v.policy,
+                &v.catalog,
+                &snap_devices,
+                Some(&cap.values),
+                true,
+            );
+            plan.is_applied && !plan.compiled.deny_hardware_ids.is_empty()
+        };
+
+        if compound_verified {
+            return Ok(mk(
+                "verified_active",
+                "Windows üretici koruması doğrulandı (GPO kısıtlamaları etkin)",
+                "Windows manufacturer protection verified (GPO restrictions active)",
+                format!(
+                    "Gerçek Windows kanıtı: RustWard tarafından uygulanan birleşik üretici politikası Windows Yerel Grup İlkesi'nde doğrulandı ve Windows şu cihazların kurulumunu engelliyor: {}. İzinli üreticilerin cihazları erişilebilirdir.",
+                    names.join(", ")
+                ),
+                format!(
+                    "Real Windows evidence: the unified manufacturer policy applied by RustWard was verified in Windows Local Group Policy and Windows denies installation of: {}. Allowed manufacturers' devices remain accessible.",
+                    names.join(", ")
+                ),
+                n,
+            ));
+        }
+
         let mut profile_verified = false;
         let verified = Self::active_session(g)?.is_some_and(|a| {
             let key = s(&a.prepared.details, "device_key");

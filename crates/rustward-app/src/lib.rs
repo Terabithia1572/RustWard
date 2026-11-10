@@ -2272,6 +2272,9 @@ impl Handler for AppService {
                 let plan = self.rollback_compound_policy_direct(identity)?;
                 Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
             }
+            Request::RecoverDevice { device_key } => {
+                self.recover_device(device_key, identity)
+            }
             Request::SetWorkstationId {
                 workstation_id,
                 expected_policy_version,

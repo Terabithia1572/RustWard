@@ -26,11 +26,38 @@ fn hash_to_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Returns true if the identifier is a generic storage class or compatible ID
+/// rather than a manufacturer-specific hardware identity.
+///
+/// Generic IDs like `USBSTOR\GenDisk`, `GenDisk`, `USBSTOR\Disk`, `SCSI\Disk`,
+/// `USBSTOR\RAW`, `USB\Class_08*` are common to all mass storage devices
+/// and MUST NOT be used in manufacturer-specific deny rules, as denying them
+/// results in an unintended class-wide lockout.
+pub fn is_generic_storage_id(id: &str) -> bool {
+    let s = id.trim().to_ascii_uppercase();
+    let clean = s.trim_end_matches(['_', ' ']);
+    matches!(
+        clean,
+        "USBSTOR\\GENDISK"
+            | "GENDISK"
+            | "USBSTOR\\DISK"
+            | "DISK"
+            | "SCSI\\DISK"
+            | "USBSTOR\\RAW"
+            | "USBSTOR\\OTHER"
+            | "USBSTOR\\CDROM"
+            | "GENCDROM"
+            | "SCSI\\CDROM"
+    ) || clean.starts_with("USB\\CLASS_08")
+        || clean.starts_with("USBSTOR\\GENERIC")
+        || clean.starts_with("GENERIC_STORAGE")
+}
+
 /// Validates that a hardware identifier is safe and targets only USB storage devices.
 ///
 /// Strictly rejects empty strings, oversized IDs (>260 chars), wildcards, slashes,
 /// directory traversal sequences, internal disks (NVMe, VMware virtual disks, SCSI, IDE, PCI),
-/// and input peripherals (HID keyboards and mice).
+/// input peripherals (HID keyboards and mice), and cross-manufacturer generic storage identifiers.
 pub fn validate_hardware_id(id: &str) -> Result<(), &'static str> {
     let s = id.trim();
     if s.is_empty() {
@@ -45,6 +72,9 @@ pub fn validate_hardware_id(id: &str) -> Result<(), &'static str> {
     let upper = s.to_ascii_uppercase();
     if !upper.starts_with("USBSTOR\\") && !upper.starts_with("USB\\") && !upper.starts_with("SCSI\\DISK") {
         return Err("only USB storage or USB device identifiers are supported");
+    }
+    if is_generic_storage_id(s) {
+        return Err("generic storage and compatible identifiers cannot be targeted as manufacturer identities");
     }
     if upper.contains("NVME")
         || upper.contains("VMW_")
@@ -107,6 +137,8 @@ pub enum DeviceOutcomeStatus {
     Accessible,
     /// Matching device is connected and Windows device installation was actively denied (PnP Code 28).
     InstallationDenied,
+    /// Matching device is allowed by policy, but driver stack needs restart/recovery after prior restriction (PnP Code 28).
+    DriverRecoveryNeeded,
     /// No matching device currently connected to the workstation.
     NotConnected,
     /// Device state cannot be determined with available evidence.
@@ -391,19 +423,20 @@ fn resolve_brand_hardware_ids(
 
         if matches {
             for hwid in &dev.hardware_ids {
-                if validate_hardware_id(hwid).is_ok() {
+                if validate_hardware_id(hwid).is_ok() && !is_generic_storage_id(hwid) {
                     ids.insert(hwid.trim().to_ascii_uppercase());
                 }
             }
         }
     }
 
-    // 3. Adopt matching active GPO restrictions for this brand
+    // 3. Adopt matching active GPO restrictions for this brand (strictly non-generic)
     let brand_slug = brand.id.to_ascii_lowercase();
     for gpo_id in active_gpo_denies {
         let gpo_upper = gpo_id.to_ascii_uppercase();
         if gpo_upper.contains(&brand_slug.to_ascii_uppercase())
             && validate_hardware_id(gpo_id).is_ok()
+            && !is_generic_storage_id(gpo_id)
         {
             ids.insert(gpo_upper);
             has_lab_verified = true;
@@ -476,10 +509,10 @@ pub fn compile_compound_policy(
             ConfiguredIntention::Disabled
         };
 
-        // If explicitly denied, add its verified hardware IDs to planned_denies
+        // If explicitly denied, add its verified hardware IDs to planned_denies (strictly non-generic)
         if configured_intention == ConfiguredIntention::ExplicitDeny {
             for id in &ids {
-                if validate_hardware_id(id).is_ok() {
+                if validate_hardware_id(id).is_ok() && !is_generic_storage_id(id) {
                     planned_denies.insert(id.clone());
                 }
             }
@@ -487,14 +520,14 @@ pub fn compile_compound_policy(
             // Only add to allowlist if identity coverage is verified and non-empty
             if coverage == IdentityCoverage::Verified {
                 for id in &ids {
-                    if validate_hardware_id(id).is_ok() {
+                    if validate_hardware_id(id).is_ok() && !is_generic_storage_id(id) {
                         planned_allows.insert(id.clone());
                     }
                 }
             }
         }
 
-        // Determine Windows Policy Status
+        // Preliminary Windows Policy Status (will be refined after compiler invariant check)
         let windows_policy = match configured_intention {
             ConfiguredIntention::ExplicitDeny => {
                 if ids.is_empty() {
@@ -536,9 +569,20 @@ pub fn compile_compound_policy(
                 });
 
             if matches_device {
-                // If device has problem code 28 (CM_PROB_FAILED_INSTALL) and policy is active
                 if dev.problem_code == Some(28) {
-                    device_outcome = DeviceOutcomeStatus::InstallationDenied;
+                    if configured_intention == ConfiguredIntention::Allowed {
+                        // Check if current Windows active policy still denies this device
+                        let denied_in_windows = ids.iter().any(|id| observed.active_denies.contains(id))
+                            || dev.hardware_ids.iter().any(|h| observed.active_denies.contains(&h.to_ascii_uppercase()));
+                        if denied_in_windows {
+                            device_outcome = DeviceOutcomeStatus::InstallationDenied;
+                        } else {
+                            // Policy allows it, GPO no longer denies it, but devnode stack needs restart
+                            device_outcome = DeviceOutcomeStatus::DriverRecoveryNeeded;
+                        }
+                    } else {
+                        device_outcome = DeviceOutcomeStatus::InstallationDenied;
+                    }
                     break;
                 } else {
                     device_outcome = DeviceOutcomeStatus::Accessible;
@@ -559,22 +603,83 @@ pub fn compile_compound_policy(
     }
 
     // Preserve and adopt managed active GPO restrictions that are still legitimately configured
-    // (e.g. VendorC remains denied when Kingston is added or modified)
+    // (e.g. Kingston remains denied when another brand is added or modified).
+    // Generic IDs (like USBSTOR\GENDISK) or IDs belonging to non-denied brands are NEVER adopted.
     for active_deny in &observed.active_denies {
-        // If it matches a known manufacturer that is NOT configured as Allowed:
-        let is_explicitly_allowed = manufacturer_views.iter().any(|m| {
-            m.configured_intention == ConfiguredIntention::Allowed
-                && m.hardware_ids.contains(active_deny)
-        });
-        if !is_explicitly_allowed && validate_hardware_id(active_deny).is_ok() {
-            let matches_catalog = manufacturer_views.iter().any(|m| {
-                m.hardware_ids.contains(active_deny)
+        if is_generic_storage_id(active_deny) || validate_hardware_id(active_deny).is_err() {
+            // Generic or invalid active denies are purged to removed_denies
+            continue;
+        }
+
+        // Only adopt if this active deny belongs to a manufacturer currently configured as ExplicitDeny
+        let belongs_to_explicit_deny = manufacturer_views.iter().any(|m| {
+            m.configured_intention == ConfiguredIntention::ExplicitDeny
+                && (m.hardware_ids.contains(active_deny)
                     || active_deny
                         .to_ascii_uppercase()
-                        .contains(&m.brand_id.to_ascii_uppercase())
-            });
-            if matches_catalog {
-                planned_denies.insert(active_deny.clone());
+                        .contains(&m.brand_id.to_ascii_uppercase()))
+        });
+
+        if belongs_to_explicit_deny {
+            planned_denies.insert(active_deny.clone());
+        }
+    }
+
+    // Compiler Invariant Check:
+    // "No enabled allowlisted device may match any effective denied device ID at the same or higher policy-precedence level."
+    let mut has_conflict = false;
+    for m in &mut manufacturer_views {
+        if m.configured_intention != ConfiguredIntention::Allowed {
+            continue;
+        }
+
+        let mut conflicting_ids = Vec::new();
+        for id in &m.hardware_ids {
+            if planned_denies.contains(id) {
+                conflicting_ids.push(id.clone());
+            }
+        }
+
+        for dev in inventory {
+            let is_storage = dev.class_is("{4d36e967-e325-11ce-bfc1-08002be10318}")
+                || dev.enumerator_name() == "USBSTOR"
+                || dev.service_is("USBSTOR");
+            if !is_storage {
+                continue;
+            }
+            let matches_dev = m.hardware_ids.iter().any(|id| dev.has_id(id))
+                || dev.friendly_name.as_deref().is_some_and(|f| {
+                    f.to_ascii_lowercase().contains(&m.brand_id.to_ascii_lowercase())
+                });
+            if matches_dev {
+                for dev_id in &dev.hardware_ids {
+                    let dev_upper = dev_id.trim().to_ascii_uppercase();
+                    if planned_denies.contains(&dev_upper) && !conflicting_ids.contains(&dev_upper) {
+                        conflicting_ids.push(dev_upper);
+                    }
+                }
+            }
+        }
+
+        if !conflicting_ids.is_empty() {
+            has_conflict = true;
+            m.windows_policy = WindowsPolicyStatus::Conflict;
+            m.notes = Some(format!(
+                "Çakışma: Bu izinli üretici için tanımlanan kimlikler engelleme listesindeki kimliklerle çakışıyor: {}",
+                conflicting_ids.join(", ")
+            ));
+        } else if m.hardware_ids.is_empty() {
+            m.windows_policy = WindowsPolicyStatus::NotApplied;
+        } else {
+            // Verify against live observed policy:
+            // If any ID matches an active deny in Windows, it cannot be considered Applied!
+            let matches_active_deny = m.hardware_ids.iter().any(|id| observed.active_denies.contains(id));
+            if matches_active_deny {
+                m.windows_policy = WindowsPolicyStatus::Conflict;
+            } else if m.hardware_ids.iter().all(|id| observed.active_allows.contains(id)) && !m.hardware_ids.is_empty() {
+                m.windows_policy = WindowsPolicyStatus::Applied;
+            } else {
+                m.windows_policy = WindowsPolicyStatus::NotApplied;
             }
         }
     }
@@ -630,8 +735,8 @@ pub fn compile_compound_policy(
         .cloned()
         .collect();
 
-    let is_synchronized = added_denies.is_empty() && removed_denies.is_empty();
-    let is_applied = is_synchronized && observed.raw_gpo_present && !deny_list.is_empty();
+    let is_synchronized = added_denies.is_empty() && removed_denies.is_empty() && !has_conflict;
+    let is_applied = is_synchronized && observed.raw_gpo_present && !deny_list.is_empty() && !has_conflict;
 
     let diff = CompoundPolicyDiff {
         added_denies,
@@ -648,9 +753,14 @@ pub fn compile_compound_policy(
         "Geniş kapsamlı DiskDrive sınıfı engelleme uygulanmaz".into(),
     ];
 
-    let can_apply = !deny_list.is_empty() || !observed.active_denies.is_empty();
+    let can_apply = (!deny_list.is_empty() || !observed.active_denies.is_empty()) && !has_conflict;
 
-    let blocker_reason = if deny_list.is_empty() && observed.active_denies.is_empty() {
+    let blocker_reason = if has_conflict {
+        Some(LocalizedText::new(
+            "Politika çakışması tespit edildi: İzinli üretici kimlikleri ile engellenen kimlikler çakışıyor.",
+            "Policy conflict detected: Overlap between allowed manufacturer IDs and denied IDs.",
+        ))
+    } else if deny_list.is_empty() && observed.active_denies.is_empty() {
         Some(LocalizedText::new(
             "Uygulanacak etkin üretici engelleme kuralı bulunmuyor.",
             "No active manufacturer denial rules to apply.",
@@ -676,6 +786,7 @@ pub fn compile_compound_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy_state::ValueRef;
     use rustward_core::catalog::ManufacturerCatalog;
     use rustward_core::policy::{BrandRule, PolicyMode, WorkstationPolicy};
 
@@ -777,5 +888,310 @@ mod tests {
         // Plan safety checklist covers NVMe C: disk and HID devices
         assert!(plan.safety_checklist.iter().any(|s| s.contains("NVMe Disk (C:)")));
         assert!(plan.safety_checklist.iter().any(|s| s.contains("Klavye, Fare")));
+    }
+
+    #[test]
+    fn test_is_generic_storage_id_and_validation() {
+        assert!(is_generic_storage_id("USBSTOR\\GenDisk"));
+        assert!(is_generic_storage_id("GenDisk"));
+        assert!(is_generic_storage_id("USBSTOR\\Disk"));
+        assert!(is_generic_storage_id("SCSI\\Disk"));
+        assert!(is_generic_storage_id("USBSTOR\\RAW"));
+        assert!(is_generic_storage_id("USB\\Class_08&SubClass_06&Prot_50"));
+        assert!(is_generic_storage_id("USB\\Class_08"));
+
+        assert!(!is_generic_storage_id("USBSTOR\\DiskKingstonDataTraveler_3.0____"));
+        assert!(!is_generic_storage_id("USBSTOR\\DiskVendorC_ProductCode_____3.20"));
+        assert!(!is_generic_storage_id("USB\\VID_0951&PID_1666"));
+        assert!(!is_generic_storage_id("USB\\VID_346D&PID_5678"));
+
+        // validate_hardware_id must reject generic storage IDs
+        assert!(validate_hardware_id("USBSTOR\\GenDisk").is_err());
+        assert!(validate_hardware_id("USBSTOR\\Disk").is_err());
+        assert!(validate_hardware_id("USB\\Class_08").is_err());
+    }
+
+    #[test]
+    fn test_vendorc_deny_to_allow_transition_purges_denies_and_preserves_kingston() {
+        let mut raw: ManufacturerCatalog =
+            serde_json::from_str(include_str!("../../../config/manufacturer-catalog.json")).unwrap();
+        raw.reserved_generic_vendors.retain(|v| v != "VendorC");
+        raw.brands.push(BrandEntry {
+            id: "vendorc".into(),
+            display_name: "VendorC".into(),
+            aliases: vec!["VendorC".into()],
+            identifiers: vec![
+                rustward_core::catalog::BrandIdentifier {
+                    kind: rustward_core::catalog::IdentifierKind::InquiryVendor,
+                    value: "VendorC".into(),
+                    verification: rustward_core::catalog::Verification::LabVerified,
+                    source: "Test".into(),
+                },
+                rustward_core::catalog::BrandIdentifier {
+                    kind: rustward_core::catalog::IdentifierKind::UsbVid,
+                    value: "346D".into(),
+                    verification: rustward_core::catalog::Verification::LabVerified,
+                    source: "Test".into(),
+                },
+            ],
+            notes: None,
+        });
+        let cat = ValidatedCatalog::validate(raw).unwrap();
+
+        // 1. Initial policy: both Kingston and VendorC are denied
+        // 2. Transitioned policy: Kingston is denied, VendorC is allowed
+        let p = WorkstationPolicy {
+            schema_version: 1,
+            workstation_id: "PC-01".into(),
+            policy_version: 43,
+            mode: PolicyMode::DryRun,
+            catalog_version: cat.catalog().catalog_version.clone(),
+            allowed_brands: vec![BrandRule {
+                brand_id: "vendorc".into(),
+                enabled: true,
+                note: None,
+            }],
+            denied_brands: vec![BrandRule {
+                brand_id: "kingston".into(),
+                enabled: true,
+                note: None,
+            }],
+        };
+        let pol = ValidatedPolicy::validate(p, &cat).unwrap();
+
+        // Prior snapshot where both Kingston and VendorC were denied,
+        // and a buggy previous run had also added USBSTOR\GenDisk to active denies
+        let restr_key = "SOFTWARE\\POLICIES\\MICROSOFT\\WINDOWS\\DEVICEINSTALL\\RESTRICTIONS";
+        let deny_sub = "SOFTWARE\\POLICIES\\MICROSOFT\\WINDOWS\\DEVICEINSTALL\\RESTRICTIONS\\DENYDEVICEIDS";
+        let mut snap = PolicySnapshot::default();
+        snap.values.insert(
+            ValueRef::new(restr_key, "DenyDeviceIDs"),
+            RegData::Dword(1),
+        );
+        snap.values.insert(
+            ValueRef::new(deny_sub, "1"),
+            RegData::Sz("USBSTOR\\DiskKingstonDataTraveler_3.0____".into()),
+        );
+        snap.values.insert(
+            ValueRef::new(deny_sub, "2"),
+            RegData::Sz("USBSTOR\\DiskVendorC_ProductCode_____3.20".into()),
+        );
+        snap.values.insert(
+            ValueRef::new(deny_sub, "3"),
+            RegData::Sz("USBSTOR\\GenDisk".into()),
+        );
+
+        let plan = compile_compound_policy(&pol, &cat, &[], Some(&snap), true);
+
+        // USBSTOR\GenDisk must NOT be in compiled deny list
+        assert!(
+            !plan.compiled.deny_hardware_ids.contains(&"USBSTOR\\GENDISK".to_string()),
+            "USBSTOR\\GenDisk must never appear in compiled deny IDs"
+        );
+
+        // Kingston must remain denied
+        assert!(
+            plan.compiled
+                .deny_hardware_ids
+                .iter()
+                .any(|id| id.contains("KINGSTON")),
+            "Kingston must remain denied"
+        );
+
+        // VendorC must NOT be in compiled deny list
+        assert!(
+            !plan.compiled
+                .deny_hardware_ids
+                .iter()
+                .any(|id| id.contains("VENDORC")),
+            "VendorC must be purged from deny list"
+        );
+
+        // VendorC must be listed in removed_denies
+        assert!(
+            plan.diff
+                .removed_denies
+                .iter()
+                .any(|id| id.contains("VENDORC")),
+            "VendorC must be in removed_denies"
+        );
+
+        // Generic USBSTOR\GenDisk must also be in removed_denies
+        assert!(
+            plan.diff
+                .removed_denies
+                .iter()
+                .any(|id| id.contains("GENDISK")),
+            "USBSTOR\\GenDisk must be in removed_denies"
+        );
+
+        // VendorC is configured as Allowed, but because the live Windows GPO still has VendorC in active_denies,
+        // it accurately reports Conflict until the new policy is written to Windows!
+        let vendorc = plan
+            .manufacturers
+            .iter()
+            .find(|m| m.brand_id == "vendorc")
+            .unwrap();
+        assert_eq!(vendorc.configured_intention, ConfiguredIntention::Allowed);
+        assert_eq!(vendorc.windows_policy, WindowsPolicyStatus::Conflict);
+
+        // After the plan is applied to GPO (VendorC removed from active_denies, added to active_allows):
+        let mut applied_snap = PolicySnapshot::default();
+        applied_snap.values.insert(
+            ValueRef::new(restr_key, "DenyDeviceIDs"),
+            RegData::Dword(1),
+        );
+        for (i, deny_id) in plan.compiled.deny_hardware_ids.iter().enumerate() {
+            applied_snap.values.insert(
+                ValueRef::new(deny_sub, &(i + 1).to_string()),
+                RegData::Sz(deny_id.clone()),
+            );
+        }
+        let allow_sub = "SOFTWARE\\POLICIES\\MICROSOFT\\WINDOWS\\DEVICEINSTALL\\RESTRICTIONS\\ALLOWDEVICEIDS";
+        applied_snap.values.insert(
+            ValueRef::new(restr_key, "AllowDeviceIDs"),
+            RegData::Dword(1),
+        );
+        for (i, allow_id) in plan.compiled.allow_hardware_ids.iter().enumerate() {
+            applied_snap.values.insert(
+                ValueRef::new(allow_sub, &(i + 1).to_string()),
+                RegData::Sz(allow_id.clone()),
+            );
+        }
+
+        let applied_plan = compile_compound_policy(&pol, &cat, &[], Some(&applied_snap), true);
+        let vendorc_applied = applied_plan
+            .manufacturers
+            .iter()
+            .find(|m| m.brand_id == "vendorc")
+            .unwrap();
+        assert_eq!(vendorc_applied.windows_policy, WindowsPolicyStatus::Applied);
+        assert!(applied_plan.diff.is_synchronized);
+        assert!(applied_plan.is_applied);
+    }
+
+    #[test]
+    fn test_compiler_invariant_detects_conflict_between_allow_and_deny() {
+        let cat = sample_catalog();
+
+        // Policy where Sandisk is allowed, but an overlapping ID is injected into deny
+        let p = WorkstationPolicy {
+            schema_version: 1,
+            workstation_id: "PC-01".into(),
+            policy_version: 44,
+            mode: PolicyMode::DryRun,
+            catalog_version: cat.catalog().catalog_version.clone(),
+            allowed_brands: vec![BrandRule {
+                brand_id: "sandisk".into(),
+                enabled: true,
+                note: None,
+            }],
+            denied_brands: vec![BrandRule {
+                brand_id: "kingston".into(),
+                enabled: true,
+                note: None,
+            }],
+        };
+        let pol = ValidatedPolicy::validate(p, &cat).unwrap();
+
+        // Snapshot has an active deny that matches Sandisk hardware ID
+        let restr_key = "SOFTWARE\\POLICIES\\MICROSOFT\\WINDOWS\\DEVICEINSTALL\\RESTRICTIONS";
+        let deny_sub = "SOFTWARE\\POLICIES\\MICROSOFT\\WINDOWS\\DEVICEINSTALL\\RESTRICTIONS\\DENYDEVICEIDS";
+        let mut snap = PolicySnapshot::default();
+        snap.values.insert(
+            ValueRef::new(restr_key, "DenyDeviceIDs"),
+            RegData::Dword(1),
+        );
+        snap.values.insert(
+            ValueRef::new(deny_sub, "1"),
+            RegData::Sz("USBSTOR\\DiskSanDisk_".into()),
+        );
+
+        let plan = compile_compound_policy(&pol, &cat, &[], Some(&snap), true);
+
+        let sandisk = plan
+            .manufacturers
+            .iter()
+            .find(|m| m.brand_id == "sandisk")
+            .unwrap();
+        assert_eq!(sandisk.configured_intention, ConfiguredIntention::Allowed);
+        // Sandisk matches an active deny in Windows GPO -> MUST report Conflict!
+        assert_eq!(sandisk.windows_policy, WindowsPolicyStatus::Conflict);
+        assert!(!plan.diff.is_synchronized);
+        assert!(!plan.is_applied);
+    }
+
+    #[test]
+    fn test_device_outcome_driver_recovery_needed_when_allowed_device_has_code_28() {
+        let mut raw: ManufacturerCatalog =
+            serde_json::from_str(include_str!("../../../config/manufacturer-catalog.json")).unwrap();
+        raw.reserved_generic_vendors.retain(|v| v != "VendorC");
+        raw.brands.push(BrandEntry {
+            id: "vendorc".into(),
+            display_name: "VendorC".into(),
+            aliases: vec!["VendorC".into()],
+            identifiers: vec![
+                rustward_core::catalog::BrandIdentifier {
+                    kind: rustward_core::catalog::IdentifierKind::InquiryVendor,
+                    value: "VendorC".into(),
+                    verification: rustward_core::catalog::Verification::LabVerified,
+                    source: "Test".into(),
+                },
+                rustward_core::catalog::BrandIdentifier {
+                    kind: rustward_core::catalog::IdentifierKind::UsbVid,
+                    value: "346D".into(),
+                    verification: rustward_core::catalog::Verification::LabVerified,
+                    source: "Test".into(),
+                },
+            ],
+            notes: None,
+        });
+        let cat = ValidatedCatalog::validate(raw).unwrap();
+        let p = WorkstationPolicy {
+            schema_version: 1,
+            workstation_id: "PC-01".into(),
+            policy_version: 45,
+            mode: PolicyMode::DryRun,
+            catalog_version: cat.catalog().catalog_version.clone(),
+            allowed_brands: vec![BrandRule {
+                brand_id: "vendorc".into(),
+                enabled: true,
+                note: None,
+            }],
+            denied_brands: vec![],
+        };
+        let pol = ValidatedPolicy::validate(p, &cat).unwrap();
+
+        // Inventory has VendorC device with problem_code = 28
+        let dev = DeviceRecord {
+            instance_id: "USBSTOR\\Disk&Ven_VendorC&Prod_ProductCode&Rev_3.20\\0123456789".into(),
+            hardware_ids: vec![
+                "USBSTOR\\DiskVendorC_ProductCode_____3.20".into(),
+                "USB\\VID_346D&PID_5678".into(),
+            ],
+            compatible_ids: vec!["USBSTOR\\Disk".into()],
+            class_guid: Some("{4d36e967-e325-11ce-bfc1-08002be10318}".into()),
+            class_name: Some("DiskDrive".into()),
+            enumerator: Some("USBSTOR".into()),
+            service: Some("disk".into()),
+            inf_manufacturer: Some("VendorC".into()),
+            friendly_name: Some("VendorC ProductCode USB Device".into()),
+            description: Some("Disk drive".into()),
+            bus_reported_description: None,
+            parent_instance_id: None,
+            present: Some(true),
+            problem_code: Some(28),
+        };
+
+        // GPO active denies are empty (VendorC is no longer denied by Windows)
+        let plan = compile_compound_policy(&pol, &cat, &[dev], None, true);
+
+        let vendorc = plan
+            .manufacturers
+            .iter()
+            .find(|m| m.brand_id == "vendorc")
+            .unwrap();
+        assert_eq!(vendorc.configured_intention, ConfiguredIntention::Allowed);
+        assert_eq!(vendorc.device_outcome, DeviceOutcomeStatus::DriverRecoveryNeeded);
     }
 }

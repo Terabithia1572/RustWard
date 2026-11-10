@@ -702,6 +702,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
       case "create_backup":
       case "refresh_inventory":
       case "load_synthetic_inventory":
+      case "recover_device":
         return { type: "done", data: { message: `${r.type} done` } };
       case "get_compound_policy_plan":
       case "apply_compound_policy":

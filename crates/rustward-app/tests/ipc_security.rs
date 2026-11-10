@@ -181,6 +181,9 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             expected_policy_version: version,
         },
         Request::RollbackCompoundPolicy,
+        Request::RecoverDevice {
+            device_key: "0123456789abcdef0123456789abcdef".into(),
+        },
     ];
     for r in &all {
         assert_eq!(r.access_level(), AccessLevel::Administrator, "{}", r.name());
@@ -209,7 +212,8 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::ApplyDeviceBlock { .. }
             | Request::RestoreDevicePolicy { .. }
             | Request::ApplyCompoundPolicy { .. }
-            | Request::RollbackCompoundPolicy => {}
+            | Request::RollbackCompoundPolicy
+            | Request::RecoverDevice { .. } => {}
             Request::GetDashboard
             | Request::ListDevices { .. }
             | Request::ListManufacturers

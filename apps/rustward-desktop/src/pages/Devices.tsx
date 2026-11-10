@@ -21,17 +21,22 @@ function ExplanationPanel({
   observed,
   onBlock,
   onUnblock,
+  onRecover,
   actionBusy,
 }: {
   data: ExplanationView;
   observed?: ObservedDeviceView | undefined;
   onBlock?: (() => void) | undefined;
   onUnblock?: (() => void) | undefined;
+  onRecover?: (() => void) | undefined;
   actionBusy?: boolean | undefined;
 }) {
   const { lang, t } = useI18n();
   const isStorage = STORAGE.has(data.device.category);
   const isDenied = observed?.observed.evidence === "install_denied";
+  const needsRecovery =
+    data.device.simulated_decision === "allow" &&
+    observed?.observed.problem_code === 28;
 
   return (
     <div className="space-y-4">
@@ -44,7 +49,26 @@ function ExplanationPanel({
         )}
       </div>
 
-      {isStorage && (
+      {isStorage && needsRecovery && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/60 space-y-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200">
+            {t("manufacturers.outcome.driverRecoveryNeeded")}
+          </div>
+          <p className="text-xs text-amber-900 dark:text-amber-100">
+            {t("manufacturers.outcome.driverRecoveryDetail")}
+          </p>
+          <Button
+            variant="primary"
+            icon={<RefreshCw className="size-4" aria-hidden />}
+            busy={Boolean(actionBusy)}
+            onClick={onRecover}
+          >
+            {t("devices.action.recover")}
+          </Button>
+        </div>
+      )}
+
+      {isStorage && !needsRecovery && (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/60 space-y-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             {t("devices.col.enforcement")}
@@ -312,6 +336,15 @@ export function DevicesPage() {
               observed={selected ? observed.get(selected) : undefined}
               onBlock={() => setBlockModalOpen(true)}
               onUnblock={() => setUnblockModalOpen(true)}
+              onRecover={async () => {
+                if (!selected) return;
+                const res = await action.run(() => api.recoverDevice(selected));
+                if (res) {
+                  setNotice(t("devices.action.recoverSuccess"));
+                  r.reload();
+                  obs.reload();
+                }
+              }}
               actionBusy={action.busy}
             />
           ) : (

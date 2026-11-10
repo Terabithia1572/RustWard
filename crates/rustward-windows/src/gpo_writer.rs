@@ -474,6 +474,9 @@ impl GpoPolicyWriter {
         if !upper.starts_with("USBSTOR\\") && !upper.starts_with("USB\\") {
             return Err(format!("Device ID '{trimmed}' is not a USB device; non-USB devices are strictly rejected"));
         }
+        if rustward_enforcement::compound_policy::is_generic_storage_id(trimmed) {
+            return Err(format!("Device ID '{trimmed}' is a generic storage class identifier; generic IDs cannot be targeted in GPO"));
+        }
         if upper.contains("NVME") || upper.contains("VMW_") || upper.contains("PCI\\") || upper.contains("SCSI\\") || upper.contains("IDE\\") || upper.contains("ACPI\\") {
             return Err(format!("Device ID '{trimmed}' matches system disk patterns; operation aborted for safety"));
         }
@@ -481,6 +484,87 @@ impl GpoPolicyWriter {
             return Err(format!("Device ID '{trimmed}' matches input device patterns; operation aborted for safety"));
         }
         Ok(())
+    }
+
+    /// Targeted restart of a specific device node via Windows PnP utility (`pnputil /restart-device`).
+    ///
+    /// Used when a previously restricted device (in PnP Code 28) is newly allowed,
+    /// waking up the device node and instructing Windows SetupAPI to load drivers and mount volumes.
+    pub fn restart_device_instance(instance_id: &str) -> Result<(), String> {
+        let trimmed = instance_id.trim();
+        if trimmed.is_empty() {
+            return Err("device instance ID cannot be empty".into());
+        }
+        if trimmed.len() > 260 {
+            return Err("device instance ID exceeds maximum length".into());
+        }
+        // Strict safety boundary: only allow USB or USBSTOR instance IDs
+        let upper = trimmed.to_ascii_uppercase();
+        if !upper.starts_with("USBSTOR\\") && !upper.starts_with("USB\\") {
+            return Err(format!("refusing to restart non-USB device instance: '{trimmed}'"));
+        }
+        if upper.contains("NVME")
+            || upper.contains("VMW_")
+            || upper.contains("PCI\\")
+            || upper.contains("SCSI\\")
+            || upper.contains("IDE\\")
+            || upper.contains("ACPI\\")
+        {
+            return Err(format!("refusing to restart protected system device: '{trimmed}'"));
+        }
+        if upper.contains("HID\\") || upper.contains("KBD") || upper.contains("MOU") {
+            return Err(format!("refusing to restart input device: '{trimmed}'"));
+        }
+        // Reject quotes, shell meta-characters, control characters, or newlines
+        if trimmed.contains('"')
+            || trimmed.contains('\'')
+            || trimmed.contains(';')
+            || trimmed.contains('|')
+            || trimmed.contains('>')
+            || trimmed.contains('<')
+            || trimmed.contains('\n')
+            || trimmed.contains('\r')
+            || trimmed.contains('\0')
+        {
+            return Err("device instance ID contains forbidden characters".into());
+        }
+
+        #[cfg(windows)]
+        {
+            let res = std::process::Command::new("pnputil.exe")
+                .arg("/restart-device")
+                .arg(trimmed)
+                .output();
+
+            let _ = std::process::Command::new("pnputil.exe")
+                .arg("/scan-devices")
+                .arg("/instanceid")
+                .arg(trimmed)
+                .output();
+
+            match res {
+                Ok(output) => {
+                    let out = String::from_utf8_lossy(&output.stdout);
+                    // Pnputil typically returns 0 on success (or 3010 if restart needed)
+                    if !output.status.success() && !out.contains("restarted") && !out.contains("başarıyla") {
+                        // If restart-device reported failure, attempt remove + directed scan fallback
+                        let _ = std::process::Command::new("pnputil.exe")
+                            .arg("/remove-device")
+                            .arg(trimmed)
+                            .output();
+                        let _ = std::process::Command::new("pnputil.exe")
+                            .arg("/scan-devices")
+                            .output();
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(format!("failed to invoke pnputil: {e}")),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            Err("pnputil requires Windows".into())
+        }
     }
 
     #[cfg(windows)]
@@ -761,7 +845,19 @@ mod tests {
         assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\DiskKingstonDataTraveler_3.0____").is_ok());
         assert!(GpoPolicyWriter::validate_hardware_id("USB\\VID_0951&PID_1666").is_ok());
         assert!(GpoPolicyWriter::validate_hardware_id("USB\\VID_346D&PID_5678").is_ok());
-        assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\GenDisk").is_ok());
+        // Generic storage identifiers must be rejected
+        assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\GenDisk").is_err());
+        assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\Disk").is_err());
+        assert!(GpoPolicyWriter::validate_hardware_id("USB\\Class_08").is_err());
+    }
+
+    #[test]
+    fn restart_device_instance_validates_safety_boundaries() {
+        assert!(GpoPolicyWriter::restart_device_instance("").is_err());
+        assert!(GpoPolicyWriter::restart_device_instance("NVME\\DiskVMware_Virtual_NVMe").is_err());
+        assert!(GpoPolicyWriter::restart_device_instance("HID\\VID_046D&PID_C077").is_err());
+        assert!(GpoPolicyWriter::restart_device_instance("USBSTOR\\Disk;calc.exe").is_err());
+        assert!(GpoPolicyWriter::restart_device_instance("USBSTOR\\Disk&Ven_VendorC&Prod_ProductCode&Rev_3.20\\0123456789").is_ok());
     }
 
     #[test]

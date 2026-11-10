@@ -289,6 +289,11 @@ pub enum Request {
     },
     /// Rollback compound policy restrictions in Windows Group Policy (administrator).
     RollbackCompoundPolicy,
+    /// Targeted restart/recovery of an allowed USB device stuck in Code 28 (administrator).
+    RecoverDevice {
+        /// Device key (32 hex).
+        device_key: String,
+    },
 }
 
 const fn default_true() -> bool {
@@ -350,7 +355,8 @@ impl Request {
             | Self::ApplyDeviceBlock { .. }
             | Self::RestoreDevicePolicy { .. }
             | Self::ApplyCompoundPolicy { .. }
-            | Self::RollbackCompoundPolicy => AccessLevel::Administrator,
+            | Self::RollbackCompoundPolicy
+            | Self::RecoverDevice { .. } => AccessLevel::Administrator,
         }
     }
 

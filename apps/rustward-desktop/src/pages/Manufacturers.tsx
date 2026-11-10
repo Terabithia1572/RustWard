@@ -555,6 +555,9 @@ function ManufacturerCard({
             {deviceOutcome === "installation_denied" && (
               <Badge tone="danger">{t("manufacturers.outcome.denied")}</Badge>
             )}
+            {deviceOutcome === "driver_recovery_needed" && (
+              <Badge tone="warning">{t("manufacturers.outcome.driverRecoveryNeeded")}</Badge>
+            )}
             {deviceOutcome === "accessible" && (
               <Badge tone="success">{t("manufacturers.outcome.accessible")}</Badge>
             )}
@@ -649,6 +652,16 @@ function ManufacturerCard({
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* Driver Recovery Needed Banner */}
+        {deviceOutcome === "driver_recovery_needed" && (
+          <div className="flex items-center justify-between gap-3 rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+            <div>
+              <span className="font-semibold">{t("manufacturers.outcome.driverRecoveryNeeded")}: </span>
+              <span>{t("manufacturers.outcome.driverRecoveryDetail")}</span>
+            </div>
           </div>
         )}
 

@@ -4,6 +4,7 @@ import type {
   DashboardView,
   DeviceView,
   DiagnosticsView,
+  DoneView,
   EnforcementObservationView,
   EnforcementSessionView,
   EnforcementReadinessView,
@@ -211,6 +212,10 @@ export class Api {
   /** Restore / rollback compound policy restrictions from Windows Group Policy. */
   async rollbackCompoundPolicy(): Promise<CompoundPolicyPlanView> {
     return expect(await this.call({ type: "rollback_compound_policy" }), "compound_policy_plan");
+  }
+  /** Targeted restart/recovery of a USB storage device stuck in Code 28. */
+  async recoverDevice(deviceKey: string): Promise<DoneView> {
+    return expect(await this.call({ type: "recover_device", device_key: deviceKey }), "done");
   }
   async settings(): Promise<SettingsView> {
     return expect(await this.call({ type: "get_settings" }), "settings");
