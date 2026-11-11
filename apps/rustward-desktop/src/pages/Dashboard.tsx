@@ -49,7 +49,7 @@ export function ProtectionPanel({ p }: { p: WindowsProtectionView | undefined })
             {(state === "verified_active" || state === "denial_observed") && (
               <>
                 <Badge tone={tone}>{t("status.windowsBlockVerified")}</Badge>
-                <Badge tone="warning">{t("status.accessNotVerified")}</Badge>
+                {state !== "verified_active" && <Badge tone="warning">{t("status.accessNotVerified")}</Badge>}
               </>
             )}
             {state === "configured_unverified" && (

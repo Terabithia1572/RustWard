@@ -773,7 +773,7 @@ export function ManufacturersPage() {
     <div className="space-y-4">
       <PageHeader
         title={t("manufacturers.title")}
-        subtitle={v ? `${t("common.policyVersion", { version: v.policy_version })} · ${v.catalog_version} · ${t("manufacturers.mode")}: ${tx("manufacturers.mode", v.mode)}` : undefined}
+        subtitle={v ? `${t("common.policyVersion", { version: v.policy_version })} · ${v.catalog_version} · ${t("manufacturers.mode")}: ${tx("manufacturers.mode", plan?.is_applied ? "enforce" : v.mode)}` : undefined}
         actions={
           <Button variant="primary" icon={<Plus className="size-4" aria-hidden />} disabled={!v} onClick={() => setEditing("new")}>
             {t("manufacturers.add")}

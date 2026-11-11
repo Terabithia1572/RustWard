@@ -61,7 +61,7 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
           seen.current = new Set(denied.map((d) => d.device_key));
           return;
         }
-        const fresh = denied.filter((d) => !seen.current!.has(d.device_key));
+        const fresh = denied.filter((d) => !seen.current!.has(d.device_key) && !seenReal.current?.has(d.device_key));
         for (const d of fresh) seen.current.add(d.device_key);
         if (fresh.length > 0) {
           setNotices((n) => [...fresh.map((d) => ({ key: d.device_key, label: label(d) })), ...n].slice(0, MAX_NOTICES));
@@ -91,7 +91,7 @@ export function DenialNotifier({ enabled, pollMs = NOTIFY_POLL_MS }: { enabled: 
                 label: d.observed.name,
                 real: { code: d.observed.problem_code ?? 0 },
               })),
-              ...n.filter((x) => !fresh.some((d) => x.key === `real-${d.device_key}`)),
+              ...n.filter((x) => !fresh.some((d) => x.key === d.device_key || x.key === `real-${d.device_key}`)),
             ].slice(0, MAX_NOTICES),
           );
         }
