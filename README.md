@@ -42,7 +42,7 @@ storage must follow a manufacturer policy:
 | Manufacturer | Target policy |
 |---|---|
 | SanDisk | Allow |
-| TÜBİTAK / BİLGEM / SIR II | Allow |
+| TÜBİTAK / BİLGEM / II | Allow |
 | Kingston, Seagate | Deny |
 | Any other or unknown USB storage | Deny |
 | Keyboards, mice, printers | Unaffected |
@@ -236,7 +236,7 @@ backend), so no real machine or device data is shown.
 - Read/write denial is not verified by an installation denial. Removable
   Storage Access is class-wide and cannot allow one brand while denying
   another.
-- TÜBİTAK SIR II identifiers are unknown, so its devices are denied.
+- TÜBİTAK II identifiers are unknown, so its devices are denied.
 - No genuine SanDisk device has been tested.
 - Local administrators can change or remove Windows policy.
 
@@ -246,7 +246,7 @@ Full list: [docs/PHASE6-KNOWN-LIMITATIONS.md](docs/PHASE6-KNOWN-LIMITATIONS.md).
 
 1. VM acceptance of the default-deny profile and of Removable Storage Access
    on the current patch level.
-2. Physical identification of TÜBİTAK SIR II, before and after unlock, on at
+2. Physical identification of TÜBİTAK II, before and after unlock, on at
    least two units.
 3. Validation on genuine SanDisk devices across several models.
 4. Code signing of the service, application and MSI.
