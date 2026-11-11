@@ -43,6 +43,9 @@ pub fn is_generic_storage_id(id: &str) -> bool {
             | "USBSTOR\\DISK"
             | "DISK"
             | "SCSI\\DISK"
+            | "SCSI\\DISK_____USB"
+            | "SCSI\\DISKUSB"
+            | "SCSI\\_____USB"
             | "USBSTOR\\RAW"
             | "USBSTOR\\OTHER"
             | "USBSTOR\\CDROM"
@@ -51,6 +54,7 @@ pub fn is_generic_storage_id(id: &str) -> bool {
     ) || clean.starts_with("USB\\CLASS_08")
         || clean.starts_with("USBSTOR\\GENERIC")
         || clean.starts_with("GENERIC_STORAGE")
+        || clean == "SCSI\\DISK_____USB"
 }
 
 /// Validates that a hardware identifier is safe and targets only USB storage devices.
@@ -66,11 +70,15 @@ pub fn validate_hardware_id(id: &str) -> Result<(), &'static str> {
     if s.len() > 260 {
         return Err("hardware ID exceeds maximum length of 260 characters");
     }
-    if s.contains('*') || s.contains('?') || s.contains('/') || s.contains("..") {
+    if s.contains('*') || s.contains('?') || s.contains('/') || s.contains("..") || s.contains('\0') {
         return Err("wildcards, slashes, or directory traversal sequences are not allowed");
     }
     let upper = s.to_ascii_uppercase();
-    if !upper.starts_with("USBSTOR\\") && !upper.starts_with("USB\\") && !upper.starts_with("SCSI\\DISK") {
+    if !upper.starts_with("USBSTOR\\")
+        && !upper.starts_with("USB\\")
+        && !upper.starts_with("SCSI\\DISK")
+        && !upper.starts_with("SCSI\\_____USB")
+    {
         return Err("only USB storage or USB device identifiers are supported");
     }
     if is_generic_storage_id(s) {
@@ -375,6 +383,25 @@ fn resolve_brand_hardware_ids(
                 {
                     ids.insert(vendor_id.to_ascii_uppercase());
                 }
+                // Generate SCSI-namespace disk identifier as well
+                if let Some(scsi_id) =
+                    vendor_level_hardware_id(StorageIdNamespace::Scsi, "Disk", &ident.value)
+                        .ok()
+                        .filter(|v| validate_hardware_id(v).is_ok())
+                {
+                    ids.insert(scsi_id.to_ascii_uppercase());
+                }
+                // For SanDisk, also generate known UASP vendor-padded patterns
+                if brand.id.eq_ignore_ascii_case("sandisk") {
+                    let uasp_id1 = "SCSI\\Disk_____USB_SanDisk_";
+                    if validate_hardware_id(uasp_id1).is_ok() && !is_generic_storage_id(uasp_id1) {
+                        ids.insert(uasp_id1.to_ascii_uppercase());
+                    }
+                    let uasp_id2 = "SCSI\\_____USB_SanDisk_";
+                    if validate_hardware_id(uasp_id2).is_ok() && !is_generic_storage_id(uasp_id2) {
+                        ids.insert(uasp_id2.to_ascii_uppercase());
+                    }
+                }
             }
             IdentifierKind::UsbVid => {
                 has_partial = true;
@@ -386,7 +413,10 @@ fn resolve_brand_hardware_ids(
     for dev in inventory {
         let is_storage = dev.class_is("{4d36e967-e325-11ce-bfc1-08002be10318}")
             || dev.enumerator_name() == "USBSTOR"
-            || dev.service_is("USBSTOR");
+            || dev.service_is("USBSTOR")
+            || dev.service_is("UASPStor")
+            || (dev.enumerator_name() == "SCSI"
+                && dev.parent_instance_id.as_deref().is_some_and(|p| p.to_ascii_uppercase().starts_with("USB")));
         if !is_storage {
             continue;
         }
@@ -405,9 +435,22 @@ fn resolve_brand_hardware_ids(
                 matches = true;
                 has_lab_verified = true;
             }
+
+            // Check product display name against brand
+            if !matches {
+                if let Some(prod) = inquiry.product_display() {
+                    let prod_upper = prod.to_ascii_uppercase();
+                    if prod_upper.contains(&brand.display_name.to_ascii_uppercase())
+                        || prod_upper.contains(&brand.id.to_ascii_uppercase())
+                    {
+                        matches = true;
+                        has_lab_verified = true;
+                    }
+                }
+            }
         }
 
-        // Check USB VID matching
+        // Check USB VID matching (checking device hardware IDs, parent instance ID, or parent device)
         if !matches {
             for ident in &brand.identifiers {
                 if ident.kind == IdentifierKind::UsbVid {
@@ -417,6 +460,10 @@ fn resolve_brand_hardware_ids(
                             .hardware_ids
                             .iter()
                             .any(|h| h.to_ascii_uppercase().contains(&vid_pattern))
+                        || dev
+                            .parent_instance_id
+                            .as_deref()
+                            .is_some_and(|p| p.to_ascii_uppercase().contains(&vid_pattern))
                     {
                         matches = true;
                         break;
@@ -425,21 +472,23 @@ fn resolve_brand_hardware_ids(
             }
         }
 
-        // Fallback for special brands like VendorC / Kingston by name or instance
+        // Fallback for special brands like VendorC / Kingston / SanDisk by name or instance
         if !matches {
             let brand_slug = brand.id.to_ascii_lowercase();
-            if (brand_slug == "vendorc" || brand_slug == "kingston")
-                && (dev.friendly_name.as_deref().is_some_and(|f| {
-                    f.to_ascii_lowercase().contains(&brand_slug)
-                }) || dev
-                    .description
-                    .as_deref()
-                    .is_some_and(|d| d.to_ascii_lowercase().contains(&brand_slug))
-                    || dev
-                        .hardware_ids
-                        .iter()
-                        .any(|h| h.to_ascii_lowercase().contains(&brand_slug)))
-            {
+            let brand_name = brand.display_name.to_ascii_lowercase();
+            if dev.friendly_name.as_deref().is_some_and(|f| {
+                let f_lower = f.to_ascii_lowercase();
+                f_lower.contains(&brand_slug) || f_lower.contains(&brand_name)
+            }) || dev.description.as_deref().is_some_and(|d| {
+                let d_lower = d.to_ascii_lowercase();
+                d_lower.contains(&brand_slug) || d_lower.contains(&brand_name)
+            }) || dev.hardware_ids.iter().any(|h| {
+                let h_lower = h.to_ascii_lowercase();
+                h_lower.contains(&brand_slug) || h_lower.contains(&brand_name)
+            }) || dev.parent_instance_id.as_deref().is_some_and(|p| {
+                let p_lower = p.to_ascii_lowercase();
+                p_lower.contains(&brand_slug) || p_lower.contains(&brand_name)
+            }) {
                 matches = true;
                 has_lab_verified = true;
             }
@@ -447,8 +496,9 @@ fn resolve_brand_hardware_ids(
 
         if matches {
             for hwid in &dev.hardware_ids {
-                if validate_hardware_id(hwid).is_ok() && !is_generic_storage_id(hwid) {
-                    ids.insert(hwid.trim().to_ascii_uppercase());
+                let upper = hwid.trim().to_ascii_uppercase();
+                if validate_hardware_id(&upper).is_ok() && !is_generic_storage_id(&upper) {
+                    ids.insert(upper);
                 }
             }
         }
@@ -1352,5 +1402,155 @@ mod tests {
             .unwrap();
         assert_eq!(vendorc.configured_intention, ConfiguredIntention::Allowed);
         assert_eq!(vendorc.device_outcome, DeviceOutcomeStatus::DriverRecoveryNeeded);
+    }
+
+    #[test]
+    fn test_sandisk_uasp_hardware_ids_and_transitions() {
+        let raw: ManufacturerCatalog =
+            serde_json::from_str(include_str!("../../../config/manufacturer-catalog.json")).unwrap();
+        let cat = ValidatedCatalog::validate(raw).unwrap();
+
+        // 1. Initial policy: Both Kingston and SanDisk are explicitly denied
+        let p1 = WorkstationPolicy {
+            schema_version: 1,
+            workstation_id: "PC-01".into(),
+            policy_version: 50,
+            mode: PolicyMode::DryRun,
+            catalog_version: cat.catalog().catalog_version.clone(),
+            allowed_brands: vec![],
+            denied_brands: vec![
+                BrandRule {
+                    brand_id: "kingston".into(),
+                    enabled: true,
+                    note: None,
+                },
+                BrandRule {
+                    brand_id: "sandisk".into(),
+                    enabled: true,
+                    note: None,
+                },
+            ],
+            denied_devices: vec![],
+            allowed_devices: vec![],
+        };
+        let pol1 = ValidatedPolicy::validate(p1, &cat).unwrap();
+
+        // Simulated SanDisk 3.2Gen1 UASP device as observed in lab
+        let sandisk_dev = DeviceRecord {
+            instance_id: "SCSI\\DISK&VEN__USB&PROD__SANDISK_3.2GEN1\\7&3AAEEFA6&0&000000".into(),
+            hardware_ids: vec![
+                "SCSI\\Disk_____USB_SanDisk_3.2Gen11.00".into(),
+                "SCSI\\Disk_____USB_SanDisk_3.2Gen1".into(),
+                "SCSI\\Disk_____USB".into(),
+                "SCSI\\_____USB_SanDisk_3.2Gen11".into(),
+            ],
+            compatible_ids: vec!["SCSI\\Disk".into(), "SCSI\\RAW".into()],
+            class_guid: Some("{4d36e967-e325-11ce-bfc1-08002be10318}".into()),
+            class_name: Some("DiskDrive".into()),
+            enumerator: Some("SCSI".into()),
+            service: Some("disk".into()),
+            inf_manufacturer: Some("Compatible USB storage device".into()),
+            friendly_name: Some("SanDisk 3.2Gen1 USB Device".into()),
+            description: Some("Disk drive".into()),
+            bus_reported_description: None,
+            parent_instance_id: Some("USB\\VID_0781&PID_55A3\\MSFT3000023513022826094343".into()),
+            present: Some(true),
+            problem_code: Some(28),
+        };
+
+        // Kingston device
+        let kingston_dev = DeviceRecord {
+            instance_id: "USBSTOR\\Disk&Ven_Kingston&Prod_DataTraveler_3.0\\001".into(),
+            hardware_ids: vec![
+                "USBSTOR\\DiskKingstonDataTraveler_3.0____".into(),
+                "USBSTOR\\DiskKingston".into(),
+            ],
+            compatible_ids: vec!["USBSTOR\\Disk".into()],
+            class_guid: Some("{4d36e967-e325-11ce-bfc1-08002be10318}".into()),
+            class_name: Some("DiskDrive".into()),
+            enumerator: Some("USBSTOR".into()),
+            service: Some("disk".into()),
+            inf_manufacturer: Some("Kingston".into()),
+            friendly_name: Some("Kingston DataTraveler 3.0 USB Device".into()),
+            description: Some("Disk drive".into()),
+            bus_reported_description: None,
+            parent_instance_id: Some("USB\\VID_0951&PID_1666\\001".into()),
+            present: Some(true),
+            problem_code: Some(28),
+        };
+
+        let plan1 = compile_compound_policy(
+            &pol1,
+            &cat,
+            &[sandisk_dev.clone(), kingston_dev.clone()],
+            None,
+            true,
+        );
+
+        // SanDisk denies must contain both UASP patterns and specific hardware IDs
+        assert!(plan1.compiled.deny_hardware_ids.contains(&"SCSI\\DISK_____USB_SANDISK_".to_string()));
+        assert!(plan1.compiled.deny_hardware_ids.contains(&"SCSI\\DISK_____USB_SANDISK_3.2GEN1".to_string()));
+        assert!(plan1.compiled.deny_hardware_ids.contains(&"USBSTOR\\DISKSANDISK_".to_string()));
+        // Kingston denies must also be present
+        assert!(plan1.compiled.deny_hardware_ids.contains(&"USBSTOR\\DISKKINGSTON".to_string()));
+
+        // Strictly NO generic storage IDs in deny list
+        assert!(!plan1.compiled.deny_hardware_ids.contains(&"SCSI\\DISK_____USB".to_string()));
+        assert!(!plan1.compiled.deny_hardware_ids.contains(&"SCSI\\DISK".to_string()));
+        assert!(!plan1.compiled.deny_hardware_ids.contains(&"USBSTOR\\GENDISK".to_string()));
+
+        let sandisk_view1 = plan1.manufacturers.iter().find(|m| m.brand_id == "sandisk").unwrap();
+        assert_eq!(sandisk_view1.configured_intention, ConfiguredIntention::ExplicitDeny);
+        assert_eq!(sandisk_view1.device_outcome, DeviceOutcomeStatus::InstallationDenied);
+
+        // 2. Transition policy: SanDisk becomes Allowed, Kingston stays ExplicitDeny
+        let p2 = WorkstationPolicy {
+            schema_version: 1,
+            workstation_id: "PC-01".into(),
+            policy_version: 51,
+            mode: PolicyMode::DryRun,
+            catalog_version: cat.catalog().catalog_version.clone(),
+            allowed_brands: vec![
+                BrandRule {
+                    brand_id: "sandisk".into(),
+                    enabled: true,
+                    note: None,
+                },
+            ],
+            denied_brands: vec![
+                BrandRule {
+                    brand_id: "kingston".into(),
+                    enabled: true,
+                    note: None,
+                },
+            ],
+            denied_devices: vec![],
+            allowed_devices: vec![],
+        };
+        let pol2 = ValidatedPolicy::validate(p2, &cat).unwrap();
+
+        let plan2 = compile_compound_policy(
+            &pol2,
+            &cat,
+            &[sandisk_dev.clone(), kingston_dev.clone()],
+            None,
+            true,
+        );
+
+        // SanDisk denies must be purged completely
+        assert!(!plan2.compiled.deny_hardware_ids.contains(&"SCSI\\DISK_____USB_SANDISK_".to_string()));
+        assert!(!plan2.compiled.deny_hardware_ids.contains(&"SCSI\\DISK_____USB_SANDISK_3.2GEN1".to_string()));
+        assert!(!plan2.compiled.deny_hardware_ids.contains(&"USBSTOR\\DISKSANDISK_".to_string()));
+
+        // Kingston denies must be retained
+        assert!(plan2.compiled.deny_hardware_ids.contains(&"USBSTOR\\DISKKINGSTON".to_string()));
+
+        let sandisk_view2 = plan2.manufacturers.iter().find(|m| m.brand_id == "sandisk").unwrap();
+        assert_eq!(sandisk_view2.configured_intention, ConfiguredIntention::Allowed);
+        assert_eq!(sandisk_view2.device_outcome, DeviceOutcomeStatus::DriverRecoveryNeeded);
+
+        let kingston_view2 = plan2.manufacturers.iter().find(|m| m.brand_id == "kingston").unwrap();
+        assert_eq!(kingston_view2.configured_intention, ConfiguredIntention::ExplicitDeny);
+        assert_eq!(kingston_view2.device_outcome, DeviceOutcomeStatus::InstallationDenied);
     }
 }

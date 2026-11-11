@@ -458,32 +458,8 @@ impl GpoPolicyWriter {
     }
 
     fn validate_hardware_id(hwid: &str) -> Result<(), String> {
-        let trimmed = hwid.trim();
-        if trimmed.is_empty() {
-            return Err("hardware ID cannot be empty".into());
-        }
-        if trimmed.len() > 260 {
-            return Err("hardware ID exceeds maximum allowed length".into());
-        }
-        if trimmed.contains('*') || trimmed.contains('?') || trimmed.contains("..") || trimmed.contains('\0') {
-            return Err("hardware ID contains invalid characters or wildcards".into());
-        }
-        // Strict boundary: Only USB storage devices are allowed.
-        // Rejects NVMe, internal SCSI, SATA, boot disks, PCI, ACPI, HID.
-        let upper = trimmed.to_ascii_uppercase();
-        if !upper.starts_with("USBSTOR\\") && !upper.starts_with("USB\\") {
-            return Err(format!("Device ID '{trimmed}' is not a USB device; non-USB devices are strictly rejected"));
-        }
-        if rustward_enforcement::compound_policy::is_generic_storage_id(trimmed) {
-            return Err(format!("Device ID '{trimmed}' is a generic storage class identifier; generic IDs cannot be targeted in GPO"));
-        }
-        if upper.contains("NVME") || upper.contains("VMW_") || upper.contains("PCI\\") || upper.contains("SCSI\\") || upper.contains("IDE\\") || upper.contains("ACPI\\") {
-            return Err(format!("Device ID '{trimmed}' matches system disk patterns; operation aborted for safety"));
-        }
-        if upper.contains("HID\\") || upper.contains("KBD") || upper.contains("MOU") {
-            return Err(format!("Device ID '{trimmed}' matches input device patterns; operation aborted for safety"));
-        }
-        Ok(())
+        rustward_enforcement::compound_policy::validate_hardware_id(hwid)
+            .map_err(|e| format!("Device ID '{hwid}': {e}"))
     }
 
     /// Targeted restart of a specific device node via Windows PnP utility (`pnputil /restart-device`).
@@ -845,10 +821,13 @@ mod tests {
         assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\DiskKingstonDataTraveler_3.0____").is_ok());
         assert!(GpoPolicyWriter::validate_hardware_id("USB\\VID_0951&PID_1666").is_ok());
         assert!(GpoPolicyWriter::validate_hardware_id("USB\\VID_346D&PID_5678").is_ok());
+        assert!(GpoPolicyWriter::validate_hardware_id("SCSI\\Disk_____USB_SanDisk_3.2Gen1").is_ok());
         // Generic storage identifiers must be rejected
         assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\GenDisk").is_err());
         assert!(GpoPolicyWriter::validate_hardware_id("USBSTOR\\Disk").is_err());
         assert!(GpoPolicyWriter::validate_hardware_id("USB\\Class_08").is_err());
+        assert!(GpoPolicyWriter::validate_hardware_id("SCSI\\Disk_____USB").is_err());
+        assert!(GpoPolicyWriter::validate_hardware_id("SCSI\\Disk").is_err());
     }
 
     #[test]

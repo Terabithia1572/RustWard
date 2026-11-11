@@ -33,8 +33,8 @@ describe("DenialNotifier", () => {
     await waitFor(() => expect(dashboardCalls(state.calls)).toBeGreaterThanOrEqual(1));
     state.devices.push(device({ device_key: "k-new", vendor: "Kingston", product: "DataTraveler" }));
     const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent("Politikaya uymayan USB depolama aygıtı algılandı: Kingston DataTraveler.");
-    expect(notice).toHaveTextContent("Bu yalnızca bir simülasyondur");
+    expect(notice).toHaveTextContent("UYARI: Yasaklı USB depolama aygıtı erişilebilir: Kingston DataTraveler.");
+    expect(notice).toHaveTextContent("Windows engellemesi doğrulanamadı");
     expect(notice.textContent).not.toMatch(/engellendi|engellenmiştir/i);
     const before = dashboardCalls(state.calls);
     await waitFor(() => expect(dashboardCalls(state.calls)).toBeGreaterThan(before + 2));

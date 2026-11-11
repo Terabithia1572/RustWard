@@ -1254,7 +1254,19 @@ impl AppService {
                                             }))
                                 })
                         })
-                        .map(|d| d.instance_id)
+                        .filter_map(|d| {
+                            if d.instance_id.to_ascii_uppercase().starts_with("USB") {
+                                Some(d.instance_id)
+                            } else if let Some(parent) = d.parent_instance_id {
+                                if parent.to_ascii_uppercase().starts_with("USB") {
+                                    Some(parent)
+                                } else {
+                                    Some(d.instance_id)
+                                }
+                            } else {
+                                Some(d.instance_id)
+                            }
+                        })
                         .collect()
                 };
 
@@ -1319,7 +1331,17 @@ impl AppService {
                         format!("device not found for key {target_key}"),
                     )
                 })?;
-            dev.instance_id
+            if dev.instance_id.to_ascii_uppercase().starts_with("USB") {
+                dev.instance_id
+            } else if let Some(parent) = dev.parent_instance_id {
+                if parent.to_ascii_uppercase().starts_with("USB") {
+                    parent
+                } else {
+                    dev.instance_id
+                }
+            } else {
+                dev.instance_id
+            }
         };
 
         let is_live_windows = self.is_live_windows();

@@ -165,13 +165,48 @@ fn identity_verdict(
             "SCSI-namespace ID: shared with internal/virtual disks; UASP enumeration not yet observed on hardware".into(),
         ));
     }
-    if catalog.is_generic_vendor(&inq.vendor_field) {
-        return (
-            Verdict::Deny,
-            DecisionReason::GenericVendorIdentity { vendor },
-        );
+    let mut resolved_brand = catalog.brand_for_inquiry_field(&inq.vendor_field);
+    if resolved_brand.is_none() && catalog.is_generic_vendor(&inq.vendor_field) {
+        // For UASP/SCSI devices where the controller reports a generic vendor (e.g. "     USB"),
+        // check whether the product field and USB ancestor VID identify a catalog brand with enforceable identifiers
+        if let Some(usb) = &classification.usb_ancestor {
+            let vid_brands = catalog.brands_for_vid(usb.ids.vid);
+            for vb in vid_brands {
+                if let Some(entry) = catalog.brand(vb) {
+                    let prod_matches = inq.product_display().as_deref().is_some_and(|p| {
+                        let p_upper = p.to_ascii_uppercase();
+                        p_upper.contains(&entry.id.to_ascii_uppercase())
+                            || p_upper.contains(&entry.display_name.to_ascii_uppercase())
+                    }) || inq.product_field.as_deref().is_some_and(|p| {
+                        let p_upper = p.to_ascii_uppercase();
+                        p_upper.contains(&entry.id.to_ascii_uppercase())
+                            || p_upper.contains(&entry.display_name.to_ascii_uppercase())
+                    });
+                    if prod_matches {
+                        resolved_brand = Some(vb.as_str());
+                        evidence.push(ev(
+                            EvidenceKind::Corroborating,
+                            "uasp_brand_resolved",
+                            format!(
+                                "generic INQUIRY vendor {:?} resolved to brand {:?} via USB VID {:04X} and product identifier",
+                                inq.vendor_display(),
+                                entry.display_name,
+                                usb.ids.vid
+                            ),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+        if resolved_brand.is_none() {
+            return (
+                Verdict::Deny,
+                DecisionReason::GenericVendorIdentity { vendor },
+            );
+        }
     }
-    match catalog.brand_for_inquiry_field(&inq.vendor_field) {
+    match resolved_brand {
         None => (
             Verdict::Deny,
             DecisionReason::UnknownManufacturer { vendor },

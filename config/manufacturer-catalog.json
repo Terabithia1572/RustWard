@@ -16,13 +16,13 @@
           "kind": "inquiry_vendor",
           "value": "SanDisk",
           "verification": "unverified",
-          "source": "Engineering assumption; verified on physical SanDisk media"
+          "source": "Engineering assumption; physical SanDisk 3.2Gen1 media uses UASP SCSI transport"
         },
         {
           "kind": "usb_vid",
           "value": "0781",
-          "verification": "public_registry",
-          "source": "usb.ids public registry (0781 SanDisk Corp.)"
+          "verification": "lab_verified",
+          "source": "Observed USB VID 0781 and PID 55A3 on physical SanDisk 3.2Gen1 test device in RustWard lab"
         },
         {
           "kind": "usb_vid",
@@ -31,7 +31,7 @@
           "source": "usb.ids public registry (0871 SanDisk, Inc.)"
         }
       ],
-      "notes": "Corroborating VIDs never authorize; only INQUIRY vendor maps to OS hardware ID."
+      "notes": "Lab verified on physical SanDisk 3.2Gen1 (UASP SCSI transport VID 0781 PID 55A3) and classic USBSTOR media."
     },
     {
       "id": "kingston",
