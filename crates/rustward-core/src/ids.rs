@@ -65,7 +65,7 @@ pub fn is_block_storage_type(device_type: &str) -> bool {
 /// Errors from identifier encoding.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum IdError {
-    /// INQUIRY strings are ASCII; non-ASCII text (e.g. "TÜBİTAK") can never
+    /// INQUIRY strings are ASCII; non-ASCII text (e.g. "ÜRETİCİ") can never
     /// appear in an INQUIRY-derived hardware ID.
     #[error(
         "value {0:?} contains non-printable or non-ASCII characters; SCSI INQUIRY fields are ASCII"
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn rejects_values_that_cannot_appear_in_inquiry_data() {
         assert!(matches!(
-            encode_inquiry_field("TÜBİTAK", 8),
+            encode_inquiry_field("ÜRETİCİ", 8),
             Err(IdError::NotPrintableAscii(_))
         ));
         assert!(matches!(

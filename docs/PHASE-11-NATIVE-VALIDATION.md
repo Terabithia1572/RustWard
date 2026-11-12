@@ -12,7 +12,7 @@ Date: 2026-11-06. Start HEAD: `81a4e13`.
 | Item | Fact |
 |---|---|
 | Build/verification workspace | Ubuntu 24.04 cloud container, rustc 1.97.0 (`2d8144b`), Node 22 |
-| Linked computer | The developer's Windows PC (`C:\Users\Yunus\Desktop\RustWard`). It is reachable only through an **Ubuntu 22.04 VM shell** with the repository folder mounted. There is no `cmd.exe`, PowerShell, MSVC or Windows binary execution. It was used only to sync the git repository. |
+| Linked computer | The developer's Windows PC (`<baseline-workspace>`). It is reachable only through an **Ubuntu 22.04 VM shell** with the repository folder mounted. There is no `cmd.exe`, PowerShell, MSVC or Windows binary execution. It was used only to sync the git repository. |
 | Developer PC as a test machine | Not used, and not allowed for Stages B–E: it is neither the disposable VM nor a production workstation. RustWard was never installed or run on it. |
 | Disposable Windows 10 Pro VM | **Not provided** |
 | Physical test hardware | **Not provided** |
@@ -69,7 +69,7 @@ Both would have made **Stage A2 fail** on native Windows (`clippy -D warnings`).
 | Already-installed storage | Install-time rules are not retroactive. Assessment and manual remediation only (Phase 10). | Unchanged: L-05 |
 | Brand recognition | Vendor-level hardware IDs and INQUIRY vendor strings. Generic bridge chips, OEM rebrands, and models that report a different vendor are not recognised as the brand. | **Not reliable for all commercial models.** Each model must be inspected (Stage B). |
 | Authenticity | USB VID and SCSI INQUIRY vendor strings are **self-reported by the device and not cryptographically authenticated**. A device can claim any vendor (the fixture's spoof case shows SanDisk). | By design of the Windows mechanism; L-01/L-02 |
-| TÜBİTAK SIR II | **Unresolved.** The catalog has no identifiers, and none may be added without lab evidence. Both locked and unlocked states must be captured in Stage B: an encrypted drive may present a different device or class (e.g. a CD-ROM-class unlock volume, then a disk LUN) before and after unlocking. The unlock prompt must keep working (B6). | Blocks a TÜBİTAK allow rule; never guess |
+| Hardware-Encrypted USB | **Unresolved.** The catalog has no identifiers, and none may be added without lab evidence. Both locked and unlocked states must be captured in Stage B: an encrypted drive may present a different device or class (e.g. a CD-ROM-class unlock volume, then a disk LUN) before and after unlocking. The unlock prompt must keep working (B6). | Blocks a Encrypted Storage Profile allow rule; never guess |
 
 ## 6. Packaging review (static; MSI not built)
 
@@ -109,7 +109,7 @@ Automated guarantees (`acceptance_scripts.rs`, 5 tests):
 1. No native execution of anything (Stages A–E).
 2. No activation path exists in the code (`ACTIVATION_ENABLED = false`, no registry write path). This is by design until Stage F is authorized.
 3. Unresolved: the list-entry layout, the `*Retroactive` names, the UBR source (Phase 10).
-4. TÜBİTAK SIR II descriptors are unknown (locked and unlocked).
+4. Hardware-Encrypted USB descriptors are unknown (locked and unlocked).
 5. R-11-1: the boot-disk re-enumeration behaviour is unverified.
 6. F-16 (LocalSystem vs. the virtual service account) is undecided until C15.
 7. No read/write-denial evidence exists, so `VerifiedProtected` is impossible.
@@ -119,7 +119,7 @@ Automated guarantees (`acceptance_scripts.rs`, 5 tests):
 **Not ready.** Stage F may be requested only after:
 - Stages A–E PASS on the VM and on physical hardware identical to the five workstations;
 - E5/E6 are resolved;
-- SIR II is inspected;
+- Hardware-Encrypted USB is inspected;
 - R-11-1 is tested and the suspend procedure is written;
 - F-16 is decided;
 - written authorization names the machine, the date and the plan fingerprint.

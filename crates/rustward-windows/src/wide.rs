@@ -161,8 +161,8 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            decode_property(DEVPROP_TYPE_STRING, &wide_bytes("TÜBİTAK\0")).into_string(),
-            Some("TÜBİTAK".into())
+            decode_property(DEVPROP_TYPE_STRING, &wide_bytes("ÜRETİCİ\0")).into_string(),
+            Some("ÜRETİCİ".into())
         );
     }
 

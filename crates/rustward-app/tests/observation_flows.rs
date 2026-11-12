@@ -482,7 +482,7 @@ fn phase6_assessment_summary_and_blockers_reflect_real_state() {
     use rustward_enforcement::assessment::{AssessmentCategory as A, IdentityConfidence};
     let r = rig();
     r.refresh();
-    // Shipped Phase 6 example policy: allow SanDisk + TÜBİTAK, deny Kingston + Seagate.
+    // Shipped Phase 6 example policy: allow SanDisk + encrypted USB, deny Kingston + Seagate.
     let o = r.observe();
     let get = |o: &EnforcementObservationView, vid: &str| {
         o.devices

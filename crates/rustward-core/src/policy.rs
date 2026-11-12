@@ -401,7 +401,7 @@ mod tests {
                 },
                 BrandEntry {
                     id: "tubitak".into(),
-                    display_name: "TÜBİTAK".into(),
+                    display_name: "Encrypted USB Storage".into(),
                     aliases: vec![],
                     identifiers: vec![],
                     notes: None,

@@ -402,8 +402,7 @@ mod tests {
 
     #[test]
     fn sandisk_label_with_generic_vendor_is_unverified_and_denied() {
-        // The physical "SanDisk/ASELSAN-labelled" stick seen in the VM
-        // reports VendorC 346D:5678.
+        // The physical VendorC stick seen in the test VM reports 346D:5678.
         let c = catalog();
         let p = policy(&c, &["sandisk"], &[]);
         let a = assess_disk(

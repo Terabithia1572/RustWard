@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source": {
     "kind": "synthetic",
-    "description": "SYNTHETIC lab model - not captured from real hardware. Identifier strings follow Microsoft's documented USBSTOR format; SCSI/UASP and all product values are illustrative. Contains no TUBITAK SIR II data (unknown until physical inspection)."
+    "description": "SYNTHETIC lab model - not captured from real hardware. Identifier strings follow Microsoft's documented USBSTOR format; SCSI/UASP and all product values are illustrative. Contains no unverified hardware-encrypted device descriptors."
   },
   "devices": [
     {

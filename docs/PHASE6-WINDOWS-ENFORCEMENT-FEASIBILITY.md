@@ -3,7 +3,7 @@
 **Question:** can Windows 10 Pro, offline and without Active Directory, enforce
 the target policy?
 
-> **ALLOW** SanDisk and TÜBİTAK. **DENY** Kingston, Seagate, unknown and every
+> **ALLOW** SanDisk and Encrypted Storage Profile. **DENY** Kingston, Seagate, unknown and every
 > other USB storage manufacturer. Keyboards, mice and printers unaffected.
 
 **Answer: only partially, and never as an authenticated manufacturer check.**
@@ -52,7 +52,7 @@ without a VM test.**
 | Deny Seagate | As Kingston | No Seagate hardware available. **Not verified** |
 | Deny unknown/other manufacturers | C+D+E profile | **Not verified** (VM experiment pending authorization) |
 | Allow SanDisk | D with `USBSTOR\DiskSanDisk_` / `SCSI\DiskSanDisk_` | **Not verified**: no genuine SanDisk device. The SanDisk-labelled stick reports `VendorC`/`346D:5678`, so the profile would deny it, which is correct for an unverified identity. |
-| Allow TÜBİTAK / SIR II | D | **Impossible today**: no TÜBİTAK identifier is known. SIR II inspection is deferred, and RustWard does not invent identifiers. |
+| Allow Hardware-Encrypted USB (Unverified Profile) | D | **Impossible today**: no Encrypted Storage Profile identifier is known. Hardware-Encrypted USB inspection is deferred, and RustWard does not invent identifiers. |
 | Keyboards, mice, printers unaffected | A/C/D only target disk IDs and the DiskDrive class | Verified for A (VM). Profile: VM check pending. |
 | Read/write denial | F (class-wide) | **Not verified.** An installation denial (Code 1/28) is not treated as read/write proof. |
 | Local administrator cannot bypass | — | **Not achievable.** A local administrator can always change or remove these policies. RustWard detects and audits the change (policy re-read, mismatch, rollback verification) but cannot prevent it. |

@@ -119,7 +119,7 @@ pub enum IdentityCoverage {
     Verified,
     /// Partial ID (e.g. only USB VID or generic descriptor known).
     Partial,
-    /// Unknown / incomplete (e.g. TÜBİTAK SIR II pending physical lab inspection).
+    /// Unknown / incomplete (e.g. unverified encrypted storage profile).
     Unknown,
 }
 
@@ -177,7 +177,7 @@ impl LocalizedText {
 pub struct ManufacturerPolicyView {
     /// Catalog brand identifier slug.
     pub brand_id: String,
-    /// Display name (e.g. "Kingston", "SanDisk", "TÜBİTAK BİLGEM", "VendorC").
+    /// Display name (e.g. "Kingston", "SanDisk", "Encrypted USB Storage (Unverified)", "VendorC").
     pub display_name: String,
     /// Configured intention in RustWard policy.
     pub configured_intention: ConfiguredIntention,
@@ -1076,7 +1076,7 @@ mod tests {
                 .any(|id| id.contains("SEAGATE"))
         );
 
-        // TÜBİTAK has unknown identity coverage and does not emit unsafe rules
+        // The unverified encrypted-USB profile has unknown identity coverage and does not emit unsafe rules
         let tubitak = plan
             .manufacturers
             .iter()
@@ -1453,7 +1453,7 @@ mod tests {
             friendly_name: Some("SanDisk 3.2Gen1 USB Device".into()),
             description: Some("Disk drive".into()),
             bus_reported_description: None,
-            parent_instance_id: Some("USB\\VID_0781&PID_55A3\\MSFT3000023513022826094343".into()),
+            parent_instance_id: Some("USB\\VID_0781&PID_55A3\\TESTSERIAL00000001".into()),
             present: Some(true),
             problem_code: Some(28),
         };

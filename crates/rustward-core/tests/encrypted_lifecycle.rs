@@ -1,7 +1,7 @@
-//! Architecture test for keypad-encrypted drives (e.g. TÜBİTAK SIR II).
+//! Architecture test for keypad-encrypted drives.
 //!
 //! The identifiers used here are SYNTHETIC placeholders (`EXAMPLEX`,
-//! VID FFFF) chosen so they cannot be mistaken for real TÜBİTAK hardware
+//! VID FFFF) chosen so they cannot be mistaken for real hardware
 //! descriptors, which remain unknown until physical inspection.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -154,7 +154,7 @@ fn unlocked_storage_is_evaluated_on_arrival_and_linked_to_the_locked_device() {
 
 #[test]
 fn brand_without_known_identifier_is_denied_after_unlock() {
-    // Mirrors the shipped TÜBİTAK catalog entry: allowed, but no identifier yet.
+    // Mirrors an unverified encrypted-USB catalog entry: allowed, but no identifier yet.
     let (c, p) = rules(None, true);
     let decisions = evaluate_snapshot(&unlocked_state(), &p, &c);
     let disk = decisions.iter().find(|x| x.instance_id == DISK).unwrap();

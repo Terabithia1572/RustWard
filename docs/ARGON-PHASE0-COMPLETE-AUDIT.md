@@ -1,7 +1,7 @@
 # ARGON Phase 0 — Complete Repository Audit & Baseline Report
 
 **Date:** 2026-11-08  
-**Workspace:** `C:\Users\Yunus\Desktop\RustWard2` (isolated copy; `C:\Users\Yunus\Desktop\RustWard` untouched and treated strictly as read-only)  
+**Workspace:** `<workspace>` (isolated copy; `<baseline-workspace>` untouched and treated strictly as read-only)  
 **Active Branch:** `experiment/argon4-vm-enforcement` (branched cleanly from `9ba61b58f4809715e5a053a544f31e911fd51649`)
 
 ---
@@ -38,7 +38,7 @@
 | WiX Toolset v3 | `3.14` (`%LOCALAPPDATA%\tauri\WixTools314\candle.exe`, `light.exe`) |
 | Node.js / npm | `v24.17.0` / `11.13.0` |
 | WebView2 Runtime | `147.0.3912.60` / EdgeUpdate client present |
-| VMware Workstation | `17.6.4` (`D:\VmWare\vmrun.exe`) |
+| VMware Workstation | `17.6.4` (`vmrun.exe`) |
 
 ### 1.4 Pre-Existing Native Binaries & MSI Packages in `dist\` (from `c9b6c0e`)
 
@@ -65,8 +65,8 @@
 ### 1.6 VMware Guest & Snapshot Baseline (Read-Only Inspection)
 
 - **Running VMs:** `0` (`vmrun list` -> `Total running VMs: 0`).
-- **Authorized Test VM:** `D:\Windows10VM\Windows 10 x64.vmx` — Guest OS reported in `.vmx`: `Windows 10 Pro, 64-bit (Build 19045.6466)`, UEFI (`firmware = "efi"`), 2 vCPUs, 2048 MB RAM, NVMe boot disk `nvme0:0` (`Windows 10 x64-000008.vmdk`, non-independent, covered by snapshots).
-- **Isolation Warning Discovered in `.vmx`:** `sata0:1.fileName` currently points to `C:\Users\Yunus\Desktop\RustWard\dist\vm\rustward-test-7.iso` (the original `RustWard` directory!). We did not touch `.vmx`; any future VM test must use an isolated ISO under `RustWard2\dist\vm\` only after explicit user approval.
+- **Authorized Test VM:** `<test-vm>.vmx` — Guest OS reported in `.vmx`: `Windows 10 Pro, 64-bit (Build 19045.6466)`, UEFI (`firmware = "efi"`), 2 vCPUs, 2048 MB RAM, NVMe boot disk `nvme0:0` (`Windows 10 x64-000008.vmdk`, non-independent, covered by snapshots).
+- **Isolation Warning Discovered in `.vmx`:** `sata0:1.fileName` currently points to `<baseline-workspace>\dist\vm\rustward-test-7.iso` (the original `RustWard` directory!). We did not touch `.vmx`; any future VM test must use an isolated ISO under `RustWard2\dist\vm\` only after explicit user approval.
 - **8 Linear Snapshots Intact:** `Snapshot 1` → `before-rustward-install` → `rustward-working-before-kingston-test` → `rustward-observer-before-guided-test` → `rustward-before-phase5-8dfecd1` → `rustward-before-phase6-c9b6c0e` → `rustward-phase6-before-profile-test` → `rustward-phase6-before-kingston-retest` (current parent snapshot `uid = 8`).
 
 ---
@@ -159,7 +159,7 @@ flowchart TB
 3. **What has been verified on Windows (historical VM evidence):** Native x64 build & Turkish MSI upgrade, SCM service auto-start & survival, named-pipe IPC & UAC admin check, SetupAPI enumeration of Kingston (`0951:1666`), VendorC (`346D:5678`) and VMware NVMe (`PCI\VEN_15AD&DEV_07F0`), manual `gpedit.msc` Kingston model-ID retroactive block (`Code 1` / `Code 28`, drive letters `E:`/`F:` removed while `G:` and `C:` remained healthy), RustWard read-back verification, and manual rollback restoring `E:`/`F:`.
 4. **What is only supported by unit tests:** Multi-LUN / UASP SCSI disk classification, composite USB edge cases, `mock_policy_backend` rollback algebra, audit truncation/checkpoint detection, backup corruption rejection, and default-deny profile verification logic.
 5. **What is incomplete:**
-   - Genuine **TÜBİTAK / SIR II** hardware IDs are unknown (intentionally unresolved; fails closed).
+   - Genuine **Hardware-Encrypted USB (Unverified Profile)** hardware IDs are unknown (intentionally unresolved; fails closed).
    - Genuine **SanDisk** hardware has not yet been physically inspected in the VM (`0781` / `DiskSanDisk_` are public/documented rules, not physical-hardware verified).
    - Automated privileged policy writing via `IGroupPolicyObject` is intentionally unimplemented and blocked pending separate security review (`B1`).
    - `Engellenen Cihazlar` (`Blocked.tsx`) lacks an explicit 4th section for **Unknown/unverified devices** and renders historical denials inside the active card rather than as its own clear section.
@@ -180,10 +180,10 @@ flowchart TB
    - **D-06 (Native Windows Test Harness Bugs):** `app_flows.rs:1149` fails on Windows (`LivePolicySource` succeeds); `stdioBackend.ts` fails 15/16 integration tests on Windows (`EPERM` on `rmSync` before child exit + unisolated host SetupAPI/registry).
 9. **What can be reused:** Core workspace crate layout, SetupAPI adapter, read-only registry policy reader, named-pipe RPC + UAC/PID security checks, SQLite WAL + hash-chained audit + backup/restore, SCM service host + Event Log `MESSAGETABLE`, guided session framework, Tauri shell, and WiX Turkish MSI build pipeline.
 10. **What must NOT be changed:**
-    - `C:\Users\Yunus\Desktop\RustWard` (original repository), `main` branch, `feature/phase6-default-deny` branch.
+    - `<baseline-workspace>` (original repository), `main` branch, `feature/phase6-default-deny` branch.
     - Windows 11 host OS policies, registry, services, or drivers.
     - `ACTIVATION_ENABLED = false` and read-only Win32 API boundaries (`no_module_references_state_changing_apis`, `no_system_modification_apis_in_this_crate`).
-    - Prohibition on inventing TÜBİTAK identifiers or treating `346D:5678` (`VendorC`) as SanDisk/TÜBİTAK.
+    - Prohibition on inventing Encrypted Storage Profile identifiers or treating `346D:5678` (`VendorC`) as SanDisk/Encrypted Storage Profile.
 
 ---
 
@@ -194,7 +194,7 @@ flowchart TB
 | SetupAPI PnP enumeration & parent-chain USB/PCI classification | `NATIVE WINDOWS VERIFIED` | `rustward-windows/tests/native_windows.rs`, VM runs `8ffc7bf`–`9ba61b5` |
 | Kingston (`0951:1666`) & VendorC (`346D:5678`) identification | `PHYSICAL HARDWARE VERIFIED` | VM hardware inspection (`0a7fe96`, `acb2718`, `9ba61b5`) |
 | SanDisk allowlist rule (`USBSTOR\DiskSanDisk_`, `0781`) | `AUTOMATED TEST VERIFIED` | `rustward-core` unit tests (no physical SanDisk inspected yet) |
-| TÜBİTAK / SIR II allowlist rule | `BLOCKED` | No genuine hardware IDs obtained; intentionally unresolved & fail-closed |
+| Hardware-Encrypted USB (Unverified Profile) allowlist rule | `BLOCKED` | No genuine hardware IDs obtained; intentionally unresolved & fail-closed |
 | Conflicting VID vs SCSI INQUIRY fail-closed policy rejection | `NOT IMPLEMENTED` *(to fix in Phase 3)* | Only UI `IdentityConfidence::Conflicting` existed; core `evaluate.rs` ignored VID |
 | Read-only Windows `DeviceInstall\Restrictions` & RSA registry capture | `NATIVE WINDOWS VERIFIED` | `policy_reader.rs`, VM runs `fa073a2`, `2858e6d`, `9ba61b5` |
 | Guided Kingston-specific Windows denial + rollback observation | `PHYSICAL HARDWARE VERIFIED` *(historical `2858e6d`; Stage A retest `USER ACCEPTANCE PENDING`)* | `docs/WINDOWS-VM-KINGSTON-BLOCK-2026-11-07.md` |

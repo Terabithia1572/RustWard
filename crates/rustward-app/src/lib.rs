@@ -448,8 +448,8 @@ const PENDING_NATIVE: &[(&str, &str)] = &[
         "Adlandırılmış kanal DACL incelemesi (AccessChk) ve sahte kanal testi",
     ),
     (
-        "TÜBİTAK SIR II identification at the workplace",
-        "TÜBİTAK SIR II cihazının iş yerinde tanımlanması",
+        "Hardware-encrypted USB identification in isolated test environment",
+        "Donanım şifreli USB cihazının test ortamında tanımlanması",
     ),
 ];
 

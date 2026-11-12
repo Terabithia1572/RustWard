@@ -1,7 +1,7 @@
 [package]
 name = "rustward-desktop"
 description = "RustWard desktop administration app (Tauri 2 shell). The UI talks to the backend only through the single validated `ipc_call` command."
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.90"
 publish = false

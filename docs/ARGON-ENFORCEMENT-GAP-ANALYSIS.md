@@ -1,6 +1,6 @@
 # ARGON Phase 1 — Root Cause Analysis of Simulation-Only Operation
 
-**Workspace:** `C:\Users\Yunus\Desktop\RustWard2` (`experiment/argon4-vm-enforcement`)
+**Workspace:** `<workspace>` (`experiment/argon4-vm-enforcement`)
 
 ---
 

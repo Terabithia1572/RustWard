@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(out.state.policy.policy_version, 2);
         assert_eq!(
             out.state.catalog.catalog_version,
-            "2026.11.10-phase-d+local.1"
+            "2026.11.12-v1.0.0+local.1"
         );
         assert_eq!(
             out.state.policy.catalog_version,
@@ -1017,13 +1017,13 @@ mod tests {
         );
         assert!(matches!(dup, Err(EditError::DuplicateId { .. })));
 
-        // "Tübitak Bilgem" normalizes to the existing TÜBİTAK BİLGEM display name.
+        // "Hardware-Encrypted Storage" matches the existing encrypted storage alias.
         let conflict = apply_edit(
             &s,
             &PolicyEdit::AddManufacturer {
                 input: ManufacturerInput {
                     id: Some("tb2".into()),
-                    ..input("Tübitak Bilgem", vec![])
+                    ..input("Hardware-Encrypted Storage", vec![])
                 },
                 allowed: true,
             },

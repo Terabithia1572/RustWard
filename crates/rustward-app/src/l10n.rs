@@ -683,7 +683,7 @@ mod tests {
 
     fn names(id: &str) -> String {
         match id {
-            "tubitak" => "TÜBİTAK BİLGEM".into(),
+            "tubitak" => "Encrypted USB Storage (Unverified)".into(),
             "sandisk" => "SanDisk".into(),
             "kingston" => "Kingston".into(),
             other => other.into(),
@@ -698,7 +698,7 @@ mod tests {
                 "brand \"tubitak\" has no enforceable identifier; its devices cannot be recognized and will be denied",
                 &names
             ),
-            "TÜBİTAK BİLGEM için uygulanabilir donanım kimliği bulunamadı. Bu markaya ait cihazlar henüz güvenilir şekilde tanımlanamadığından erişim izni verilemez."
+            "Encrypted USB Storage (Unverified) için uygulanabilir donanım kimliği bulunamadı. Bu markaya ait cihazlar henüz güvenilir şekilde tanımlanamadığından erişim izni verilemez."
         );
         assert_eq!(
             issue(

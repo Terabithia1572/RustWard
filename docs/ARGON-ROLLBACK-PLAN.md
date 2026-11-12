@@ -1,6 +1,6 @@
 # ARGON Rollback & Emergency Recovery Plan
 
-**Scope:** Windows 10 Pro Acceptance VM (`D:\Windows10VM\Windows 10 x64.vmx`) and future standalone offline Windows 10 Pro workstations.  
+**Scope:** Windows 10 Pro Acceptance VM (`<test-vm>.vmx`) and future standalone offline Windows 10 Pro workstations.  
 **Core Rule:** Never write to, format, repartition, or delete files on attached physical USB media; VMware snapshots protect the guest NVMe disk (`nvme0:0`), **not** external USB flash drives.
 
 ---
@@ -33,7 +33,7 @@ Use if Tier R1 succeeded (`Restrictions` key cleared) but a previously blocked U
 Use immediately if **any** unexpected impact occurs on the VM boot disk (`C:`), keyboard/mouse input, unrelated devices, or service stability:
 1. From the Windows 11 host (requires zero guest responsiveness):
    ```powershell
-   & "D:\VmWare\vmrun.exe" -T ws revertToSnapshot "D:\Windows10VM\Windows 10 x64.vmx" "rustward2-argon4-before-acceptance"
+   & "vmrun.exe" -T ws revertToSnapshot "<test-vm>.vmx" "rustward2-argon4-before-acceptance"
    ```
    *(Or revert to pre-existing `rustward-phase6-before-kingston-retest` / `rustward-phase6-before-profile-test`.)*
 2. Restores guest NVMe disk (`nvme0:0`), registry hives, `Registry.pol`, and installed `RustWardService` to the exact byte-for-byte pre-test state.

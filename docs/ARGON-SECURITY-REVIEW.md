@@ -1,6 +1,6 @@
 # ARGON Security Review & Threat Model
 
-**Workspace:** `C:\Users\Yunus\Desktop\RustWard2` (`experiment/argon4-vm-enforcement`)  
+**Workspace:** `<workspace>` (`experiment/argon4-vm-enforcement`)  
 **Deployment Context:** Standalone Windows 10 Pro workstations operating completely offline.
 
 ---
@@ -14,7 +14,7 @@
 | **Authenticated dual-pipe IPC & UAC authorization** | `\\.\pipe\RustWard\v1\status` (read-only) and `admin` (`SY` + `BA` SDDL), `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`. Server impersonates client token (`TokenElevation` + `WinBuiltinAdministratorsSid`); client verifies server owner SID + SCM `RustWardService` PID + Session `0` (`PipeConnection::connect`). |
 | **Strict input validation & no command execution** | Frame cap `MAX_FRAME_BYTES = 4 MiB`, unknown request tags rejected (`#[serde(deny_unknown_fields)]` / tagged enum), control characters and oversized strings rejected in `validate.rs`, zero `std::process::Command` usage in service or Tauri runtime. |
 | **No raw disk access & no PIN capture** | RustWard never opens `\\.\PhysicalDriveN` or volume handles and never prompts for, intercepts, or logs hardware-token PINs. |
-| **Workspace & host isolation** | All work isolated to `C:\Users\Yunus\Desktop\RustWard2` (`experiment/argon4-vm-enforcement`); Windows 11 host policies, services, and original `RustWard` repository untouched. |
+| **Workspace & host isolation** | All work isolated to `<workspace>` (`experiment/argon4-vm-enforcement`); Windows 11 host policies, services, and original `RustWard` repository untouched. |
 
 ---
 
@@ -31,7 +31,7 @@
 | 7 | **Local administrator override** | **By design of Windows:** Local Administrators hold ultimate machine control. | When `AllowAdminInstall` is unset/`0`, PnP installation rules apply to admins too, **but** an elevated admin can edit `gpedit.msc`, `Registry.pol`, or stop `RustWardService`. Production deployments require operators to use Standard User accounts. |
 | 8 | **Offline attacks & physical removal of system disk** | **Out of scope of OS PnP policy alone.** | Booting from external media or removing the internal NVMe/SATA drive bypasses the offline Windows OS completely. Requires **UEFI Secure Boot + firmware admin password + BitLocker full-disk encryption (TPM + PIN)**. |
 | 9 | **Windows policy tampering (`Registry.pol` / registry drift)** | **Detected continuously** (`POLICY_MISMATCH` / session verification diff). | RustWard's read-only observer re-reads `HKLM\...\Restrictions` and `RemovableStorageDevices` and compares live values against prepared session expectations, surfacing drift immediately without silently claiming protection. |
-| 10 | **Device identity changes after PIN unlocking (e.g. TÜBİTAK SIR II)** | **Unverified IDs:** Fail-closed (`Verdict::Deny`). | Hardware-encrypted drives may switch PID or expose `DiskDrive` only after hardware/pad unlock. `CM_Register_Notification` + `correlate_reenumeration` catches post-unlock arrival and evaluates the new `DiskDrive` devnode without touching PINs. |
+| 10 | **Device identity changes after PIN unlocking (e.g. Hardware-Encrypted USB)** | **Unverified IDs:** Fail-closed (`Verdict::Deny`). | Hardware-encrypted drives may switch PID or expose `DiskDrive` only after hardware/pad unlock. `CM_Register_Notification` + `correlate_reenumeration` catches post-unlock arrival and evaluates the new `DiskDrive` devnode without touching PINs. |
 | 11 | **Service startup failures / crashes** | **OS policy persists independently; observation degrades visibly.** | Local Group Policy restrictions are enforced by the Windows kernel/PnP manager (`gpsvc`), **not** by `RustWardService` being alive — so applied Windows blocks stay active even if `RustWardService` stops! Meanwhile, WiX configures SCM auto-restart (5s delay) and the desktop UI's `ConnectionBar` immediately alerts `"Hizmet bağlantısı yok"`. |
 | 12 | **Policy persistence failures (direct registry edit overwritten by GPO)** | **Prevented by architectural rule (`B3`).** | Direct `RegSetValueExW` under `Policies\...` is overwritten by `gpsvc` from `Registry.pol`. RustWard never writes direct registry keys; administrator changes go through `gpedit.msc` (`Registry.pol`), and future automated writing is restricted to `IGroupPolicyObject::Save`. |
 | 13 | **Audit log tampering / local DB corruption** | **Tamper-evident (not tamper-proof against `SYSTEM`/Admin); fail-safe DB integrity checks.** | Append-only SQLite triggers + SHA-256 hash chain + `sqlite_sequence` truncation check + daily Event Log `audit_checkpoint` (`Event 1008`). Corrupted backups are rejected in memory before touching live state (`inspect_backup`). |

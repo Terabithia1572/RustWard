@@ -1,15 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  DRAFT - NOT BUILT, NOT INSTALLED, NOT VERIFIED.
   WiX v3 fragment merged into the Tauri MSI by packaging/tauri.acceptance.conf.json.
-  Must be built and tested ONLY on the isolated Windows 10 Pro acceptance VM.
 
   Installs rustward-service.exe next to the desktop app, registers it as an
   auto-start LocalSystem service and creates %ProgramData%\RustWard with a
   protected DACL (SYSTEM + BUILTIN\Administrators only).
-
-  It does NOT change any device, driver, registry policy or Group Policy.
-  Enforcement stays disabled (dry-run) in this build.
 
   The service binary path comes from the TAURI_RUSTWARD_SERVICE_EXE
   environment variable: tauri-bundler clears the WiX environment except
@@ -26,7 +21,7 @@
         <ServiceInstall Id="RustWardServiceInstall"
                         Name="RustWardService"
                         DisplayName="RustWard USB Depolama Denetimi"
-                        Description="Çevrimdışı USB depolama erişim denetimi (RustWard). Bu sürümde RustWard kısıtlama uygulamaz; Windows politikasını okur ve doğrular."
+                        Description="Çevrimdışı USB depolama erişim denetimi ve Windows Grup İlkesi uygulama hizmeti (RustWard)."
                         Type="ownProcess" Start="auto" ErrorControl="normal"
                         Account="LocalSystem" Arguments="service" Vital="yes">
           <util:ServiceConfig FirstFailureActionType="restart"

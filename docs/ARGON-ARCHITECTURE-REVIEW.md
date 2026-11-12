@@ -1,6 +1,6 @@
 # ARGON Architecture Review — Windows Service, IPC & Desktop Client
 
-**Workspace:** `C:\Users\Yunus\Desktop\RustWard2` (`experiment/argon4-vm-enforcement`)
+**Workspace:** `<workspace>` (`experiment/argon4-vm-enforcement`)
 
 ---
 

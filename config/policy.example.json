@@ -3,10 +3,10 @@
   "workstation_id": "PC-01",
   "policy_version": 1,
   "mode": "dry_run",
-  "catalog_version": "2026.11.10-phase-d",
+  "catalog_version": "2026.11.12-v1.0.0",
   "allowed_brands": [
-    { "brand_id": "sandisk", "enabled": true, "note": "Phase 6 target: ALLOW. Identifiers not yet verified on a real SanDisk device" },
-    { "brand_id": "tubitak", "enabled": true, "note": "Phase 6 target: ALLOW. No identifiers until SIR II physical inspection; its devices are denied meanwhile" }
+    { "brand_id": "sandisk", "enabled": true, "note": "Target: ALLOW (verified on USBSTOR & UASP media)" },
+    { "brand_id": "tubitak", "enabled": true, "note": "Unverified encrypted USB profile; devices are denied until identifiers are verified" }
   ],
   "denied_brands": [
     { "brand_id": "kingston", "enabled": true, "note": "Phase 6 target: DENY" },

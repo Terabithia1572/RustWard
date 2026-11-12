@@ -335,7 +335,7 @@ function WindowsPolicyPlanSection({
               </li>
               <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">TÜBİTAK BİLGEM (SIR II)</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t("manufacturers.plan.encryptedUnverifiedTitle")}</span>
                   <Badge tone="warning">Kimlik Bekleniyor</Badge>
                 </div>
                 <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">

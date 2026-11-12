@@ -29,7 +29,7 @@
 | T6 | Tamper with policy DB/config | ACLs (SYSTEM/Admins), integrity checks, versioning; OS policy is the source of truth | Admin can still change |
 | T7 | Use the UI to escalate privilege | Unelevated UI, no direct DB access, authenticated named pipe, server-side validation, Tauri capabilities | Phase 5/7 review |
 | T8 | BadUSB keyboard injection | Out of scope of storage control; document | Open |
-| T9 | Unlock SIR II to bypass policy (re-enumeration) | Policy evaluated per devnode; test T-05/T-06 | Unknown until tested |
+| T9 | Unlock Hardware-Encrypted USB to bypass policy (re-enumeration) | Policy evaluated per devnode; test T-05/T-06 | Unknown until tested |
 | T10 | Raw disk access to a blocked device | Device never installs → no disk object | Verify in Phase 2 |
 | T11 | Log tampering | Hash chain + Event Log; tamper-evident only | L-11 |
 | T13 | Standard user squats a pipe name (scheduled task in session 0) or creates an extra instance of the running service's pipe to impersonate the service | Client requires pipe owner = LocalSystem/service SID, server PID = SCM's RustWardService PID, session 0 (F-03); users lack `FILE_CREATE_PIPE_INSTANCE` (F-18) | Verify on Windows (C12, C17) |

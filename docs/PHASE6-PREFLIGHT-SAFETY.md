@@ -20,7 +20,7 @@ closed with Cancel), and RustWard's SetupAPI inventory.
 
 | Device | Setting |
 |---|---|
-| Hard disk | NVMe 0:0, 60 GB, file `D:\Windows10VM\Windows 10 x64-000007.vmdk` (snapshot delta). Mode: **not independent**, so it is included in snapshots. Host free space 663 GB. |
+| Hard disk | NVMe 0:0, 60 GB, file `<test-vm-disk>.vmdk` (snapshot delta). Mode: **not independent**, so it is included in snapshots. Host free space 663 GB. |
 | CD/DVD | SATA, ISO-backed |
 | USB controller | Present (USB 3.x) |
 
@@ -99,7 +99,7 @@ Every source the device reports is generic. Nothing identifies SanDisk.
 - The proposed allow IDs `USBSTOR\DiskSanDisk_` / `SCSI\DiskSanDisk_` **do
   not match** this stick. Under the profile it would be **denied** once it is
   reinstalled.
-- The owner earlier corrected the physical label of this stick to ASELSAN.
+- The owner earlier corrected the physical label of this stick to Generic VendorC Device.
   Either way, its electronic identity is not SanDisk.
 - **No genuine SanDisk device has been inspected.** The SanDisk allow IDs
   remain unverified.
@@ -154,7 +154,7 @@ only and not rehearsed.
 | Deny Seagate | Yes, same mechanism | No Seagate hardware | Unverified |
 | Deny all other or unknown USB storage | **Only for new installations** (class profile). Already-installed sticks need per-device retroactive rules or an administrator uninstall. | Planned and preflight-checked | **Not verified** (experiment not authorized) |
 | Allow SanDisk | Expressible as `USBSTOR\DiskSanDisk_` / `SCSI\DiskSanDisk_`; trusts a firmware string | No genuine SanDisk available; the 346D stick is not SanDisk | **Unverified** |
-| Allow TÜBİTAK / SIR II | **Not possible today:** no identifier is known | SIR II not inspected | **Blocked** by missing data |
+| Allow Hardware-Encrypted USB (Unverified Profile) | **Not possible today:** no identifier is known | Hardware-Encrypted USB not inspected | **Blocked** by missing data |
 | Keyboards, mice, printers unaffected | Yes: different classes, no USB/HID class rules | Device-ID rule: verified in the VM | Profile: not verified |
 | Internal disks unaffected | Yes for existing disks (non-retroactive + instance allow). **No** for new or replacement disks. | Documented precedence | Not verified |
 | Read/write blocking per manufacturer | **No.** Removable Storage Access is class-wide; there is no per-brand read/write control without Defender for Endpoint (cloud/licence) or a custom filter driver. | — | Not achievable offline with built-in tools |
@@ -168,7 +168,7 @@ only and not rehearsed.
 | B2 | `ACTIVATION_ENABLED = false`; activation gates such as `vm_validation` are hard-wired NotMet. | Design gate | Only meaningful after B1 |
 | B3 | Writing `HKLM\SOFTWARE\Policies\…` directly bypasses the local GPO store (`Registry.pol`). Group Policy can overwrite or remove such values at the next refresh, and gpedit would not show them. A correct implementation needs the Local Group Policy API (`IGroupPolicyObject`). | Technical | Design work, after B1 |
 | B4 | The default-deny profile has not been verified in the VM: no observed denial and no observed internal-disk safety. | Evidence | The authorized experiment (4 settings, uninstall, rollback) |
-| B5 | Identity: no TÜBİTAK identifiers, no genuine SanDisk, and the 346D stick is generic | Data | Physical inspection of SIR II and genuine SanDisk units |
+| B5 | Identity: no Encrypted Storage Profile identifiers, no genuine SanDisk, and the 346D stick is generic | Data | Physical inspection of Hardware-Encrypted USB and genuine SanDisk units |
 | B6 | Already-installed unauthorized sticks are not covered by the class profile. | Mechanism | Per-device retroactive rules or administrator uninstall, each authorized |
 | B7 | Unsigned binaries; no in-app elevation (app must be started "as administrator") | Deployment | Code signing; an elevation helper |
 | B8 | The VM still has catalog `2026.11.05-phase1`; MSI upgrades do not update an existing catalog. | Product gap | A catalog update path |

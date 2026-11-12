@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "2026.11.10-phase-d",
+  "catalog_version": "2026.11.12-v1.0.0",
   "brands": [
     {
       "id": "sandisk",
@@ -98,27 +98,13 @@
     },
     {
       "id": "tubitak",
-      "display_name": "TÜBİTAK BİLGEM",
+      "display_name": "Encrypted USB Storage (Unverified)",
       "aliases": [
-        "TÜBİTAK",
-        "TUBITAK",
-        "BİLGEM",
-        "BILGEM",
-        "SIR II"
+        "Encrypted USB",
+        "Hardware-Encrypted Storage"
       ],
       "identifiers": [],
-      "notes": "SIR II USB descriptors and SCSI INQUIRY data are pending physical lab inspection (locked and unlocked states)."
-    },
-    {
-      "id": "aselsan",
-      "display_name": "ASELSAN",
-      "aliases": [
-        "ASELSAN",
-        "Aselsan Elektronik",
-        "Aselsan Sanayi"
-      ],
-      "identifiers": [],
-      "notes": "National defence hardware identifier profile; pending physical lab inspection of Turkish defense devices."
+      "notes": "Placeholder profile for hardware-encrypted USB storage pending physical descriptor verification."
     },
     {
       "id": "vendorc",
@@ -132,10 +118,10 @@
           "kind": "usb_vid",
           "value": "346D",
           "verification": "lab_verified",
-          "source": "Observed USB VID 346D on physical test device in lab"
+          "source": "Observed USB VID 346D on physical test device"
         }
       ],
-      "notes": "Physical test media in RustWard lab (ASELSAN-labelled device reporting VendorC 346D:5678)."
+      "notes": "Observed USB controller reporting VendorC (VID 346D / PID 5678)."
     },
     {
       "id": "western-digital",

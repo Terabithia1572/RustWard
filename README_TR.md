@@ -1,21 +1,16 @@
 # RustWard
 
-**Windows 10/11 Pro için çevrimdışı USB depolama erişim denetimi
-değerlendirmesi ve yönetici onaylı Windows uygulaması.**
+**Windows 10/11 Pro için çevrimdışı USB depolama erişim denetimi ve Windows Yerel Grup İlkesi uygulama aracı.**
 
 [English](README.md) · Geliştirici: **Yunus İNAN**
 
-> **Durum (Faz 6, Kasım 2026): yayın öncesi, sanal makinede test edildi.**
+> **Durum (V1.0.0, Kasım 2026): Sanal makinede doğrulanmış sürüm (üretim ortamı sertifikasyonu henüz yapılmamıştır).**
 >
-> - RustWard gerçek Windows USB durumunu **gözler ve doğrular**.
-> - Windows politikasını **otomatik olarak uygulamaz**. Otomatik uygulama
->   tasarım gereği **ENGELLİ**dir.
-> - Üretici kimliği cihazın **kendi bildirimidir**; hiçbir zaman
->   kriptografik olarak doğrulanmaz.
-> - Grup İlkesi değişikliğini yönetici yapar. RustWard önceki durumu kaydeder,
->   değişikliği birebir doğrular, sonucu gözler, denetim kaydına yazar ve geri
->   almayı doğrular.
-> - Üretim iş istasyonlarına kurmayın.
+> - RustWard, üretici temelli USB depolama kurallarını (`İzinli` / `Açıkça Reddet`) yönetir ve doğrulanmış donanım kimliklerini kalıcı **Windows Yerel Grup İlkesi (`IGroupPolicyObject`)** kısıtlamalarına (`DeviceInstall\Restrictions`) derler.
+> - Yalıtılmış bir Windows 10 Pro 22H2 (Derleme 19045) VMware sanal makinesinde eşzamanlı **Kingston DataTraveler 3.0 (USBSTOR)** ve **SanDisk 3.2Gen1 (UASP/SCSI)** engellemesi, Kingston engelli kalırken **SanDisk İzin / Reddet geçişleri** ve temiz ilke geri alma işlemleri doğrulanmıştır.
+> - Üretici kimliği cihazların bildirdiği USB tanımlayıcıları ve SCSI `INQUIRY` alanlarına dayanır; kriptografik olarak doğrulanmaz.
+> - Tam ayrıcalıklı USB engellemesi için `RustWardService` Windows hizmetinin kurulu olması ve Windows Yönetici yetkileri gereklidir.
+> - Dahili sistem diskleri (NVMe/SCSI), VMware sanal diskleri ve HID giriş birimleri (klavye/fare) kısıtlamalardan ve yeniden başlatmalardan hariç tutulur.
 
 ## İçindekiler
 
@@ -26,212 +21,113 @@ değerlendirmesi ve yönetici onaylı Windows uygulaması.**
 - [Teknoloji yığını](#teknoloji-yığını)
 - [Desteklenen Windows sürümleri](#desteklenen-windows-sürümleri)
 - [Kurulum](#kurulum)
-- [Sanal makinede test](#sanal-makinede-test)
 - [Derleme](#derleme)
 - [Testler](#testler)
-- [Ekran görüntüleri](#ekran-görüntüleri)
 - [Bilinen sınırlamalar](#bilinen-sınırlamalar)
-- [Yol haritası](#yol-haritası)
 - [Belgeler](#belgeler)
 
 ## Genel bakış
 
-Hedef, USB depolamanın üreticiye göre denetlenmesi gereken bağımsız ve ağdan
-yalıtılmış Windows iş istasyonlarıdır:
+RustWard, harici USB depolama birimlerinin ağ bağlantısı veya üçüncü taraf çekirdek sürücüsü olmaksızın üretici temelinde denetlenmesi gereken bağımsız Windows iş istasyonları için tasarlanmıştır:
 
-| Üretici | Hedef politika |
-|---|---|
-| SanDisk | İzin |
-| TÜBİTAK / BİLGEM / SIR II | İzin |
-| Kingston, Seagate | Ret |
-| Diğer veya bilinmeyen tüm USB depolama | Ret |
-| Klavye, fare, yazıcı | Etkilenmez |
-
-Bu bir **hedef politikadır; elde edilmiş bir koruma iddiası değildir.**
-RustWard her cihazı bu politikaya göre değerlendirir ve Windows'un o cihaza
-gerçekte ne yaptığını **ayrıca** gösterir. Panel "korunuyor" der, ancak
-yöneticinin doğruladığı bir politika altında Windows'un bir cihazı
-gerçekten reddettiği gözlenirse.
+| Üretici / Kategori | V1.0.0 Desteği | Doğrulama Durumu |
+|---|---|---|
+| SanDisk (USBSTOR ve UASP/SCSI) | `İzin` / `Reddet` geçişleri | **Windows 10 sanal makinede doğrulandı** |
+| Kingston (USBSTOR) | `Reddet` / `İzin` geçişleri | **Windows 10 sanal makinede doğrulandı** |
+| Genel Denetleyici Üreticileri (`VendorC`, `Generic`) | `Reddet` / Güvenli sınıflandırma | **Windows 10 sanal makinede doğrulandı** |
+| Diğer katalog üreticileri (50+ kayıt) | İlke planlama ve kural derleme | Donanıma bağlı / genel |
+| Klavye, fare, dahili NVMe/SCSI diskler | Hiçbir zaman hedeflenmez | **Windows 10 sanal makinede doğrulandı** |
 
 ## Özellikler
 
-- **Gerçek cihaz envanteri.** Salt okunur SetupAPI ile USB depolama, çevre
-  birimleri ve dahili diskler okunur. Kaydedilenler: VID/PID, donanım
-  kimlikleri, SCSI INQUIRY üretici/ürün/sürüm, üst aygıt zinciri, bağlantı
-  durumu, Windows sorun kodu ve son gerçek olay. Envanter okuması diğer
-  istekleri bekletmez.
-- **Varsayılan ret politika motoru.**
-  - Üretici bazında açık izin ve açık ret listeleri vardır; geri kalan her şey
-    reddedilir.
-  - Kapsamdaki her cihaz bir politika kategorisi alır: `ALLOW_CANDIDATE`,
-    `DENY_CANDIDATE`, `UNVERIFIED_IDENTITY`, `UNSUPPORTED_DEVICE` veya
-    `OUT_OF_SCOPE`.
-  - Ayrıca bir uygulama kategorisi alır: `WINDOWS_DENIAL_VERIFIED` veya
-    `ENFORCEMENT_NOT_ACTIVE`.
-- **Kimlik derecelendirmesi.** INQUIRY üretici adı ile USB VID karşılaştırılır.
-  Sonuç uyumlu, tek kaynak, belirsiz, çelişkili, genel veya eksik olur. İzin
-  için iki uyumlu kaynak gerekir ve hiçbir kimlik "doğrulanmış" sayılmaz.
-- **Gerçek Windows gözlemi.**
-  - Aygıt Yükleme Kısıtlamaları ve Çıkarılabilir Depolama Erişimi ilkeleri
-    salt okunur olarak yeniden okunur.
-  - Bunlar her cihazın sorun koduyla ilişkilendirilir. Koruma durumları:
-    bilinmiyor, etkin değil, yapılandırılmış ama doğrulanmamış, ret
-    gözlendi ve doğrulandı.
-- **Yönetici onaylı uygulama oturumları:**
-  - **Tek cihaz reddi.** Tek bir USB disk, aygıt kimliğiyle reddedilir;
-    isteğe bağlı olarak geriye dönük. Sanal makinede doğrulandı.
-  - **Varsayılan ret profili.** Katmanlı Aygıt Yükleme Kısıtlamaları: DiskDrive
-    sınıfı engellenir (asla geriye dönük değil); izinli üreticilerin kimlikleri
-    ve dahili diskler izinlidir.
-
-  Her oturum önceki durumu kaydeder ve Türkçe/İngilizce bir gpedit kontrol
-  listesi verir. Değişikliği birebir doğrular, cihazları gözler ve geri
-  almayı doğrular.
-- **Gerçek zamanlı izleme.** Hizmet aygıt değişikliğinde uyanır. Arayüz yalnızca
-  gerçek değişiklikte yenilenir ve aynı bildirim iki kez gösterilmez.
-  "USB engellenmiştir. İşlem kayıt altına alınmıştır." bildirimi **yalnızca**
-  doğrulanmış gerçek bir Windows reddinde görünür.
-- **Olay kayıtları.** SQLite (WAL), karma zincirli ve yalnızca eklemeli; Windows
-  Olay Günlüğü'ne de yazılır. Ret dönemleri tekilleştirilir.
-- **Uygulama hazırlığı.** Doğrulanmış korumaya geçişi engelleyen her koşul
-  sırayla listelenir.
-- **Arayüz.** Tam Türkçe arayüz (İngilizce de var), koyu tema.
+- **Gerçek Cihaz Envanteri:** SetupAPI üzerinden USB depolama (`USBSTOR` ve `UASPStor` / `SCSI`), çevre birimleri ve dahili disklerin salt okunur envanteri.
+- **Birleşik Çoklu Üretici İlke Yöneticisi:**
+  - `DenyDeviceIDs` / `AllowDeviceIDs` kurallarını `DenyDeviceIDsRetroactive = 1` ile birlikte tek bir atomik Yerel Grup İlkesi işleminde uygular.
+  - İzni verilen USB aygıtları güvenli biçimde yeniden başlatarak depolama erişimini geri kazandırır.
+  - Eski Windows ilke durumunu yedekler ve tek işlemle temiz geri alma sağlar.
+- **UASP / SCSI ve USBSTOR Zorlaması:**
+  - Hem klasik USBSTOR (`USBSTOR\DiskKingston...`) hem modern UASP/SCSI (`SCSI\Disk_____USB_SanDisk_...`) aygıtlarını engeller.
+  - `USBSTOR\GenDisk`, `SCSI\Disk`, `SCSI\DISK_____USB` ve joker karakter (`*`) gibi genel veya güvensiz kimlikleri reddeder.
+- **Gerçek Windows Gözlemi ve Denetim Günlüğü:**
+  - `DeviceInstall\Restrictions` kayıt defteri değerlerini ve SetupAPI PnP hata kodlarını canlı okur.
+  - SQLite (WAL) tabanlı, SHA-256 karma zincirli denetim kaydını Windows Uygulama Olay Günlüğü (`RustWard`) ile eşler.
+- **Çift Dilli Masaüstü Arayüzü:** Varsayılan Türkçe arayüz (İngilizce dil desteği ile).
 
 ## Güvenlik modeli
 
-- **Ayrı yetkiler.**
-  - Hizmet LocalSystem olarak çalışır.
-  - Arayüz yetkisiz çalışır ve veritabanını açmaz.
-  - Salt okunur durum kanalı her kimliği doğrulanmış kullanıcıya açıktır.
-  - Yönetici kanalı yalnızca yükseltilmiş yetkili SYSTEM ve Yöneticiler
-    içindir. Reddedilen istekler denetlenir ve hız sınırına tabidir.
-- **Windows'a yazmaz.** Kayıt defteri yalnızca `KEY_READ` ile açılır; bir test
-  ilke okuyucusunda yazma API'lerini yasaklar. Aygıt, sürücü veya hizmet
-  yapılandırma API'si kullanılmaz.
-- **Simülasyon etiketlidir.** Simülasyon kararları gerçek engel bildirimini
-  tetiklemez ve koruma sayılmaz.
-- **Dürüst kimlik.** USB tanımlayıcıları ve INQUIRY verileri kopyalanabilir.
-  RustWard "SanDisk'tir" demez, "SanDisk bildiriyor" der.
-- **Yerel yöneticiler.** Yerel yönetici Windows ilkesini değiştirebilir.
-  RustWard değişikliği algılar ve kaydeder, ama engelleyemez.
+- **Ayrıcalık ayrımı:**
+  - `rustward-service.exe`, `LocalSystem` hesabıyla çalışır ve `%ProgramData%\RustWard` veritabanını yönetir (yalnızca SYSTEM + Administrators erişimli ACL).
+  - Masaüstü arayüzü hizmetle adlandırılmış kanallar (`RustWard.Status.v1` ve yalnızca Yönetici yetkili `RustWard.Admin.v1`) üzerinden haberleşir.
+  - Yetkisiz kanal istekleri hız sınırına tabi tutulur ve denetim kaydına yazılır.
+- **Çekirdek sürücüsü gerektirmez:** Yerleşik Windows Aygıt Yükleme Kısıtlamaları ve `IGroupPolicyObject` COM arayüzünü kullanır.
+
+Ayrıntılar: [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md) · [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
 
 ## Mimari
 
+```text
+Tauri 2 Masaüstü Uygulaması (React, TypeScript, Tailwind)
+  ├──► \\.\pipe\RustWard.Status.v1 (Salt okunur durum ve gözlem)
+  └──► \\.\pipe\RustWard.Admin.v1  (Yüksek ayrıcalıklı Yönetici ilke kanalı)
+         └──► rustward-service.exe (LocalSystem Windows Hizmeti)
+                ├─ rustward-app         istek yönlendirme, GPO uygulama/geri alma
+                ├─ rustward-core        üretici kataloğu, politika ve kimlik değerlendirme
+                ├─ rustward-enforcement bileşik ilke derleyici ve SetupAPI gözlemcisi
+                ├─ rustward-windows     SetupAPI, IGroupPolicyObject COM, Olay Günlüğü
+                ├─ rustward-ipc         adlandırılmış kanal doğrulama ve hız sınırı
+                └─ rustward-storage     SQLite WAL ve SHA-256 karma zincirli denetim
 ```
-Tauri 2 uygulaması ──adlandırılmış kanallar──► rustward-service (LocalSystem)
-  ├─ rustward-app          istekler, oturumlar, gözlem
-  ├─ rustward-core         katalog, politika, sınıflandırma, karar
-  ├─ rustward-enforcement  değerlendirme, gözlemci, plan, kontrol listesi
-  ├─ rustward-windows      salt okunur SetupAPI ve kayıt defteri, Olay Günlüğü
-  ├─ rustward-ipc          sözleşme, doğrulama, yetkilendirme
-  └─ rustward-storage      SQLite, karma zincirli denetim kaydı
-```
-
-Ayrıntı: [docs/PHASE6-ARCHITECTURE.md](docs/PHASE6-ARCHITECTURE.md).
 
 ## Teknoloji yığını
 
-Rust, `windows-sys`, `windows-service`, SQLite, Tauri 2, React 19,
-TypeScript, Tailwind CSS 4, Vitest ve WiX (MSI). Her şey çevrimdışı
-paketlenir: CDN veya çalışma zamanı ağ erişimi yoktur.
+Rust (2024 edition), `windows-sys`, `windows-service`, SQLite (`rusqlite` gömülü), Tauri 2, React 19, TypeScript, Tailwind CSS 4, Vitest ve WiX v3 (MSI). Tüm arayüz varlıkları ve `usb.ids` veritabanı tamamen çevrimdışı paketlenir.
 
 ## Desteklenen Windows sürümleri
 
-| Öğe | Gereksinim |
+| Öğe | Destek Durumu |
 |---|---|
-| İşletim sistemi | Windows 10 Pro/Enterprise/Education x64. 22H2 derleme 19045'te (sanal makine) test edildi. Windows 11'de derlenir, kabul testi yapılmadı. |
-| Katmanlı değerlendirme (varsayılan ret profili) | Windows 10 2004–22H2 derleme 19041.1151 ve sonrası veya Windows 11 |
-| Çalışma ortamı | WebView2 (kurulumla gelir), VC++ çalışma zamanı |
-| Ağ | Gerekmez |
+| İşletim sistemi | Windows 10 Pro/Enterprise/Education x64 (22H2 derleme 19045 sanal makinede test edildi); Windows 11 x64 için derlenir. |
+| Grup İlkesi motoru | Yerleşik Windows Yerel Grup İlkesi (`gpedit.dll` / `IGroupPolicyObject`) — Pro, Enterprise ve Education sürümleri gereklidir. |
+| Çalışma ortamı | Microsoft Edge WebView2 Runtime (MSI içinde çevrimdışı kurucu bulunur), VC++ çalışma zamanı. |
+| Ağ bağlantısı | Gerekmez (%100 çevrimdışı). |
 
 ## Kurulum
 
-> Önce silinebilir bir sanal makinede deneyin.
+### MSI Kurulum Paketi (Tam Hizmet Koruması İçin Önerilen)
 
-1. MSI'ı derleyin ve `dist\installer\RustWard_0.1.0_x64_tr-TR.msi` dosyasını
-   hedefe kopyalayın. SHA-256 değerini kontrol edin.
-2. Yönetici olarak kurun. Kurulum uygulamayı, `RustWard USB Depolama Denetimi`
-   hizmetini ve Olay Günlüğü kaynağını ekler.
-3. RustWard'ı başlatın. Politika düzenleme ve yönetici oturumları için
-   "Yönetici olarak çalıştır" kullanın.
-4. Kaldırmak için Uygulamalar ve özellikler'i kullanın.
+1. `SHA256SUMS.txt` dosyası üzerinden paket özetini (SHA-256) doğrulayın.
+2. `RustWard-v1.0.0-x64-Setup.msi` paketini **Yönetici** olarak çalıştırın.
+3. Kurulum; masaüstü uygulamasını, `RustWard USB Depolama Denetimi` (`RustWardService`) hizmetini, Olay Günlüğü kaynağını ve korumalı `%ProgramData%\RustWard` dizinini yapılandırır.
+4. İlke değişikliği ve uygulama için **RustWard** uygulamasını Yönetici olarak başlatın.
 
-Kurulum hiçbir Windows güvenlik ayarını değiştirmez.
+### Taşınabilir Paket (`RustWard-v1.0.0-Portable.zip`)
 
-## Sanal makinede test
-
-1. Ayrı bir Windows 10 Pro sanal makine kullanın. Her denemeden önce
-   **adlandırılmış anlık görüntü** alın.
-2. USB bellekleri sanal makineye bağlayın (VMware: VM › Removable Devices).
-   Yalnızca silinebilir bellekler kullanın.
-3. RustWard *Uygulama Hazırlığı* sayfasında Windows sürümünü ve mevcut ilke
-   durumunu kaydedin.
-4. Yönetici oturumunu hazırlayın. Kontrol listesini `gpedit.msc` içinde
-   **kendiniz** uygulayın, sonra `gpupdate /force` çalıştırıp
-   **Uygulamayı doğrula**'ya basın.
-5. Sonucu Aygıt Yöneticisi ve Dosya Gezgini'nde ayrıca kontrol edin.
-   Klavye ve fare çalışmaya devam etmelidir.
-6. Geri alma: ayarları "Yapılandırılmadı" yapın, `gpupdate /force`
-   çalıştırın, sonra **Geri almayı doğrula**'ya basın. Fark varsa anlık
-   görüntüye dönün.
-7. Kurulum reddini okuma/yazma engelinin kanıtı saymayın.
-
-Geliştirme bilgisayarında veya üretim iş istasyonunda ilke denemesi yapmayın.
+Tek başına `RustWard.exe` yalnızca yönetim arayüzüdür; `rustward-service.exe` ayrıcalıklı Windows hizmeti olarak kurulmadan tek başına USB cihazlarını engelleyemez. Hizmet kurulumu ve çevrimdışı dağıtım için arşiv içindeki `README-PORTABLE.txt` yönergelerini izleyin.
 
 ## Derleme
 
-Windows'ta (Rust MSVC, Visual Studio C++ araçları, Windows SDK, Node.js,
-WebView2) `BUILD-RUSTWARD.cmd` dosyasına çift tıklayın. Hiçbir şey kurmaz ve
-yönetici yetkisi gerektirmez. Çıktılar `dist\` klasörüne, günlükler
-`build-logs\` klasörüne yazılır.
+Windows x64 üzerinde Rust (MSVC 1.90+), Visual Studio C++ Build Tools, Windows SDK, Node.js 22 LTS ve WebView2 ile:
+
+```cmd
+BUILD-RUSTWARD.cmd
+```
 
 ## Testler
 
-```bash
-./scripts/verify-all.sh
-cd apps/rustward-desktop && npm ci && npm test
+```powershell
+cargo test --workspace
+npm --prefix apps/rustward-desktop test -- --run
 ```
 
-Test kanıtları: [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md),
-[docs/PHASE6-VM-TEST-REPORT.md](docs/PHASE6-VM-TEST-REPORT.md).
-
-## Ekran görüntüleri
-
-Görüntüler otomatik test verileriyle (**sentetik veri**, geliştirme arka ucu)
-oluşturuldu; gerçek makine veya cihaz bilgisi içermez.
-
-| Dashboard | Engellenen cihazlar |
-|---|---|
-| ![Dashboard](docs/screenshots/dashboard-tr.png) | ![Engellenen cihazlar](docs/screenshots/blocked-tr.png) |
-| **Uygulama Hazırlığı** | |
-| ![Uygulama Hazırlığı](docs/screenshots/readiness-tr.png) | |
+Doğrulama kanıtları: [docs/ARGON4-PHASED-HOTFIX-ACCEPTANCE.md](docs/ARGON4-PHASED-HOTFIX-ACCEPTANCE.md) ve [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
 
 ## Bilinen sınırlamalar
 
-- Otomatik Windows ilkesi uygulama **ENGELLİ**dir.
-- Üretici kimliği cihazın kendi bildirimidir ve kopyalanabilir.
-- Kurulum zamanı kuralları zaten kurulu cihazları etkilemez. Varsayılan ret
-  profili asla geriye dönük değildir.
-- Kurulum reddi okuma/yazma engelini kanıtlamaz. Çıkarılabilir Depolama
-  Erişimi sınıf genelidir; bir markaya izin verip diğerini reddedemez.
-- TÜBİTAK SIR II kimlikleri bilinmiyor, bu yüzden bu cihazlar reddedilir.
-- Gerçek bir SanDisk cihazı test edilmedi.
-- Yerel yöneticiler Windows ilkesini değiştirebilir.
-
-Tam liste: [docs/PHASE6-KNOWN-LIMITATIONS.md](docs/PHASE6-KNOWN-LIMITATIONS.md).
-
-## Yol haritası
-
-1. Varsayılan ret profili ve güncel yama seviyesinde Çıkarılabilir Depolama
-   Erişimi için sanal makine kabul testi.
-2. TÜBİTAK SIR II'nin fiziksel tanımlanması: kilit açılmadan önce ve sonra, en
-   az iki cihazda.
-3. Birkaç modelde gerçek SanDisk cihazlarıyla doğrulama.
-4. Hizmet, uygulama ve MSI için kod imzalama.
-5. Otomatik uygulama yolu için karar. Bu ayrı bir güvenlik incelemesi
-   gerektirir ve şu an ENGELLİ'dir.
+- **Sanal makinede doğrulanmış V1.0.0 sürümü:** Yalıtılmış Windows 10 Pro VMware ortamında doğrulanmıştır; kurumsal kod imzalama ve fiziksel saha dağıtımı sonraki aşamalara bırakılmıştır.
+- **Kriptografik doğrulama yoktur:** Üretici kimliği cihazın bildirdiği VID/PID ve SCSI `INQUIRY` alanlarına güvenir.
+- **Yerel yönetici sınırı:** Yerel Windows yöneticileri Grup İlkesi'ni harici olarak değiştirebilir; RustWard bu sapmayı algılar ve kaydeder.
+- **Açılışta otomatik ilke eşitlemesi ve oturum dışı Windows bildirimleri:** V1.1 sürümünde planlanmıştır.
 
 ## Belgeler
 
-Faz 6 belgeleri `docs/PHASE6-*.md` dosyalarındadır (İngilizce). Önceki fazların
-belgeleri [`docs/`](docs/) klasöründedir.
+Mimari tasarım, güvenlik incelemeleri ve kabul test kayıtları [`docs/`](docs/) dizinindedir.

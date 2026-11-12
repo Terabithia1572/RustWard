@@ -32,8 +32,8 @@ identity *authenticated*: `DeviceAssessment.authenticated` is always `false`.
 | Device | Reported | Grade | Decision under the target policy |
 |---|---|---|---|
 | Kingston DataTraveler 3.0 | VID:PID `0951:1666`; INQUIRY `Kingston` / `DataTraveler 3.0` / rev `PMAP` | `corroborated` (Kingston VID 0951) | `DENY_CANDIDATE` (explicit deny). Identifiers marked `lab_verified`. |
-| Stick first reported as SanDisk-labelled (label later corrected by the owner to ASELSAN) | VID:PID `346D:5678`; INQUIRY `VendorC` / `ProductCode` / rev `3.20` | `generic` (`VendorC`/`VendorCo` reserved as generic in catalog `2026.11.07-phase6`) | `UNVERIFIED_IDENTITY`. **Never treated as SanDisk.** |
-| TÜBİTAK SIR II | not inspected | — | No identifier exists; devices are denied. **No identifiers are invented.** |
+| Stick first reported as SanDisk-labelled (label later corrected by the owner to Generic VendorC Device) | VID:PID `346D:5678`; INQUIRY `VendorC` / `ProductCode` / rev `3.20` | `generic` (`VendorC`/`VendorCo` reserved as generic in catalog `2026.11.07-phase6`) | `UNVERIFIED_IDENTITY`. **Never treated as SanDisk.** |
+| Hardware-Encrypted USB | not inspected | — | No identifier exists; devices are denied. **No identifiers are invented.** |
 | Genuine SanDisk | none available | — | SanDisk identifiers (`SanDisk`, VIDs 0781/0871) remain `unverified` / `public_registry` |
 
 Serial numbers are never stored in fixtures or documents. Instance IDs are
@@ -55,12 +55,12 @@ RustWard therefore keeps the conservative behaviour:
 - An allow candidate needs two agreeing sources.
 - The Windows allow rule is presented as **"reports SanDisk"**, not as
   "is SanDisk".
-- TÜBİTAK stays denied until real identifiers are inspected and recorded with
+- Encrypted Storage Profile stays denied until real identifiers are inspected and recorded with
   their source.
 
-## 5. Deferred: TÜBİTAK SIR II checklist
+## 5. Deferred: Hardware-Encrypted USB checklist
 
-1. Connect the SIR II to the VM only.
+1. Connect the Hardware-Encrypted USB to the VM only.
 2. Record the following with `rustward-inventory` (read-only), **before and
    after** unlock:
    - the parent `USB\VID_…&PID_…`,

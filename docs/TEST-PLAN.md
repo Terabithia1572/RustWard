@@ -30,10 +30,10 @@ RustWard commit hash recorded, evidence = inventory JSON + screenshots + command
 | T-01 | Previously installed approved SanDisk | Usable after baseline cleanup + policy | NOT RUN |
 | T-02 | Previously unseen approved SanDisk | Installs and is usable without registration | NOT RUN |
 | T-03 | Different-capacity SanDisk | Same INQUIRY vendor; usable | NOT RUN |
-| T-04 | Approved TÜBİTAK SIR II | Usable once lab-verified identifier is in catalog | BLOCKED (identifiers unknown) |
-| T-05 | SIR II before PIN entry | Record descriptors only; no PIN captured | NOT RUN |
-| T-06 | SIR II after PIN entry | Re-enumeration recorded; policy still applies | NOT RUN |
-| T-07 | Previously unseen SIR II unit | Same identity as T-06 | NOT RUN |
+| T-04 | Approved Hardware-Encrypted USB | Usable once lab-verified identifier is in catalog | BLOCKED (identifiers unknown) |
+| T-05 | Hardware-Encrypted USB before PIN entry | Record descriptors only; no PIN captured | NOT RUN |
+| T-06 | Hardware-Encrypted USB after PIN entry | Re-enumeration recorded; policy still applies | NOT RUN |
+| T-07 | Previously unseen Hardware-Encrypted USB unit | Same identity as T-06 | NOT RUN |
 | T-08 | Unauthorized Kingston | No disk, no volume, no file access | NOT RUN |
 | T-09 | Previously installed unauthorized USB | Blocked after baseline cleanup; documents behaviour before cleanup | NOT RUN |
 | T-10 | Unauthorized external HDD | Blocked | NOT RUN |

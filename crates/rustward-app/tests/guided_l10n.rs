@@ -448,7 +448,7 @@ fn every_user_facing_backend_text_has_a_turkish_rendering() {
     for x in &m.manufacturers {
         assert_turkish("manufacturer issues", &x.issues_tr);
     }
-    assert!(m.warnings_tr.iter().any(|w| w.starts_with("TÜBİTAK BİLGEM için uygulanabilir donanım kimliği bulunamadı.")));
+    assert!(m.warnings_tr.iter().any(|w| w.starts_with("Encrypted USB Storage (Unverified) için uygulanabilir donanım kimliği bulunamadı.")));
     assert!(
         m.warnings_tr.iter().any(|w| w
             == "SanDisk markasının donanım kimlikleri henüz gerçek cihaz üzerinde doğrulanmadı.")

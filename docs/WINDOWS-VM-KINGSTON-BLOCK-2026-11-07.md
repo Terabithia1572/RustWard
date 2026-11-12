@@ -26,7 +26,7 @@ disabled (`ACTIVATION_ENABLED = false`); its decisions are still simulations.
 | Kingston (0951:1666) after the policy | **BLOCKED** | Device Manager: "Code 1: device not configured correctly" + "installation of this device is forbidden by system policy"; device events: *deleted* 13:31:09, *blocked (disk.inf)*, "configuration blocked by policy" 13:31:10 |
 | Kingston volumes E:, F: | **Gone** | Not in This PC; Disk Management lists Disk 0 and Disk 2 only (no Disk 1). No disk or volume exists to open, so no filesystem access is possible. A raw read was not attempted. |
 | Kingston after VMware disconnect + reconnect | **Still blocked** | "Code 28: drivers not installed" + "forbidden by system policy"; E:/F: absent |
-| ASELSAN-labelled stick (346D:5678, VendorC) | **Unaffected** | "Working properly"; G: lists its 9 root entries (read-only); healthy in Disk Management |
+| VendorC USB stick (346D:5678, VendorC) | **Unaffected** | "Working properly"; G: lists its 9 root entries (read-only); healthy in Disk Management |
 | Internal disk | **Unaffected** | Disk 0 online, C: healthy (boot) |
 | Keyboard / mouse | **Unaffected** | VMware USB input devices without errors; mouse used throughout; owner typed in gpedit/cmd |
 | RustWard service | **Running** | Dashboard "Çalışıyor"; app connected |
@@ -46,7 +46,7 @@ an installation restriction applies to every user.
 - Does not prove: manufacturer-based default deny (class deny + layered allow
   rules), protection of internal disks under a class rule, behaviour on
   Windows 11, or resistance to a local administrator removing the policy.
-  Device IDs are not authenticated (the ASELSAN-labelled stick reports
+  Device IDs are not authenticated (the VendorC USB stick reports
   VendorC).
 
 Screenshots (22) were delivered to the owner and are not committed: they show

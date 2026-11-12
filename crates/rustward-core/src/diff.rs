@@ -1,7 +1,7 @@
 //! Inventory diffs and re-enumeration correlation.
 //!
 //! Decisions are stateless per devnode: every new devnode is evaluated on
-//! its own. This matters for encrypted drives such as TÜBİTAK SIR II, which
+//! its own. This matters for hardware-encrypted drives, which
 //! may expose a different interface (or no storage at all) while locked and
 //! re-enumerate as a new device after the PIN is entered on the keypad. The
 //! unlocked storage devnode is evaluated when it appears; the locked state

@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-core",
  "rustward-enforcement",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-enforcement"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-core",
  "serde",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-inventory"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-core",
  "rustward-enforcement",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-ipc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-core",
  "rustward-enforcement",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-service"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "embed-resource",
  "rustward-app",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rusqlite",
  "rustward-core",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-ui-bridge"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-app",
  "rustward-ipc",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "rustward-windows"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rustward-core",
  "rustward-enforcement",

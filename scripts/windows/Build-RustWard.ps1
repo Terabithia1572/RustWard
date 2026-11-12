@@ -166,7 +166,7 @@ function Get-MsiRow([string]$MsiPath, [string]$Sql) {
 
 Write-Info "RustWard Windows derlemesi - $Stamp"
 Write-Info "Depo: $Root"
-Write-Info 'Bu betik Windows ayarlarını değiştirmez; hizmet kurmaz; USB koruması etkinleştirilmez.'
+Write-Info 'Bu betik yalnızca derleme yapar; bu makinede hizmet kurmaz ve Windows ilkesini değiştirmez.'
 Write-Info ''
 
 # ---------------------------------------------------------------- 1. Checks
@@ -326,7 +326,7 @@ $info = @(
     ("rustc: " + (($rustcInfo -split "`n")[0]))
     "Node.js: $nodeV   WebView2 Runtime: $wv"
     ''
-    'USB KORUMASI ETKİN DEĞİLDİR. Bu uygulama USB aygıtlarını engellemez (ACTIVATION_ENABLED = false).'
+    'Yönetici onaylı Windows Grup İlkesi uygulama desteği içeren V1.0.0 derlemesi. Tam USB zorlaması için RustWardService hizmeti ve yönetici yetkisi gerekir.'
     ''
 )
 foreach ($b in $builds) {
@@ -362,14 +362,14 @@ $info | Out-File -FilePath (Join-Path $Dist 'BUILD-INFO.txt') -Encoding UTF8
 @(
     '@echo off'
     'rem RustWard - gercek uygulama (RustWard Windows hizmetine baglanir).'
-    'rem USB korumasi etkin degildir.'
+    'rem RustWard - yonetici onayli Windows USB erisim denetimi arayuzu.'
     'start "" "%~dp0RustWard.exe"'
 ) | Out-File -FilePath (Join-Path $Dist 'START-RUSTWARD.cmd') -Encoding ASCII
 if (-not $SkipPreview) {
     @(
         '@echo off'
         'rem RustWard - gelistirme onizlemesi (gecici veritabani, etiketli sentetik veri).'
-        'rem USB korumasi etkin degildir.'
+        'rem RustWard - yonetici onayli Windows USB erisim denetimi arayuzu.'
         'start "" "%~dp0RustWard-Onizleme.exe"'
     ) | Out-File -FilePath (Join-Path $Dist 'START-RUSTWARD-ONIZLEME.cmd') -Encoding ASCII
 }
@@ -433,7 +433,7 @@ Write-Host 'TAMAMLANDI.' -ForegroundColor Green
 Write-Info "Uygulama: $Dist\RustWard.exe  (başlatmak için: $Dist\START-RUSTWARD.cmd)"
 if (-not $SkipPreview) { Write-Info "Önizleme: $Dist\RustWard-Onizleme.exe  (başlatmak için: $Dist\START-RUSTWARD-ONIZLEME.cmd)" }
 Write-Info "Hizmet: $Dist\service\rustward-service.exe (kurulmadı)"
-Write-Info 'USB koruması henüz etkinleştirilmemiştir. Windows ayarlarında değişiklik yapılmadı.'
+Write-Info 'Derleme tamamlandı. Bu makinenin Windows ayarlarında değişiklik yapılmadı.'
 if (-not $msiOk) {
     Write-Host 'UYARI: EXE dosyaları hazır, ancak tam MSI oluşturulamadı veya doğrulanamadı.' -ForegroundColor Yellow
     exit 3

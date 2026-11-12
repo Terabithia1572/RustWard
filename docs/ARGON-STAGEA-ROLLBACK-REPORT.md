@@ -1,10 +1,10 @@
 # Stage A Rollback Verification Report
 
 ## Environment & Target
-- **Workspace**: `C:\Users\Yunus\Desktop\RustWard2`
+- **Workspace**: Local isolated repository
 - **Branch**: `experiment/argon4-vm-enforcement`
-- **Target VM**: `D:\Windows10VM\Windows 10 x64.vmx` (`Windows 10 Pro 22H2 build 19045.6466`)
-- **Offline Snapshot**: `Before-Argon4-StageA` (UID 9) preserved intact
+- **Target VM**: Isolated Windows 10 Pro Test VM (`Windows 10 Pro 22H2 build 19045.6466`)
+- **Offline Snapshot**: Recovery snapshot preserved intact
 - **Session ID**: `6b80fb90cf7c52d3`
 
 ---
@@ -18,16 +18,16 @@ Setting Group Policy to *Not Configured* (`Yapılandırılmadı`) and running `g
 
 ## 2. PnP & Storage Stack Verification
 - **Kingston DataTraveler 3.0** (`0951:1666`):
-  - PnP Instance: `USBSTOR\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0&REV_\4CEDFB74A335F721191112BC&0`
+  - PnP Instance: `USBSTOR\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0&REV_\SERIAL-REDACTED-KINGSTON&0`
   - Status: **`OK`**
   - ProblemCode: **`0`**
   - Active Driver: `disk.sys`
   - Disk: `Disk 2` (61.87 GB MBR, Online, Healthy)
   - Partitions:
-    - Partition 1 (`E:\`, exFAT, Removable): Directory read verified (`[Zula, Sons Of The Forest 4, F6]`)
-    - Partition 2 (`F:\`, FAT VTOYEFI, Removable): Directory read verified (`[grub, ventoy, EFI]`)
+    - Partition 1 (`E:\`, exFAT, Removable): Directory read verified (entries redacted)
+    - Partition 2 (`F:\`, FAT VTOYEFI, Removable): Directory read verified (entries redacted)
 - **VendorC ProductCode** (`346D:5678`):
-  - PnP Instance: `USBSTOR\DISK&VEN_VENDORC&PROD_PRODUCTCODE&REV_3.20\FC1158E772D5C&0`
+  - PnP Instance: `USBSTOR\DISK&VEN_VENDORC&PROD_PRODUCTCODE&REV_3.20\SERIAL-REDACTED-VENDORC&0`
   - Status: **`OK`**, ProblemCode: **`0`**
   - Disk: `Disk 1` (31.46 GB GPT, Online, Healthy)
   - Partition 1 (`G:\`, FAT32 WIN10_11_AI): Directory read verified (`[boot, efi, software]`)

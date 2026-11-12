@@ -22,7 +22,7 @@ const OBSERVED: &str = include_str!("../../../tests/fixtures/vm-observed-usb-202
 const CATALOG: &str = include_str!("../../../config/manufacturer-catalog.json");
 const POLICY: &str = include_str!("../../../config/vm-enforcement-test-policy.json");
 const KINGSTON: &str = "USBSTOR\\DISK&VEN_KINGSTON";
-const ASELSAN: &str = "USBSTOR\\DISK&VEN_VENDORC";
+const VENDORC_STICK: &str = "USBSTOR\\DISK&VEN_VENDORC";
 const KINGSTON_ID: &str = "USBSTOR\\DiskKingstonDataTraveler_3.0____";
 
 fn applied_policy() -> PolicySnapshot {
@@ -79,7 +79,7 @@ fn only_usb_storage_is_observed_with_real_identities() {
     assert_eq!(k.vid_pid.as_deref(), Some("0951:1666"));
     assert_eq!(k.reported_vendor.as_deref(), Some("Kingston"));
     assert_eq!(k.hardware_id.as_deref(), Some(KINGSTON_ID));
-    let a = dev(&o, ASELSAN);
+    let a = dev(&o, VENDORC_STICK);
     assert_eq!(a.vid_pid.as_deref(), Some("346D:5678"));
     assert_eq!(a.reported_vendor.as_deref(), Some("VendorC"));
     assert_eq!(a.rustward_reason, "generic_vendor_identity");
@@ -118,8 +118,8 @@ fn observed_block_is_install_denied_but_access_not_verified() {
             k.explanation_tr
                 .contains("Okuma/yazma yolları ayrıca test edilmedi")
         );
-        // The ASELSAN stick is not covered by the Windows rule: a discrepancy.
-        let a = dev(&o, ASELSAN);
+        // The VendorC stick is not covered by the Windows rule: a discrepancy.
+        let a = dev(&o, VENDORC_STICK);
         assert!(a.states.contains(&S::NoWindowsRestriction));
         assert!(a.states.contains(&S::PolicyMismatch));
         assert_eq!(a.evidence, EvidenceLevel::None);
@@ -248,7 +248,7 @@ fn checklist_appends_to_an_existing_list_and_keeps_its_rollback_narrow() {
             "1",
             RegData::Sz("USBSTOR\\DiskOtherVen_SomeProduct_______".into()),
         );
-    let c = checklist(&live, ASELSAN, false, |_| {}).unwrap();
+    let c = checklist(&live, VENDORC_STICK, false, |_| {}).unwrap();
     assert!(
         c.expected_registry
             .iter()

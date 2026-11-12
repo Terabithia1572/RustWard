@@ -71,7 +71,7 @@ pub struct BrandIdentifier {
 pub struct BrandEntry {
     /// Stable slug, e.g. `sandisk`.
     pub id: String,
-    /// Display name (may contain non-ASCII, e.g. "TÜBİTAK BİLGEM").
+    /// Display name (may contain non-ASCII, e.g. "Şifreli Depolama / Örnek").
     pub display_name: String,
     /// Alternative names. Used only for search and *hints*, never for
     /// authorization.
@@ -589,7 +589,7 @@ mod tests {
     fn rejects_generic_non_ascii_and_bad_vid() {
         let e = ValidatedCatalog::validate(cat(vec![
             brand("x", vec![ident(IdentifierKind::InquiryVendor, "Generic")]),
-            brand("y", vec![ident(IdentifierKind::InquiryVendor, "TÜBİTAK")]),
+            brand("y", vec![ident(IdentifierKind::InquiryVendor, "ÜRETİCİ")]),
             brand("z", vec![ident(IdentifierKind::UsbVid, "78")]),
         ]))
         .unwrap_err();

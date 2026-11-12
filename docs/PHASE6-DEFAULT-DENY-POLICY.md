@@ -10,7 +10,7 @@ two meet only in the assessment's enforcement category.
 | Manufacturer | Rule | Effective decision today |
 |---|---|---|
 | SanDisk | `allowed_brands` | Allow **candidate** only when the INQUIRY vendor (`SanDisk`) and the USB VID (`0781`/`0871`) agree. The identifiers are not verified on a genuine SanDisk device. |
-| TÜBİTAK / BİLGEM / SIR II | `allowed_brands` | **Denied**: the catalog has no identifier, so no device can match. SIR II physical identification is deferred. |
+| Hardware-Encrypted USB (Unverified Profile) | `allowed_brands` | **Denied**: the catalog has no identifier, so no device can match. Hardware-Encrypted USB physical identification is deferred. |
 | Kingston | `denied_brands` (explicit) | Deny candidate. The identifiers are lab-verified on 0951:1666. |
 | Seagate | `denied_brands` (explicit) | Deny candidate (no hardware tested) |
 | Any other manufacturer | — | Deny (default) |

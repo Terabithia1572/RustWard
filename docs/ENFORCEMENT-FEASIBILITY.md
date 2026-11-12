@@ -33,7 +33,7 @@ vendor-level hardware ID. It is:
   controller) can report `SanDisk`;
 - not guaranteed per brand: some products report a controller or bridge-chip
   vendor (e.g. `JMicron`, `ASMT`, `Generic`) instead of the brand;
-- **unknown for TÜBİTAK SIR II** until physically inspected (locked and unlocked).
+- **unknown for Hardware-Encrypted USB** until physically inspected (locked and unlocked).
 
 No supported mechanism offers a stronger identity. Microsoft Defender for
 Endpoint device control also matches on VID/PID/serial/instance/friendly-name
@@ -79,12 +79,12 @@ Problems:
 | # | Problem | Severity |
 |---|---|---|
 | A1 | **Previously installed devices** keep working (install-time control). Every unauthorized USB disk ever connected — present or not — must be removed from the PnP database under a reviewed baseline procedure, or the retroactive option used on a narrower rule. | High |
-| A2 | Brand identity = INQUIRY vendor: spoofable; may be generic; unknown for SIR II. | High (residual) |
+| A2 | Brand identity = INQUIRY vendor: spoofable; may be generic; unknown for Hardware-Encrypted USB. | High (residual) |
 | A3 | `SCSI\Disk<vendor>` IDs are shared with internal SATA/NVMe and virtual disks. Allowing `SCSI\DiskSanDisk_` also allows an internal SanDisk SSD (harmless), and a UASP device reporting the vendor of an allowed internal disk would pass. Vendor-level padding in the SCSI namespace is [UNKNOWN]. | Medium |
 | A4 | DiskDrive prevent also blocks new internal disks, VHD/VHDX mounts, iSCSI/Storage Spaces disks until allowed. | Medium (operational) |
 | A5 | USB CD/DVD (CDROM class) and MTP/PTP phones (WPD class) are separate classes; not covered unless explicitly added (scope decision). The decision engine flags both as `enforcement_gap`. | Medium |
 | A6 | A local administrator can remove the policy. Protection assumes operators are standard users. | Inherent |
-| A7 | Behaviour for devices that re-enumerate (SIR II unlock) or devices without serial numbers on new ports must be measured. | [UNKNOWN] |
+| A7 | Behaviour for devices that re-enumerate (Hardware-Encrypted USB unlock) or devices without serial numbers on new ports must be measured. | [UNKNOWN] |
 
 ### B. Removable Storage Access policies
 
@@ -143,7 +143,7 @@ Problems:
 - "Deny write access to removable drives not protected by BitLocker", optionally restricted to
   drives with the organization's identification field.
 - Blocks **write only**; reads remain possible; identity is BitLocker metadata, not brand;
-  would conflict with SIR II hardware encryption. **Rejected.**
+  would conflict with Hardware-Encrypted USB hardware encryption. **Rejected.**
 
 ---
 
@@ -176,8 +176,8 @@ Problems:
    cannot be allowed at brand level without also allowing every product using that controller.
    Such products must be denied (or handled by an explicit, documented model-level exception
    that the business owner approves — not done silently).
-3. **TÜBİTAK SIR II identifiers are unknown.** If its INQUIRY vendor is generic, brand-level
-   allowlisting of SIR II is impossible with mechanism A and the requirement cannot be met
+3. **Hardware-Encrypted USB identifiers are unknown.** If its INQUIRY vendor is generic, brand-level
+   allowlisting of Hardware-Encrypted USB is impossible with mechanism A and the requirement cannot be met
    for that brand.
 4. **Previously installed devices** are not re-evaluated by mechanism A (A1).
 5. SCSI-namespace vendor-level ID format and UASP behaviour are unverified (A3).
@@ -195,7 +195,7 @@ Problems:
   allowing vendor-level INQUIRY hardware IDs and preventing the DiskDrive class, plus a
   reviewed baseline cleanup of already-installed USB disks.
 - **Fallback:** C (C/C++ minifilter, attestation-signed) only if A fails acceptance on
-  previously installed devices or SIR II re-enumeration, and only with separate approval.
+  previously installed devices or Hardware-Encrypted USB re-enumeration, and only with separate approval.
 - **Rejected:** B (no exceptions), D (licensing/connectivity), E (race, fail-open), F.
 
 **Recommendation: CONDITIONAL GO** for a Phase 2 *test-only* proof of concept of A on an
@@ -205,7 +205,7 @@ Phase 2 conditions below are met.
 
 Phase 2 GO conditions:
 
-1. SIR II inspected (locked and unlocked) and its INQUIRY vendor is distinctive, non-generic.
+1. Hardware-Encrypted USB inspected (locked and unlocked) and its INQUIRY vendor is distinctive, non-generic.
 2. At least three SanDisk models of different capacity/generation report the same INQUIRY vendor.
 3. A denied device produces no disk, no volume and no readable file (Explorer, `CreateFile`,
    volume path, mount point), verified on a new install **and** after baseline cleanup.

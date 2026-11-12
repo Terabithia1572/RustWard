@@ -2,7 +2,7 @@
 
 ## Principle
 
-An administrator thinks in brands ("SanDisk", "TÜBİTAK"). Windows enforces
+An administrator thinks in brands ("SanDisk", "Encrypted Storage Profile"). Windows enforces
 identifiers. RustWard bridges them through a **local, versioned manufacturer
 catalog** (`config/manufacturer-catalog.json`) and makes the gap visible
 instead of hiding it.
@@ -24,7 +24,7 @@ names are attached as evidence ("corroborating", "hint", "warning").
 `encode_inquiry_field` pads the vendor to 8 characters with spaces and replaces
 spaces with `_`, giving Microsoft's documented form (`SEAGATE` →
 `USBSTOR\DiskSEAGATE_`). Matching is case-insensitive like PnP. Non-ASCII values
-(e.g. "TÜBİTAK") are rejected: INQUIRY data is ASCII, so such a value can never
+(e.g. "Encrypted Storage Profile") are rejected: INQUIRY data is ASCII, so such a value can never
 match real hardware. The comma rule and the `SCSI\` namespace padding are
 assumptions to confirm on hardware.
 
@@ -45,7 +45,7 @@ assumptions to confirm on hardware.
 | Brand | INQUIRY vendor | USB VIDs (public registry) | Status |
 |---|---|---|---|
 | SanDisk | `SanDisk` (unverified) | 0781, 0871 | Needs lab confirmation on ≥3 models |
-| TÜBİTAK BİLGEM | — | — (no entry in public usb.ids) | **Unknown until SIR II inspection** |
+| Encrypted Storage Profile | — | — (no entry in public usb.ids) | **Unknown until Hardware-Encrypted USB inspection** |
 | Kingston | `Kingston` (unverified) | 0951, 0E56 | Used as a denied example |
 | Seagate | `Seagate` (unverified) | 0BC2, 0477, 1A2A | Used as a denied example |
 
@@ -61,19 +61,19 @@ read from RustWard's inventory and Device Manager. Sanitized evidence:
 | Stick (label) | USB VID:PID | INQUIRY vendor / product / rev | Transport | Matches catalog |
 |---|---|---|---|---|
 | Kingston DataTraveler 3.0 | 0951:1666 | `Kingston` / `DataTraveler_3.0` / blank | USBSTOR (bulk-only) | Kingston (VID and vendor agree) |
-| **ASELSAN-labelled** | **346D:5678** | **`VendorC` / `ProductCode` / `3.20`** | USBSTOR (bulk-only) | **No**: neither SanDisk VID nor vendor |
+| **VendorC-reported** | **346D:5678** | **`VendorC` / `ProductCode` / `3.20`** | USBSTOR (bulk-only) | **No**: neither SanDisk VID nor vendor |
 
-The ASELSAN-labelled stick reports `VendorC` / 346D:5678. That is what this
-one device reports, not an authenticated ASELSAN identity, and it is not in
+The VendorC USB stick reports `VendorC` / 346D:5678. That is what this
+one device reports, not an authenticated manufacturer identity, and it is not in
 the catalog, so the dry-run model denies it as an unknown manufacturer. No
 SanDisk stick is available, so the catalog's `SanDisk` INQUIRY vendor remains
 unverified. (Corrected 2026-11-07: an earlier note called this stick
 SanDisk-labelled.)
 
-## TÜBİTAK BİLGEM SIR II: DEFERRED, physical workplace validation required
+## Hardware-Encrypted USB (Unverified Profile): DEFERRED, physical isolated lab environment validation required
 
 Not available; no identifiers exist in RustWard and none may be invented.
-At the workplace, read-only, with the inventory tool and Device Manager:
+At the isolated lab environment, read-only, with the inventory tool and Device Manager:
 
 1. Inspect the device before PIN entry: every device node, class, hardware and
    compatible IDs, VID:PID.

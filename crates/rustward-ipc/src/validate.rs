@@ -414,7 +414,7 @@ mod tests {
                 },
             },
             Request::AddManufacturer {
-                input: input("TÜBİTAK BİLGEM"),
+                input: input("Encrypted USB"),
                 allowed: true,
                 expected_policy_version: 3,
             },

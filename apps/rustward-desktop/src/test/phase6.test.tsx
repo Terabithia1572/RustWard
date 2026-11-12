@@ -83,7 +83,7 @@ describe("Allowed manufacturers: configured rules are not Windows access", () =>
     const section = await screen.findByTestId("windows-policy-plan-section");
     expect(section).toBeInTheDocument();
     expect(screen.getByText("Windows USB Erişim Denetimi İlke Planı ve Uygulama")).toBeInTheDocument();
-    expect(screen.getByText("TÜBİTAK BİLGEM (SIR II)")).toBeInTheDocument();
+    expect(screen.getByText("Donanım Şifreli USB (Kimliği Doğrulanmamış)")).toBeInTheDocument();
     expect(screen.getByText("Kingston DataTraveler 3.0")).toBeInTheDocument();
     expect(screen.getByText(/Dahili NVMe sistemi/)).toBeInTheDocument();
   });

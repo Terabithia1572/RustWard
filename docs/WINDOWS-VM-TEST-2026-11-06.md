@@ -38,7 +38,7 @@ The MSI tables were checked read-only (Windows Installer COM) by `Build-RustWard
 | 5 | Service runs as LocalSystem | PASS | Task Manager Details: rustward-service.exe, user SYSTEM |
 | 6 | Standard (unelevated) caller refused on admin pipe; status pipe works | PASS | "Hizmet çalışıyor; … yönetici olarak (yükseltilmiş) başlatın." |
 | 7 | Elevated caller: admin requests (inventory refresh, policy edit) | PASS | "inventory refreshed: 8 stored devices"; policy v2/v3 |
-| 8 | Caller identity in audit | FAIL → fixed → PASS | First install: "(by unknown)". Fixed in `de4c6b4`; second install: "(by DESKTOP-…\\<user>)" |
+| 8 | Caller identity in audit | FAIL → fixed → PASS | First install: "(by unknown)". Fixed in `de4c6b4`; second install: "(by HOST\\<user>)" |
 | 9 | Real read-only SetupAPI inventory | PASS | VMware USB/HID/ACPI devices; virtual SATA CD and NVMe disk as system storage |
 | 10 | Real USB storage in the VM: simulated decision only, not blocked | PASS | VendorC 346D:5678 `SIMULATED DENY`, Kingston DT 3.0 `SIMULATED ALLOW` once allowed; "enforcement NOT ACTIVE"; device stayed accessible |
 | 11 | SQLite persistence (`%ProgramData%\RustWard`, schema v2, integrity, hash chain) | PASS | Diagnostics: integrity OK, chain intact |

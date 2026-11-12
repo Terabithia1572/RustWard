@@ -16,7 +16,10 @@ apps/*/src-tauri/gen/
 # Databases and logs
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
+*.sqlite3
 *.log
 
 # Secrets and signing material - never commit
@@ -43,7 +46,15 @@ Thumbs.db
 # Local Windows build logs (scripts/windows/Build-RustWard.ps1)
 /build-logs/
 
-# Local transfer artifacts
+# Local transfer and VM artifacts
 *.bundle
 *.iso
 *.msi
+*.exe
+*.zip
+*.vmdk
+*.vmx
+*.vmem
+*.vmsd
+*.vmxf
+*.nvram

@@ -1,7 +1,7 @@
 # Phase 6 — Known limitations
 
 These are the limitations that matter for the target policy (allow SanDisk and
-TÜBİTAK; deny everything else). The full historical register is
+Encrypted Storage Profile; deny everything else). The full historical register is
 [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md) (L-01…L-35). Items marked
 **new** were added in Phase 6.
 
@@ -23,8 +23,8 @@ TÜBİTAK; deny everything else). The full historical register is
 |---|---|---|
 | 8 | VID/PID and INQUIRY strings are self-reported and cloneable (L-01). | "SanDisk" means "reports SanDisk". `authenticated` is always false. |
 | 9 | No VID-only hardware ID exists for USB disks. | The VID can only corroborate. Windows rules match the INQUIRY vendor. |
-| 10 | Generic or controller vendors (`VendorC`/`VendorCo`, `Generic`, …) cannot be attributed (L-02). | The ASELSAN-labelled (first reported as SanDisk-labelled) 346D:5678 stick is `UNVERIFIED_IDENTITY` and denied. |
-| 11 | TÜBİTAK SIR II identifiers are unknown (L-04). | All SIR II devices are denied until a physical inspection records real identifiers. None are invented. |
+| 10 | Generic or controller vendors (`VendorC`/`VendorCo`, `Generic`, …) cannot be attributed (L-02). | The VendorC-reported (first reported as SanDisk-labelled) 346D:5678 stick is `UNVERIFIED_IDENTITY` and denied. |
+| 11 | Hardware-Encrypted USB identifiers are unknown (L-04). | All Hardware-Encrypted USB devices are denied until a physical inspection records real identifiers. None are invented. |
 | 12 | No genuine SanDisk device has been tested. | SanDisk identifiers stay `unverified` / `public_registry`. |
 | 13 | **(new)** The policy and catalog are stored in the database. Upgrading the MSI does not replace an existing installation's catalog. | The VM still runs catalog `2026.11.05-phase1`, so 346D:5678 is graded `single_source` (not `generic`) there. The decision is the same (deny). A catalog update path is needed. |
 

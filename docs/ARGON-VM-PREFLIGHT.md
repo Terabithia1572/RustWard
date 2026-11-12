@@ -10,24 +10,24 @@
 | Property | Verified Value |
 |---|---|
 | Host OS | Windows 11 Pro 25H2 (64-bit, build `26200.8037`) — **untouched** |
-| VMware Workstation | `17.6.4` (`D:\VmWare\vmrun.exe`) |
+| VMware Workstation | `17.6.4` (`vmrun.exe`) |
 | Currently running VMs | `0` (`Total running VMs: 0`) |
-| Target VM configuration file | `D:\Windows10VM\Windows 10 x64.vmx` (`displayName = "Windows 10 x64"`) |
-| Secondary VM found on disk | `D:\Windows10VMTest\Windows 10 x64.vmx` (`0` snapshots — **not** the acceptance target) |
+| Target VM configuration file | `<test-vm>.vmx` (`displayName = "Windows 10 x64"`) |
+| Secondary VM found on disk | `<secondary-vm>.vmx` (`0` snapshots — **not** the acceptance target) |
 | Guest OS & Build (`.vmx` `guestInfo.detailed.data`) | `Windows 10 Pro, 64-bit (Build 19045.6466)` (`22H2`) |
 | Firmware / CPU / Memory | UEFI (`firmware = "efi"`), 2 vCPUs, 2048 MB RAM |
 | Clean shutdown / checkpoint state | `cleanShutdown = "TRUE"`, current snapshot `uid = 8` (`rustward-phase6-before-kingston-retest`), active delta disk `Windows 10 x64-000008.vmdk` |
 
 ### Critical Isolation Finding in `.vmx` (`sata0:1.fileName`)
-Line 44 of `D:\Windows10VM\Windows 10 x64.vmx` currently reads:
+Line 44 of `<test-vm>.vmx` currently reads:
 ```ini
 sata0:1.deviceType = "cdrom-image"
-sata0:1.fileName = "C:\Users\Yunus\Desktop\RustWard\dist\vm\rustward-test-7.iso"
+sata0:1.fileName = "<baseline-workspace>\dist\vm\rustward-test-7.iso"
 sata0:1.present = "TRUE"
 ```
 This references the **original** `RustWard` folder's ISO! Per Section 1 & Section 11:
-- We **did not modify** `Windows 10 x64.vmx` or `C:\Users\Yunus\Desktop\RustWard`.
-- All new packages and any VM transfer ISO built in this workstream reside strictly inside `C:\Users\Yunus\Desktop\RustWard2\dist\`.
+- We **did not modify** `Windows 10 x64.vmx` or `<baseline-workspace>`.
+- All new packages and any VM transfer ISO built in this workstream reside strictly inside `<workspace>\dist\`.
 - Mounting a `RustWard2` ISO or transferring the updated `RustWard2` MSI into the guest via `vmrun CopyFileFromHostToGuest` will be performed **only after** explicit user approval.
 
 ---
@@ -40,7 +40,7 @@ This references the **original** `RustWard` folder's ISO! Per Section 1 & Sectio
 | **SATA CD/DVD Drive** | `sata0:1` (`NECVMWar VMware SATA CD01`, class `CDROM`) under `Standard SATA AHCI Controller` (`hdc`). | Outside `DiskDrive` class; unaffected. |
 | **USB Controllers & Hubs** | `usb` (UHCI, PCI slot 32), `ehci` (USB 2.0, slot 34), `usb_xhci` (USB 3.x, slot 192) + 3 root hubs (`class = USB`). | RustWard never generates rules for class `USB`; hubs and host controllers remain untouched. |
 | **Keyboard & Mouse** | `usb_xhci:4` (`hid`), VMware PS/2 & USB Composite HID input devices (`Keyboard`, `Mouse`, `HIDClass`). | Outside `DiskDrive` class; unaffected. |
-| **Known USB Mass Storage Test Sticks** | (1) **Kingston DataTraveler 3.0**: `USB\VID_0951&PID_1666`, `USBSTOR\DiskKingstonDataTraveler_3.0____` (must be reconfirmed live in guest before applying any rule).<br>(2) **VendorC / ASELSAN-labelled stick**: `USB\VID_346D&PID_5678`, `USBSTOR\DiskVendorC_ProductCode____3.20` (generic descriptor; never allowlisted). | Target of Stage A (Kingston only); VendorC serves as the negative-selectivity control (must remain unaffected during Stage A Kingston-specific block, and must **never** be formatted or written to). |
+| **Known USB Mass Storage Test Sticks** | (1) **Kingston DataTraveler 3.0**: `USB\VID_0951&PID_1666`, `USBSTOR\DiskKingstonDataTraveler_3.0____` (must be reconfirmed live in guest before applying any rule).<br>(2) **VendorC / VendorC USB stick**: `USB\VID_346D&PID_5678`, `USBSTOR\DiskVendorC_ProductCode____3.20` (generic descriptor; never allowlisted). | Target of Stage A (Kingston only); VendorC serves as the negative-selectivity control (must remain unaffected during Stage A Kingston-specific block, and must **never** be formatted or written to). |
 
 ---
 
@@ -66,7 +66,7 @@ All 8 snapshots form a clean linear chain covering `nvme0:0`:
 | # | Mandatory Requirement (Section 11) | Status |
 |---|---|---|
 | 1 | Produce read-only preflight report | **MET** (this document) |
-| 2 | Confirm a new usable VM snapshot (`rustward2-argon4-before-acceptance`) before any MSI upgrade or GPO edit | **READY** — `vmrun snapshot "D:\Windows10VM\Windows 10 x64.vmx" "rustward2-argon4-before-acceptance"` upon approval |
+| 2 | Confirm a new usable VM snapshot (`rustward2-argon4-before-acceptance`) before any MSI upgrade or GPO edit | **READY** — `vmrun snapshot "<test-vm>.vmx" "rustward2-argon4-before-acceptance"` upon approval |
 | 3 | Confirm VM system disk is protected by recovery options | **MET** — `nvme0:0` is non-independent (snapshot-backed) + PCI NVMe (`VEN_15AD&DEV_07F0`, non-USB) + 4-tier rollback plan (`ARGON-ROLLBACK-PLAN.md`) |
 | 4 | Confirm exact target USB device on live guest | **PENDING LIVE GUEST READ-ONLY CHECK** — reconfirm `USB\VID_0951&PID_1666` & `USBSTOR\DiskKingstonDataTraveler_3.0____` via `rustward-inventory.exe` / `Get-PnpDevice` |
 | 5 | Confirm no unapproved device is affected | **MET BY DESIGN FOR STAGE A** — narrow `USBSTOR\DiskKingstonDataTraveler_3.0____` prefix matches zero PCI/NVMe/HID/Hub/VendorC hardware IDs |

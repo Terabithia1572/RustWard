@@ -28,7 +28,7 @@ const CATALOG: &str = include_str!("../../../config/manufacturer-catalog.json");
 const TEST_POLICY: &str = include_str!("../../../config/vm-enforcement-test-policy.json");
 
 const KINGSTON: &str = "USBSTOR\\DISK&VEN_KINGSTON&PROD_DATATRAVELER_3.0";
-const ASELSAN_LABELLED: &str = "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE";
+const VENDORC_STICK: &str = "USBSTOR\\DISK&VEN_VENDORC&PROD_PRODUCTCODE";
 const INTERNAL_NVME: &str = "SCSI\\DISK&VEN_NVME";
 
 struct Ctx {
@@ -101,7 +101,7 @@ fn test_policy_is_dry_run_only_and_cannot_be_switched_to_enforce() {
     let c = ctx();
     assert_eq!(c.policy.policy().mode, PolicyMode::DryRun);
     assert!(TEST_POLICY.contains("DRY-RUN ONLY"));
-    // TÜBİTAK SIR II is deferred: present only as a disabled entry.
+    // Unverified encrypted storage profile is deferred: present only as a disabled entry.
     let tubitak = c
         .policy
         .policy()
@@ -145,14 +145,14 @@ fn kingston_receives_a_simulated_deny() {
 }
 
 #[test]
-fn aselsan_labelled_stick_reports_generic_vendor_and_is_denied() {
-    // Physically labelled ASELSAN; it reports INQUIRY vendor "VendorC" and
+fn vendorc_stick_reports_generic_vendor_and_is_denied() {
+    // Generic controller firmware reporting INQUIRY vendor "VendorC" and
     // VID 346D. "VendorCo ProductCode" is the default string of unbranded
     // controller firmware, so since catalog 2026.11.07-phase6 it is a
     // reserved generic value: the brand cannot be determined and the model
     // denies it (simulated). The SanDisk rule must not match it.
     let c = ctx();
-    let s = decision(&c, ASELSAN_LABELLED);
+    let s = decision(&c, VENDORC_STICK);
     assert_eq!(s.verdict, Verdict::Deny);
     assert_eq!(
         s.reason,
@@ -170,7 +170,7 @@ fn aselsan_labelled_stick_reports_generic_vendor_and_is_denied() {
         .snapshot
         .devices
         .iter()
-        .find(|d| d.instance_id.starts_with(ASELSAN_LABELLED))
+        .find(|d| d.instance_id.starts_with(VENDORC_STICK))
         .unwrap();
     for hw in &rec.hardware_ids {
         assert!(
@@ -285,7 +285,7 @@ fn model_agrees_with_the_real_kingston_block_observed_on_2026_11_07() {
     // read back by RustWard: "Prevent installation of devices that match any
     // of these device IDs" with one entry, retroactive. Windows then removed
     // the Kingston disk and refused to reinstall it (Code 1, then Code 28
-    // after reconnect); the ASELSAN stick, internal disk and input devices
+    // after reconnect); the VendorC stick, internal disk and input devices
     // were unaffected. RustWard's install model must predict the same.
     use rustward_enforcement::device_install::RESTRICTIONS_KEY;
     use rustward_enforcement::policy_eval::{InstallOutcome, evaluate_install};

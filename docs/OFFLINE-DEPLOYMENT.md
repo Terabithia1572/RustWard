@@ -112,8 +112,8 @@ prints the `sc.exe`/`icacls` commands; it executes nothing.
   (schema) and v2 (backup registry, append-only triggers). Existing v1 databases are upgraded
   in place, keeping all data (tested).
 - Initial policy: the embedded `config/manufacturer-catalog.json` and
-  `config/policy.example.json` — workstation ID **`PC-01`**, SanDisk and TÜBİTAK allowed,
-  mode `dry_run`. TÜBİTAK has no verified identifier yet, so its devices are still denied
+  `config/policy.example.json` — workstation ID **`PC-01`**, SanDisk and Encrypted Storage Profile allowed,
+  mode `dry_run`. Encrypted Storage Profile has no verified identifier yet, so its devices are still denied
   in simulation. Administrators change the allowlist in the UI.
 - **Workstation ID:** after installation an administrator renames each machine in
   Settings → Workstation ID (a versioned, audited policy edit). An installer property is

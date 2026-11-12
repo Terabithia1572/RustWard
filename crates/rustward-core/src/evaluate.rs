@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn vm_observed_vendorc_and_kingston_and_internal_nvme_behave_as_specified() {
         let (cat, pol) = load_state();
-        // VendorC 346D:5678 (ASELSAN-labelled stick with generic controller descriptors) -> Deny
+        // VendorC 346D:5678 (USB stick with generic controller descriptors) -> Deny
         let vendorc = usb_disk_snapshot("346D", "5678", "VendorC_", "ProductCode_____");
         let dec_vc = &evaluate_snapshot(&vendorc, &pol, &cat)[1];
         assert_eq!(dec_vc.verdict, Verdict::Deny);

@@ -4,8 +4,8 @@
 //! search and *hints*. They never authorize a device.
 
 /// Fold Turkish and common Latin diacritics to ASCII, upper-case, trim and
-/// collapse whitespace and punctuation. `"TÜBİTAK  BİLGEM"`, `"Tubitak Bilgem"`
-/// and `"TUBITAK-BILGEM"` all normalize to `"TUBITAK BILGEM"`.
+/// collapse whitespace and punctuation. `"ÜRETİCİ  ÖRNEK"`, `"Uretici Ornek"`
+/// and `"URETICI-ORNEK"` all normalize to `"URETICI ORNEK"`.
 #[must_use]
 pub fn normalize_brand_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -72,13 +72,13 @@ mod tests {
 
     #[test]
     fn turkish_names_fold_consistently() {
-        let expected = "TUBITAK BILGEM";
+        let expected = "URETICI ORNEK";
         for v in [
-            "TÜBİTAK BİLGEM",
-            "Tübitak Bilgem",
-            "tubitak-bilgem",
-            "  TUBITAK   BILGEM ",
-            "TÜBİTAK/BİLGEM",
+            "ÜRETİCİ ÖRNEK",
+            "Üretici Örnek",
+            "uretici-ornek",
+            "  URETICI   ORNEK ",
+            "ÜRETİCİ/ÖRNEK",
         ] {
             assert_eq!(normalize_brand_name(v), expected, "{v}");
         }
@@ -90,8 +90,8 @@ mod tests {
     #[test]
     fn slugs_are_catalog_safe() {
         assert_eq!(
-            slug_from_name("TÜBİTAK BİLGEM").as_deref(),
-            Some("tubitak-bilgem")
+            slug_from_name("ÜRETİCİ ÖRNEK").as_deref(),
+            Some("uretici-ornek")
         );
         assert_eq!(
             slug_from_name("Western Digital (WD)").as_deref(),

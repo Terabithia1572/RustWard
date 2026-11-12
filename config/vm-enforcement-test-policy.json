@@ -3,9 +3,9 @@
   "workstation_id": "VM-DRY-RUN-TEST",
   "policy_version": 1,
   "mode": "dry_run",
-  "catalog_version": "2026.11.10-phase-d",
+  "catalog_version": "2026.11.12-v1.0.0",
   "allowed_brands": [
     { "brand_id": "sandisk", "enabled": true, "note": "DRY-RUN ONLY (VM test policy, never activated): ALLOW, pending real hardware identifier verification" },
-    { "brand_id": "tubitak", "enabled": false, "note": "DRY-RUN ONLY: TUBITAK SIR II DEFERRED - PHYSICAL WORKPLACE VALIDATION REQUIRED; no identifiers, not allowed by this test" }
+    { "brand_id": "tubitak", "enabled": false, "note": "DRY-RUN ONLY: ENCRYPTED USB DEFERRED - PHYSICAL VALIDATION REQUIRED; no identifiers, not allowed by this test" }
   ]
 }

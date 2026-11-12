@@ -216,7 +216,7 @@ fn conflicts_and_invalid_edits_are_reported_with_codes() {
     let err = |r: Request| s.handle(&r, &admin()).unwrap_err().code;
     assert_eq!(
         err(Request::AddManufacturer {
-            input: input("Tübitak Bilgem", None),
+            input: input("Hardware-Encrypted Storage", None),
             allowed: true,
             expected_policy_version: v
         }),
