@@ -928,6 +928,7 @@ fn foreign_altered_and_traversal_restores_are_refused_and_audited() {
         request: Request::PrepareRestore {
             file_name: "..\\..\\Windows\\System32\\config\\SAM".into(),
         },
+        auth_token: None,
     };
     let reply = process(&env, &admin(), &s);
     assert_eq!(reply.result.unwrap_err().code, ErrorCode::InvalidRequest);
@@ -991,6 +992,7 @@ fn refused_privileged_requests_are_audited_and_rate_limited() {
             id: "sandisk".into(),
             expected_policy_version: 1,
         },
+        auth_token: None,
     };
     for _ in 0..(rustward_app::AUTH_AUDIT_LIMIT + 15) {
         assert!(process(&env, &user, &s).result.is_err());

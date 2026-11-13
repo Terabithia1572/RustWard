@@ -9,19 +9,24 @@ members = [
     "crates/rustward-ipc",
     "crates/rustward-app",
     "crates/rustward-service",
+    "crates/rustward-notifier",
     "crates/rustward-ui-bridge",
 ]
 # The Tauri shell is its own workspace (needs WebView2/WebKit system libraries).
 exclude = ["apps/rustward-desktop/src-tauri"]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.90"
 publish = false
 
 # Versions recorded in docs/PHASE-STATUS.md; exact resolution is pinned by Cargo.lock.
 [workspace.dependencies]
+argon2 = { version = "0.5", features = ["std"] }
+getrandom = "0.2"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+subtle = "2.6"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"

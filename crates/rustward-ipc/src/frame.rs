@@ -71,6 +71,7 @@ mod tests {
             request: Request::ListDevices {
                 include_absent: true,
             },
+            auth_token: None,
         };
         let f = encode(&env).unwrap();
         assert_eq!(decode::<RequestEnvelope>(&f).unwrap(), env);

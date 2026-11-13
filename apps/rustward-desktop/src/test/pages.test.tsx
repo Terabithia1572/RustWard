@@ -50,7 +50,7 @@ describe("Dashboard", () => {
 });
 
 describe("Navigation and mandatory warning", () => {
-  it("shows the eight pages in the required order and the not-activated warning", async () => {
+  it("shows the nine pages in the required order and the not-activated warning", async () => {
     setup("dashboard");
     await screen.findByTestId("not-validated-banner");
     const nav = screen.getByRole("navigation");
@@ -66,6 +66,7 @@ describe("Navigation and mandatory warning", () => {
       "Tanılama",
       "Uygulama Hazırlığı",
       "Ayarlar",
+      "Hakkında",
     ]);
     expect(screen.getByTestId("not-activated-warning")).toHaveTextContent(
       "USB koruması henüz etkinleştirilmemiştir.",
@@ -244,7 +245,7 @@ describe("Audit logs", () => {
     await screen.findByText("SENTETİK cihaz reddedilirdi (simülasyon)");
     await user.type(screen.getByLabelText("Ara"), "nomatch");
     await waitFor(() => {
-      const last = [...state.calls].reverse().find((c) => c.type === "list_events");
+      const last = [...state.calls].reverse().find((c) => c.type === "query_audit_events");
       expect(last).toMatchObject({ query: { text: "nomatch", offset: 0 } });
     });
     expect(await screen.findByText("Kayıt yok.")).toBeInTheDocument();

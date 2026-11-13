@@ -19,8 +19,10 @@ thiserror.workspace = true
 # windows-sys is plain extern declarations and builds on every host.
 windows-sys = { workspace = true, features = [
     "Win32_Security",
+    "Win32_Security_Cryptography",
     "Win32_System_EventLog",
     "Win32_System_Services",
+    "Win32_System_RemoteDesktop",
     # Read-only policy inspection (policy_reader.rs): KEY_READ only.
     "Win32_System_Registry",
     "Win32_System_SystemInformation",

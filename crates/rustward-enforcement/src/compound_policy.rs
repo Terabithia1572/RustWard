@@ -437,15 +437,13 @@ fn resolve_brand_hardware_ids(
             }
 
             // Check product display name against brand
-            if !matches {
-                if let Some(prod) = inquiry.product_display() {
-                    let prod_upper = prod.to_ascii_uppercase();
-                    if prod_upper.contains(&brand.display_name.to_ascii_uppercase())
-                        || prod_upper.contains(&brand.id.to_ascii_uppercase())
-                    {
-                        matches = true;
-                        has_lab_verified = true;
-                    }
+            if !matches && let Some(prod) = inquiry.product_display() {
+                let prod_upper = prod.to_ascii_uppercase();
+                if prod_upper.contains(&brand.display_name.to_ascii_uppercase())
+                    || prod_upper.contains(&brand.id.to_ascii_uppercase())
+                {
+                    matches = true;
+                    has_lab_verified = true;
                 }
             }
         }
@@ -920,10 +918,51 @@ pub fn compile_compound_policy(
         .cloned()
         .collect();
 
+    let is_rustward_managed_active = |id: &str| -> bool {
+        if is_generic_storage_id(id) {
+            return true;
+        }
+        let upper = id.trim().to_ascii_uppercase();
+        if upper.starts_with("USBSTOR\\") || upper.starts_with("SCSI\\DISK") {
+            return true;
+        }
+        if manufacturer_views
+            .iter()
+            .any(|m| m.hardware_ids.iter().any(|h| h.eq_ignore_ascii_case(id)))
+        {
+            return true;
+        }
+        if inner_policy
+            .denied_devices
+            .iter()
+            .chain(inner_policy.allowed_devices.iter())
+            .any(|d| d.hardware_id.trim().eq_ignore_ascii_case(id))
+        {
+            return true;
+        }
+        if upper.starts_with("USB\\") {
+            return catalog.catalog().brands.iter().any(|b| {
+                b.identifiers.iter().any(|i| {
+                    let val = i.value.trim().to_ascii_uppercase();
+                    !val.is_empty()
+                        && match i.kind {
+                            rustward_core::catalog::IdentifierKind::UsbVid => {
+                                upper.contains(&format!("VID_{val}"))
+                            }
+                            rustward_core::catalog::IdentifierKind::InquiryVendor => {
+                                val.len() >= 4 && upper.contains(&val)
+                            }
+                        }
+                })
+            });
+        }
+        false
+    };
+
     let removed_denies: Vec<String> = observed
         .active_denies
         .iter()
-        .filter(|id| !deny_list.contains(id))
+        .filter(|id| !deny_list.contains(id) && is_rustward_managed_active(id))
         .cloned()
         .collect();
 

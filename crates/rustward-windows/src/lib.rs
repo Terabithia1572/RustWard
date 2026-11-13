@@ -20,11 +20,13 @@
 #![cfg_attr(not(any(windows, feature = "host-typecheck")), forbid(unsafe_code))]
 
 pub mod devchange;
+pub mod dpapi;
 pub mod engine;
 pub mod eventlog_map;
 pub mod regdecode;
 pub mod svc_control;
 pub mod wide;
+pub mod wts;
 
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]

@@ -108,6 +108,7 @@ impl Rig {
                 version: PROTOCOL_VERSION,
                 request_id: 1,
                 request: r,
+                auth_token: None,
             },
             &who(admin),
             &self.s,

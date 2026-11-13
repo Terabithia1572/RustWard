@@ -191,6 +191,7 @@ impl ServiceRuntime {
                     );
                 }
                 self.failures = 0;
+                let _ = self.app.observe_windows_enforcement();
                 true
             }
             Err(_) => {

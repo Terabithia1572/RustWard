@@ -131,6 +131,18 @@ pub fn text(en: &str) -> String {
                 "Kapsam kararları bekliyor: USB CD/DVD (CDROM sınıfı) ve MTP/PTP (WPD sınıfı) bu planın kapsamında değil.",
             )
         }
+        "Compound Windows Group Policy applied and verified." => {
+            t("Birleşik Windows Grup İlkesi uygulandı ve doğrulandı.")
+        }
+        "Compound Windows Group Policy rolled back." => {
+            t("Birleşik Windows Grup İlkesi geri alındı.")
+        }
+        "Bulk manufacturer update applied successfully." => {
+            t("Toplu üretici güncellemesi başarıyla uygulandı.")
+        }
+        "Device restarted successfully" => {
+            t("Aygıt başarıyla yeniden başlatıldı")
+        }
         _ => String::new(),
     };
     if !out.is_empty() {
@@ -358,6 +370,24 @@ pub fn change(action: &str, brand_id: &str, summary_en: &str, names: Names<'_>) 
                 nth(&q, 1)
             )
         }
+        "bulk_manufacturers_changed" => {
+            if summary_en.contains("manufacturers allowed") || summary_en.contains("allow_all") {
+                format!(
+                    "Toplu işlem ile {} üreticinin tamamı izinli durumuna getirildi.",
+                    nth(&numbers(summary_en), 0)
+                )
+            } else if summary_en.contains("explicitly denied") || summary_en.contains("explicit_deny_all") {
+                format!(
+                    "Toplu işlem ile {} üreticinin tamamı açıkça reddedilenler listesine alındı.",
+                    nth(&numbers(summary_en), 0)
+                )
+            } else {
+                format!(
+                    "Toplu işlem ile {} üreticinin tamamı yapılandırılmamış durumuna getirildi.",
+                    nth(&numbers(summary_en), 0)
+                )
+            }
+        }
         "policy_restored" | "initialize" | "restore" => text(summary_en),
         _ => format!("{UNTRANSLATED}{summary_en}"),
     }
@@ -512,6 +542,95 @@ pub fn event(e: &SecurityEvent, names: Names<'_>) -> String {
                 _ => "neden bilinmiyor",
             }
         ),
+        "usb_deny_not_enforced" => format!(
+            "{}: politika engellemesine rağmen Windows kurulumu henüz engellenmedi; Grup İlkesi uygulanmalı.",
+            s("device_name")
+        ),
+        "compound_enforcement_mutation_started" => {
+            format!(
+                "Birleşik Windows Grup İlkesi {} reddedilen kimlikle uygulanmaya başlandı.",
+                nth(&n, 0)
+            )
+        }
+        "compound_enforcement_applied" => {
+            format!(
+                "Birleşik Windows Grup İlkesi uygulandı: {} etkin engel kuralı.",
+                nth(&n, 0)
+            )
+        }
+        "compound_enforcement_rollback_started" => {
+            "Birleşik Windows Grup İlkesi geri alma işlemi başlatıldı.".into()
+        }
+        "compound_enforcement_rollback_verified" => {
+            format!(
+                "Birleşik Windows Grup İlkesi geri alındı ({} üçüncü taraf engel kuralı kaldı).",
+                nth(&n, 0)
+            )
+        }
+        "startup_reconcile_in_sync" => {
+            "Hizmet başlangıcında onaylı USB politikası Windows Grup İlkesi ile uyumlu doğrulandı.".into()
+        }
+        "startup_reconcile_applied" => {
+            "Hizmet başlangıcında son onaylanan USB politikası Windows Grup İlkesi'ne yeniden uygulandı.".into()
+        }
+        "startup_reconcile_skipped" => {
+            "Başlangıçta otomatik politika eşitlemesi ayar gereği atlandı.".into()
+        }
+        "startup_reconcile_failed" => technical(
+            "Başlangıçta onaylı USB politikası uygulanamadı.",
+            m,
+        ),
+        "admin_initialized" => format!(
+            "İlk RustWard yönetici hesabı \"{}\" oluşturuldu.",
+            s("actor_username")
+        ),
+        "user_created" => format!(
+            "\"{}\" operatör hesabı {} ({}) oluşturuldu.",
+            s("target_username"),
+            by_actor(&s("actor_username")),
+            s("role")
+        ),
+        "user_deleted" => format!(
+            "\"{}\" operatör hesabı {} silindi.",
+            s("target_username"),
+            by_actor(&s("actor_username"))
+        ),
+        "password_changed" => format!(
+            "\"{}\" hesabının parolası değiştirildi.",
+            s("target_username")
+        ),
+        "password_reset_with_recovery" => format!(
+            "\"{}\" hesabının parolası kurtarma anahtarıyla sıfırlandı.",
+            s("target_username")
+        ),
+        "auth_login_succeeded" => format!(
+            "\"{}\" kullanıcısı RustWard oturumu açtı.",
+            s("actor_username")
+        ),
+        "auth_login_failed" => format!(
+            "\"{}\" kullanıcısı için başarısız giriş denemesi kaydedildi.",
+            s("target_username")
+        ),
+        "auth_login_locked" => format!(
+            "Çok sayıda başarısız deneme nedeniyle \"{}\" hesabı geçici olarak kilitlendi.",
+            s("target_username")
+        ),
+        "auth_logout" => format!(
+            "\"{}\" kullanıcısı oturumu kapattı.",
+            s("actor_username")
+        ),
+        "auth_session_locked" => format!(
+            "\"{}\" oturumu kilitlendi.",
+            s("actor_username")
+        ),
+        "auth_exit_authorized" => format!(
+            "Uygulamadan çıkış {} onaylandı.",
+            by_actor(&s("actor_username"))
+        ),
+        "auth_exit_denied" => technical(
+            "Uygulama çıkış doğrulaması başarısız oldu.",
+            m,
+        ),
         k if k.starts_with("enforcement_session_") => crate::guided::event_tr(k, m, d),
         _ => {
             let _ = q;
@@ -591,6 +710,21 @@ pub fn error(e: &IpcError, names: Names<'_>) -> Option<String> {
             "Seçilen cihaz bir USB depolama diski değil; kural yalnızca USB depolama diskleri için oluşturulur.",
         ),
         "device not found in the inventory" => Some("Cihaz envanterde bulunamadı."),
+        "authentication required" => Some("Devam etmek için RustWard oturumu açılmalıdır."),
+        "session is locked; unlock with password" => {
+            Some("Oturum zaman aşımı veya kilitleme nedeniyle kilitli; parolanızla kilidi açın.")
+        }
+        "administrator role required for this operation" => {
+            Some("Bu işlem için uygulama içinde Yönetici rolü gereklidir.")
+        }
+        "initial administrator has already been created" => {
+            Some("İlk yönetici hesabı zaten oluşturulmuş; lütfen giriş yapın.")
+        }
+        "invalid username or password" => Some("Kullanıcı adı veya parola geçersiz."),
+        "recovery key is invalid or not configured for this account" => {
+            Some("Kurtarma anahtarı geçersiz veya bu hesap için tanımlı değil.")
+        }
+        "current password is incorrect" => Some("Mevcut parola doğru değil."),
         _ => None,
     };
     if let Some(t) = exact {

@@ -20,27 +20,70 @@
     windows_subsystem = "windows"
 )]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rustward_ipc::messages::{Request, ResponseBody};
 use rustward_ipc::{ErrorCode, IpcError};
 use rustward_ui_bridge::Bridge;
+use tauri::{Emitter, Manager, WindowEvent};
 
 struct AppState {
     bridge: Arc<Bridge>,
+    session_token: Mutex<Option<String>>,
+    approved_exit_nonce: Mutex<Option<String>>,
 }
 
 /// The single command exposed to the webview.
 #[tauri::command]
-async fn ipc_call(
+async fn ipc_call<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: tauri::State<'_, AppState>,
     request: Request,
 ) -> Result<ResponseBody, IpcError> {
     let bridge = Arc::clone(&state.bridge);
+    let token = state.session_token.lock().ok().and_then(|g| g.clone());
+    let clears_session = matches!(
+        request,
+        Request::Logout | Request::LockSession | Request::ResetPasswordWithRecovery { .. }
+    );
+    let is_verify_exit = matches!(request, Request::VerifyExitAuthorization { .. });
+
     // Pipe I/O and SQLite are blocking; keep them off the async runtime.
-    tauri::async_runtime::spawn_blocking(move || bridge.call(request))
+    let result = tauri::async_runtime::spawn_blocking(move || bridge.call_with_token(request, token))
         .await
-        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("backend worker failed: {e}")))?
+        .map_err(|e| IpcError::new(ErrorCode::Internal, format!("backend worker failed: {e}")))?;
+
+    match &result {
+        Ok(ResponseBody::Login(login)) => {
+            if let Ok(mut guard) = state.session_token.lock() {
+                *guard = Some(login.session_token.clone());
+            }
+        }
+        Ok(ResponseBody::ExitAuthorized(exit)) if exit.authorized && !exit.exit_nonce.is_empty() => {
+            if let Ok(mut guard) = state.approved_exit_nonce.lock() {
+                *guard = Some(exit.exit_nonce.clone());
+            }
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.close();
+            }
+        }
+        Ok(_) if clears_session => {
+            if let Ok(mut guard) = state.session_token.lock() {
+                *guard = None;
+            }
+        }
+        Err(err) if !is_verify_exit && err.code == ErrorCode::Unauthorized => {
+            let lower = err.message.to_ascii_lowercase();
+            if lower.contains("session") || lower.contains("authentication required") {
+                if let Ok(mut guard) = state.session_token.lock() {
+                    *guard = None;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    result
 }
 
 fn context<R: tauri::Runtime>() -> tauri::Context<R> {
@@ -54,6 +97,23 @@ fn with_backend<R: tauri::Runtime>(
     builder
         .manage(AppState {
             bridge: Arc::new(bridge),
+            session_token: Mutex::new(None),
+            approved_exit_nonce: Mutex::new(None),
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let authorized = state
+                    .approved_exit_nonce
+                    .lock()
+                    .ok()
+                    .and_then(|mut g| g.take())
+                    .is_some();
+                if !authorized {
+                    api.prevent_close();
+                    let _ = window.emit("rustward://exit-requested", ());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![ipc_call])
 }
@@ -137,6 +197,16 @@ mod tests {
     #[test]
     fn dashboard_round_trip_reports_unverified_protection() {
         let h = harness("dash");
+        // Unauthenticated requests are blocked while mandatory setup is pending.
+        let unauth = invoke(
+            &h,
+            "ipc_call",
+            json!({ "request": { "type": "get_dashboard" } }),
+        )
+        .unwrap_err();
+        assert_eq!(unauth["code"], "unauthorized");
+
+        setup_admin(&h);
         let v = invoke(
             &h,
             "ipc_call",
@@ -152,9 +222,27 @@ mod tests {
         assert_eq!(v["data"]["service"]["backend"], "dev_backend");
     }
 
+    fn setup_admin(h: &Harness) {
+        let res = invoke(
+            h,
+            "ipc_call",
+            json!({
+                "request": {
+                    "type": "setup_initial_admin",
+                    "username": "secadmin",
+                    "display_name": "Güvenlik Yöneticisi",
+                    "password": "Strong!Admin#2026"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(res["type"], "login");
+    }
+
     #[test]
     fn policy_mutation_persists_and_checks_version() {
         let h = harness("mut");
+        setup_admin(&h);
         let m = invoke(
             &h,
             "ipc_call",
@@ -173,6 +261,57 @@ mod tests {
         assert_eq!(ok["data"]["policy_version"].as_u64(), Some(version + 1));
         let stale = invoke(&h, "ipc_call", req(version)).unwrap_err();
         assert_eq!(stale["code"], "conflict");
+    }
+
+    #[test]
+    fn protected_close_requires_admin_exit_verification() {
+        let h = harness("exit");
+        let setup_missing = invoke(
+            &h,
+            "ipc_call",
+            json!({
+                "request": {
+                    "type": "verify_exit_authorization",
+                    "username": "secadmin",
+                    "password": "Strong!Admin#2026"
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(setup_missing["code"], "unauthorized");
+
+        setup_admin(&h);
+
+        // Wrong password is rejected.
+        let bad_pw = invoke(
+            &h,
+            "ipc_call",
+            json!({
+                "request": {
+                    "type": "verify_exit_authorization",
+                    "username": "secadmin",
+                    "password": "Wrong!Password1"
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(bad_pw["code"], "unauthorized");
+
+        // Correct admin password issues single-use exit authorization.
+        let ok = invoke(
+            &h,
+            "ipc_call",
+            json!({
+                "request": {
+                    "type": "verify_exit_authorization",
+                    "username": "secadmin",
+                    "password": "Strong!Admin#2026"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(ok["type"], "exit_authorized");
+        assert_eq!(ok["data"]["authorized"], true);
     }
 
     #[test]

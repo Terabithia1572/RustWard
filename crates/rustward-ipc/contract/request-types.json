@@ -164,6 +164,78 @@
     {
       "access": "administrator",
       "type": "recover_device"
+    },
+    {
+      "access": "read_only",
+      "type": "get_auth_status"
+    },
+    {
+      "access": "administrator",
+      "type": "setup_initial_admin"
+    },
+    {
+      "access": "read_only",
+      "type": "login"
+    },
+    {
+      "access": "read_only",
+      "type": "logout"
+    },
+    {
+      "access": "read_only",
+      "type": "lock_session"
+    },
+    {
+      "access": "read_only",
+      "type": "heartbeat_session"
+    },
+    {
+      "access": "read_only",
+      "type": "change_password"
+    },
+    {
+      "access": "administrator",
+      "type": "reset_password_with_recovery"
+    },
+    {
+      "access": "administrator",
+      "type": "create_app_user"
+    },
+    {
+      "access": "administrator",
+      "type": "list_app_users"
+    },
+    {
+      "access": "administrator",
+      "type": "delete_app_user"
+    },
+    {
+      "access": "read_only",
+      "type": "verify_exit_authorization"
+    },
+    {
+      "access": "read_only",
+      "type": "preview_bulk_manufacturers"
+    },
+    {
+      "access": "administrator",
+      "type": "apply_bulk_manufacturers"
+    },
+    {
+      "access": "read_only",
+      "type": "get_notification_feed"
+    },
+    {
+      "access": "read_only",
+      "type": "query_audit_events"
+    },
+    {
+      "access": "read_only",
+      "type": "verify_audit_chain"
+    },
+    {
+      "access": "read_only",
+      "type": "get_about_info"
     }
   ]
 }

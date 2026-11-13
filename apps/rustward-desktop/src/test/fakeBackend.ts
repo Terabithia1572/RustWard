@@ -20,6 +20,8 @@ import type {
   SettingsView,
   WindowsProtectionView,
   DeviceAssessment,
+  AuthStatusView,
+  AppUserView,
 } from "../api/types";
 
 export const BANNER_TR = "Koruma henüz gerçek Windows ortamında doğrulanmadı.";
@@ -108,6 +110,16 @@ export interface FakeState {
   observation: EnforcementObservationView;
   /** Guided enforcement session state. */
   session: EnforcementSessionView;
+  /** V1.1 authentication status state. */
+  authStatus: AuthStatusView;
+  /** Optional V1.1 dashboard field overrides. */
+  dashboardOverrides?: Partial<DashboardView>;
+  /** V1.1 local application users. */
+  appUsers: AppUserView[];
+  /** V1.1 retroactive policy toggle state. */
+  retroactive: boolean;
+  /** V1.1 audit chain verification flag. */
+  auditChainValid: boolean;
 }
 
 const LADDER: [LadderStepView["code"], string, string][] = [
@@ -237,7 +249,17 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
   const state: FakeState = {
     version: 3,
     manufacturers: [manufacturer()],
-    settings: { theme: "dark", language: "tr", notifications_enabled: true, audit_retention_days: 365, inventory_refresh_seconds: 30 },
+    settings: {
+      theme: "dark",
+      language: "tr",
+      notifications_enabled: true,
+      audit_retention_days: 365,
+      inventory_refresh_seconds: 30,
+      reconcile_on_startup: true,
+      session_idle_timeout_minutes: 15,
+      notify_on_blocked: true,
+      notify_on_unblocked_warning: true,
+    },
     events: [event()],
     devices: [device(), device({ device_key: "k-allow", simulated_decision: "allow", reason: "brand_allowed", matched_brand: "ExampleX (synthetic)" })],
     workstationId: "PC-TEST",
@@ -270,6 +292,34 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     preparedRestore: null,
     calls: [],
     failNext: null,
+    authStatus: {
+      auth_enforced: false,
+      setup_required: false,
+      authenticated: true,
+      locked: false,
+      current_user: {
+        username: "admin",
+        display_name: "Administrator",
+        role: "admin",
+      },
+      session_expires_at_ms: null,
+      idle_timeout_minutes: 15,
+      lockout_remaining_seconds: null,
+      windows_admin_channel: true,
+    },
+    appUsers: [
+      {
+        username: "admin",
+        display_name: "Administrator",
+        role: "admin",
+        failed_attempts: 0,
+        locked_until_ms: null,
+        created_ms: 1_700_000_000_000,
+        has_recovery_key: true,
+      },
+    ],
+    retroactive: true,
+    auditChainValid: true,
     ...init,
   };
 
@@ -351,6 +401,7 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
     warnings: [],
     synthetic_data_present: true,
     windows_protection: protection(),
+    ...state.dashboardOverrides,
   });
 
   const diagnostics = (): DiagnosticsView => ({
@@ -706,7 +757,10 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
         return { type: "done", data: { message: `${r.type} done` } };
       case "get_compound_policy_plan":
       case "apply_compound_policy":
-      case "rollback_compound_policy":
+      case "rollback_compound_policy": {
+        if (r.type === "apply_compound_policy") {
+          state.retroactive = r.retroactive ?? state.retroactive;
+        }
         return {
           type: "compound_policy_plan",
           data: {
@@ -727,13 +781,13 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
               revision_id: "a1b2c3d4e5f60718",
               deny_hardware_ids: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],
               allow_hardware_ids: ["USBSTOR\\DiskSanDisk_"],
-              retroactive: true,
+              retroactive: state.retroactive,
               fingerprint: "a1b2c3d4e5f60718".repeat(4),
             },
             observed: {
               active_denies: ["USBSTOR\\DiskKingstonDataTraveler_3.0____"],
               active_allows: [],
-              retroactive: true,
+              retroactive: state.retroactive,
               raw_gpo_present: true,
               fingerprint: "a1b2c3d4e5f60718".repeat(4),
             },
@@ -751,6 +805,260 @@ export function fakeBackend(init: Partial<FakeState> = {}): { backend: Backend; 
             ],
             can_apply: true,
             is_applied: true,
+          },
+        };
+      }
+      case "get_auth_status":
+        return { type: "auth_status", data: { ...state.authStatus, idle_timeout_minutes: state.settings.session_idle_timeout_minutes ?? 15 } };
+      case "setup_initial_admin": {
+        const user: AppUserView = {
+          username: r.username,
+          display_name: r.display_name,
+          role: "admin",
+          failed_attempts: 0,
+          locked_until_ms: null,
+          created_ms: Date.now(),
+          has_recovery_key: true,
+        };
+        state.appUsers = [user, ...state.appUsers.filter((u) => u.username !== r.username)];
+        state.authStatus = {
+          ...state.authStatus,
+          auth_enforced: true,
+          setup_required: false,
+          authenticated: true,
+          locked: false,
+          current_user: { username: user.username, display_name: user.display_name, role: user.role },
+          lockout_remaining_seconds: null,
+        };
+        return {
+          type: "login",
+          data: {
+            user: { username: user.username, display_name: user.display_name, role: user.role },
+            session_token: "fake-session-token",
+            expires_at_ms: Date.now() + 900_000,
+            idle_timeout_minutes: state.settings.session_idle_timeout_minutes ?? 15,
+            recovery_key_once: "RWREC-FAKE-1111-2222-3333-4444",
+          },
+        };
+      }
+      case "login": {
+        const found = state.appUsers.find((u) => u.username === r.username);
+        if (!found) throw { code: "unauthorized", message: "invalid credentials" };
+        state.authStatus = {
+          ...state.authStatus,
+          auth_enforced: true,
+          setup_required: false,
+          authenticated: true,
+          locked: false,
+          current_user: { username: found.username, display_name: found.display_name, role: found.role },
+          lockout_remaining_seconds: null,
+        };
+        return {
+          type: "login",
+          data: {
+            user: { username: found.username, display_name: found.display_name, role: found.role },
+            session_token: "fake-session-token",
+            expires_at_ms: Date.now() + 900_000,
+            idle_timeout_minutes: state.settings.session_idle_timeout_minutes ?? 15,
+          },
+        };
+      }
+      case "logout":
+        state.authStatus = { ...state.authStatus, authenticated: false, locked: false, current_user: null };
+        return { type: "auth_status", data: state.authStatus };
+      case "lock_session":
+        state.authStatus = { ...state.authStatus, locked: true };
+        return { type: "auth_status", data: state.authStatus };
+      case "heartbeat_session":
+        return { type: "auth_status", data: state.authStatus };
+      case "change_password":
+        return mutation("password changed");
+      case "reset_password_with_recovery": {
+        const found = state.appUsers.find((u) => u.username === r.username) ?? state.appUsers[0];
+        if (!found) throw { code: "not_found", message: "user not found" };
+        state.authStatus = {
+          ...state.authStatus,
+          authenticated: true,
+          locked: false,
+          setup_required: false,
+          current_user: { username: found.username, display_name: found.display_name, role: found.role },
+          lockout_remaining_seconds: null,
+        };
+        return {
+          type: "recovery_reset",
+          data: {
+            username: found.username,
+            new_recovery_key_once: "RWREC-FAKE-9999-8888-7777-6666",
+            message: "Password reset succeeded.",
+            message_tr: "Parola sıfırlandı.",
+          },
+        };
+      }
+      case "create_app_user": {
+        const created: AppUserView = {
+          username: r.username,
+          display_name: r.display_name,
+          role: r.role,
+          failed_attempts: 0,
+          locked_until_ms: null,
+          created_ms: Date.now(),
+          has_recovery_key: r.role === "admin",
+        };
+        state.appUsers = [...state.appUsers, created];
+        return { type: "app_users", data: state.appUsers };
+      }
+      case "list_app_users":
+        return { type: "app_users", data: state.appUsers };
+      case "delete_app_user":
+        state.appUsers = state.appUsers.filter((u) => u.username !== r.username);
+        return { type: "app_users", data: state.appUsers };
+      case "verify_exit_authorization":
+        return {
+          type: "exit_authorized",
+          data: {
+            authorized: true,
+            authorized_by: r.username || (state.authStatus.current_user?.username ?? "admin"),
+            exit_nonce: "exit-nonce-fake",
+            message_tr: "Çıkış yetkisi doğrulandı.",
+            message_en: "Exit authorization verified.",
+          },
+        };
+      case "preview_bulk_manufacturers": {
+        const allowedCount = state.manufacturers.filter((m) => m.allowed && !m.denied).length;
+        const deniedCount = state.manufacturers.filter((m) => m.denied).length;
+        return {
+          type: "bulk_preview",
+          data: {
+            action: r.action,
+            current_policy_version: state.version,
+            total_manufacturers: state.manufacturers.length,
+            currently_allowed: allowedCount,
+            currently_denied: deniedCount,
+            currently_unconfigured: Math.max(0, state.manufacturers.length - allowedCount - deniedCount),
+            manufacturers_changing: state.manufacturers.length,
+            connected_storage_devices: state.devices.length,
+            connected_likely_blocked: 0,
+            connected_likely_allowed: state.devices.length,
+            compiled_deny_ids_count: deniedCount,
+            compiled_allow_ids_count: allowedCount,
+            preserved_custom_identifiers_count: 0,
+            preserved_device_overrides_count: 0,
+          },
+        };
+      }
+      case "apply_bulk_manufacturers": {
+        checkVersion(r.expected_policy_version);
+        state.retroactive = r.retroactive;
+        let updated = 0;
+        for (const m of state.manufacturers) {
+          updated += 1;
+          if (r.action === "allow_all") {
+            m.enabled = true;
+            m.allowed = true;
+            m.denied = false;
+          } else if (r.action === "explicit_deny_all") {
+            m.enabled = true;
+            m.allowed = false;
+            m.denied = true;
+          } else if (r.action === "unconfigured_all") {
+            m.enabled = false;
+            m.allowed = false;
+            m.denied = false;
+          }
+        }
+        state.version += 1;
+        return {
+          type: "bulk_apply_result",
+          data: {
+            action: r.action,
+            policy_version: state.version,
+            total_manufacturers: state.manufacturers.length,
+            manufacturers_updated: updated,
+            applied_to_windows: r.apply_to_windows,
+            windows_plan: null,
+            windows_apply_result: r.apply_to_windows
+              ? { policy_version: state.version, catalog_version: "test", summary: "Bulk applied", warnings: [] }
+              : null,
+            warnings_tr: [],
+            warnings_en: [],
+          },
+        };
+      }
+      case "get_notification_feed":
+        return {
+          type: "notification_feed",
+          data: {
+            latest_event_id: state.events[0]?.id ?? 0,
+            notifications_enabled: state.settings.notifications_enabled,
+            notify_on_blocked: state.settings.notify_on_blocked ?? true,
+            notify_on_unblocked_warning: state.settings.notify_on_unblocked_warning ?? true,
+            language: state.settings.language,
+            items: [],
+          },
+        };
+      case "query_audit_events": {
+        const q = r.query;
+        const sevRank = (v: string) => (v === "critical" ? 3 : v === "warning" ? 2 : 1);
+        const filtered = state.events.filter((ev) => {
+          if (q.kind && ev.kind !== q.kind) return false;
+          if (q.min_severity && sevRank(ev.severity) < sevRank(q.min_severity)) return false;
+          if (q.text && !`${ev.message} ${ev.message_tr ?? ""} ${ev.kind}`.toLowerCase().includes(q.text.toLowerCase())) return false;
+          if (q.manufacturer_id && ev.manufacturer_id !== q.manufacturer_id) return false;
+          if (q.actor_username && ev.actor_username !== q.actor_username) return false;
+          if (q.windows_user && ev.windows_user !== q.windows_user) return false;
+          if (q.effective_decision && ev.effective_decision !== q.effective_decision) return false;
+          if (q.device_query && !`${ev.vid_pid ?? ""} ${ev.device_name ?? ""} ${ev.message} ${ev.message_tr ?? ""}`.toLowerCase().includes(q.device_query.toLowerCase())) return false;
+          return true;
+        });
+        const limit = q.limit ?? 50;
+        const offset = q.offset ?? 0;
+        return {
+          type: "audit_page",
+          data: {
+            events: filtered.slice(offset, offset + limit),
+            total_count: filtered.length,
+            limit,
+            offset,
+            chain_ok: state.auditChainValid,
+            chain_status: state.auditChainValid ? "intact" : "tampered",
+          },
+        };
+      }
+      case "verify_audit_chain":
+        return {
+          type: "audit_chain_verification",
+          data: {
+            intact: state.auditChainValid,
+            status_code: state.auditChainValid ? "intact" : "hash_mismatch",
+            entries: state.events.length,
+            summary_tr: state.auditChainValid ? "Zincir doğrulandı." : "Zincir bozulmuş.",
+            summary_en: state.auditChainValid ? "Audit chain verified." : "Audit chain broken.",
+            first_bad_id: state.auditChainValid ? null : (state.events[0]?.id ?? null),
+          },
+        };
+      case "get_about_info":
+        return {
+          type: "about_info",
+          data: {
+            app_name: "RustWard",
+            tagline_tr: "Windows Kurumsal USB Erişim Denetim Platformu",
+            tagline_en: "Windows Enterprise USB Access Control Platform",
+            version: "1.1.0",
+            commit_sha: "abc1234",
+            build_timestamp: "2026-11-12T20:00:00Z",
+            author: "Yunus İNAN",
+            repository_url: "https://github.com/Terabithia1572/RustWard",
+            license: "MIT / Apache-2.0",
+            copyright_tr: "© 2026 Yunus İNAN. Tüm hakları saklıdır.",
+            copyright_en: "© 2026 Yunus İNAN. All rights reserved.",
+            architecture_summary_tr: "Tauri + React + LocalSystem SCM + Windows Aygıt Yükleme GPO + Karma Zincirli SQLite",
+            architecture_summary_en: "Tauri + React + LocalSystem SCM + Windows Device Installation GPO + Hash-Chained SQLite",
+            tech_stack: ["Rust", "Tauri", "React", "TypeScript", "SQLite"],
+            verified_environments: ["Windows 10 Pro VMware Guest"],
+            security_limits_tr: ["LocalSystem hizmeti Aygıt Yükleme Kısıtlamalarını uygular"],
+            security_limits_en: ["LocalSystem service enforces Device Installation Restrictions"],
+            acknowledgments_tr: ["Açık kaynak Rust ve React ekosistemi"],
+            third_party_notices: ["MIT", "Apache-2.0"],
           },
         };
     }

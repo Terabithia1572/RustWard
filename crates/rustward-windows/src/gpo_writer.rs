@@ -307,12 +307,39 @@ impl GpoPolicyWriter {
         allow_hardware_ids: &[String],
         retroactive: bool,
     ) -> Result<(), String> {
+        Self::apply_compound_policy_preserving(
+            deny_hardware_ids,
+            allow_hardware_ids,
+            &[],
+            &[],
+            retroactive,
+        )
+    }
+
+    /// Apply a compound multi-device restriction while preserving pre-existing
+    /// non-RustWard third-party `DenyDeviceIDs` / `AllowDeviceIDs` entries.
+    pub fn apply_compound_policy_preserving(
+        deny_hardware_ids: &[String],
+        allow_hardware_ids: &[String],
+        preserved_third_party_denies: &[String],
+        preserved_third_party_allows: &[String],
+        retroactive: bool,
+    ) -> Result<(), String> {
         for hwid in deny_hardware_ids {
             Self::validate_hardware_id(hwid)?;
         }
         for hwid in allow_hardware_ids {
             Self::validate_hardware_id(hwid)?;
         }
+        for entry in preserved_third_party_denies {
+            Self::validate_preserved_entry(entry)?;
+        }
+        for entry in preserved_third_party_allows {
+            Self::validate_preserved_entry(entry)?;
+        }
+
+        let effective_denies = Self::merge_gpo_entries(deny_hardware_ids, preserved_third_party_denies);
+        let effective_allows = Self::merge_gpo_entries(allow_hardware_ids, preserved_third_party_allows);
 
         #[cfg(windows)]
         {
@@ -356,8 +383,8 @@ impl GpoPolicyWriter {
             Self::write_compound_restrictions_hive(
                 h_gpo_root,
                 GPO_RESTRICTIONS_SUBKEY,
-                deny_hardware_ids,
-                allow_hardware_ids,
+                &effective_denies,
+                &effective_allows,
                 retroactive,
             )?;
 
@@ -380,8 +407,8 @@ impl GpoPolicyWriter {
             Self::write_compound_restrictions_hive(
                 HKEY_LOCAL_MACHINE,
                 HKLM_RESTRICTIONS_PATH,
-                deny_hardware_ids,
-                allow_hardware_ids,
+                &effective_denies,
+                &effective_allows,
                 retroactive,
             )?;
 
@@ -393,13 +420,31 @@ impl GpoPolicyWriter {
         }
         #[cfg(not(windows))]
         {
-            let _ = (deny_hardware_ids, allow_hardware_ids, retroactive);
+            let _ = (effective_denies, effective_allows, retroactive);
             Err("Local Group Policy operations require Windows".into())
         }
     }
 
     /// Restore compound policy by removing RustWard-managed restrictions from Local GPO COM API and direct registry.
     pub fn restore_compound_policy() -> Result<(), String> {
+        Self::restore_compound_policy_preserving(&[], &[])
+    }
+
+    /// Restore compound policy by removing RustWard-managed entries while keeping
+    /// pre-existing non-RustWard third-party `DenyDeviceIDs` / `AllowDeviceIDs` entries intact.
+    pub fn restore_compound_policy_preserving(
+        preserved_third_party_denies: &[String],
+        preserved_third_party_allows: &[String],
+    ) -> Result<(), String> {
+        for entry in preserved_third_party_denies {
+            Self::validate_preserved_entry(entry)?;
+        }
+        for entry in preserved_third_party_allows {
+            Self::validate_preserved_entry(entry)?;
+        }
+        let effective_denies = Self::merge_gpo_entries(&[], preserved_third_party_denies);
+        let effective_allows = Self::merge_gpo_entries(&[], preserved_third_party_allows);
+
         #[cfg(windows)]
         {
             Self::ensure_valid_registry_pol();
@@ -427,7 +472,17 @@ impl GpoPolicyWriter {
                     let hr = unsafe { ((*vtbl).GetRegistryKey)(gpo.0.cast::<c_void>(), GPO_SECTION_MACHINE, &mut h_gpo_root) };
                     if hr >= 0 && !h_gpo_root.is_null() {
                         let _gpo_root_guard = KeyGuard(h_gpo_root);
-                        let _ = Self::clean_compound_restrictions_hive(h_gpo_root, GPO_RESTRICTIONS_SUBKEY);
+                        if effective_denies.is_empty() && effective_allows.is_empty() {
+                            let _ = Self::clean_compound_restrictions_hive(h_gpo_root, GPO_RESTRICTIONS_SUBKEY);
+                        } else {
+                            let _ = Self::write_compound_restrictions_hive(
+                                h_gpo_root,
+                                GPO_RESTRICTIONS_SUBKEY,
+                                &effective_denies,
+                                &effective_allows,
+                                false,
+                            );
+                        }
                         // SAFETY: Call Save through valid COM vtable.
                         let _ = unsafe {
                             ((*vtbl).Save)(
@@ -442,8 +497,18 @@ impl GpoPolicyWriter {
                 }
             }
 
-            // Clean direct HKLM registry path
-            let _ = Self::clean_compound_restrictions_hive(HKEY_LOCAL_MACHINE, HKLM_RESTRICTIONS_PATH);
+            // Clean or preserve direct HKLM registry path
+            if effective_denies.is_empty() && effective_allows.is_empty() {
+                let _ = Self::clean_compound_restrictions_hive(HKEY_LOCAL_MACHINE, HKLM_RESTRICTIONS_PATH);
+            } else {
+                Self::write_compound_restrictions_hive(
+                    HKEY_LOCAL_MACHINE,
+                    HKLM_RESTRICTIONS_PATH,
+                    &effective_denies,
+                    &effective_allows,
+                    false,
+                )?;
+            }
 
             // Trigger policy notification and hardware re-scan
             Self::trigger_policy_refresh();
@@ -453,8 +518,38 @@ impl GpoPolicyWriter {
         }
         #[cfg(not(windows))]
         {
+            let _ = (effective_denies, effective_allows);
             Err("Local Group Policy operations require Windows".into())
         }
+    }
+
+    fn validate_preserved_entry(entry: &str) -> Result<(), String> {
+        let s = entry.trim();
+        if s.is_empty() || s.len() > 260 {
+            return Err(format!("preserved GPO entry '{entry}' has invalid length"));
+        }
+        if s.contains('\0') || s.contains('\n') || s.contains('\r') || s.contains('/') {
+            return Err(format!("preserved GPO entry '{entry}' contains forbidden characters"));
+        }
+        Ok(())
+    }
+
+    /// Merges RustWard-managed entries with preserved third-party GPO entries,
+    /// deduplicating case-insensitively while preserving deterministic ordering.
+    #[must_use]
+    pub fn merge_gpo_entries(managed: &[String], third_party: &[String]) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut merged = Vec::with_capacity(managed.len() + third_party.len());
+        for raw in managed.iter().chain(third_party.iter()) {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen.insert(trimmed.to_ascii_uppercase()) {
+                merged.push(trimmed.to_owned());
+            }
+        }
+        merged
     }
 
     fn validate_hardware_id(hwid: &str) -> Result<(), String> {
@@ -861,6 +956,32 @@ mod tests {
         assert!(GpoPolicyWriter::validate_hardware_id("PCI\\VEN_8086&DEV_1234").is_err());
         assert!(GpoPolicyWriter::validate_hardware_id("HID\\VID_046D&PID_C077").is_err());
         assert!(GpoPolicyWriter::validate_hardware_id("ACPI\\PNP0303").is_err());
+    }
+
+    #[test]
+    fn merge_gpo_entries_preserves_third_party_without_duplicates() {
+        let managed = vec![
+            "USBSTOR\\DISKKINGSTON".to_string(),
+            "USBSTOR\\DISKSANDISK_".to_string(),
+        ];
+        let third_party = vec![
+            "usbstor\\diskkingston".to_string(),
+            "PCI\\VEN_10DE&DEV_1234".to_string(),
+            "USB\\VID_CAFE&PID_BABE".to_string(),
+        ];
+        let merged = GpoPolicyWriter::merge_gpo_entries(&managed, &third_party);
+        assert_eq!(
+            merged,
+            vec![
+                "USBSTOR\\DISKKINGSTON",
+                "USBSTOR\\DISKSANDISK_",
+                "PCI\\VEN_10DE&DEV_1234",
+                "USB\\VID_CAFE&PID_BABE",
+            ]
+        );
+        assert!(GpoPolicyWriter::validate_preserved_entry("PCI\\VEN_10DE&DEV_1234").is_ok());
+        assert!(GpoPolicyWriter::validate_preserved_entry("").is_err());
+        assert!(GpoPolicyWriter::validate_preserved_entry("bad\0entry").is_err());
     }
 
     #[test]

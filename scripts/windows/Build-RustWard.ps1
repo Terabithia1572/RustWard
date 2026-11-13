@@ -286,9 +286,24 @@ if ((Invoke-Logged 'npm-ci' $App 'npm ci --no-audit --no-fund') -ne 0) {
     Exit-Build 50 'npm ci başarısız oldu.' 'İnternet bağlantısını ve günlükteki npm hatasını kontrol edin.'
 }
 
+$tauriConf = Get-Content -LiteralPath (Join-Path $Tauri 'tauri.conf.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$ProductVersion = [string]$tauriConf.version
+if (-not $ProductVersion) { $ProductVersion = '1.1.0' }
+$commit = 'unknown'
+try {
+    $shaOut = (& cmd.exe /d /c "git -C `"$Root`" rev-parse HEAD 2>nul") -join ''
+    if ($shaOut) { $commit = $shaOut.Trim() }
+} catch { $null = $_ }
+$env:RUSTWARD_GIT_SHA = $commit
+$env:RUSTWARD_BUILD_TIMESTAMP = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+Write-Info ("Surum: v{0}  RUSTWARD_GIT_SHA={1}  RUSTWARD_BUILD_TIMESTAMP={2}" -f $ProductVersion, $env:RUSTWARD_GIT_SHA, $env:RUSTWARD_BUILD_TIMESTAMP)
+
 # ---------------------------------------------------------------- 3. Release
 if ((Invoke-Logged 'tauri-build-release' $App 'npx tauri build --no-bundle') -ne 0) {
     Exit-Build 60 'Sürüm (release) derlemesi başarısız oldu.' "Günlük: $Logs\tauri-build-release.log"
+}
+if ((Invoke-Logged 'check-offline-assets' $Root 'node scripts/check-offline-assets.mjs') -ne 0) {
+    Exit-Build 63 'Çevrimdışı varlık (offline asset) denetimi başarısız oldu.' "Günlük: $Logs\check-offline-assets.log"
 }
 
 # ---------------------------------------------------------------- 4. Preview
@@ -298,12 +313,13 @@ if (-not $SkipPreview) {
     }
 }
 
-# ---------------------------------------------------------------- 5. Service
-if ((Invoke-Logged 'cargo-build-service' $Root 'cargo build --release --locked -p rustward-service -p rustward-inventory') -ne 0) {
-    Exit-Build 62 'Hizmet (rustward-service) derlemesi başarısız oldu.' "Günlük: $Logs\cargo-build-service.log (rc.exe için Windows SDK gerekir)"
+# ---------------------------------------------------------------- 5. Service & Notifier
+if ((Invoke-Logged 'cargo-build-service' $Root 'cargo build --release --locked -p rustward-service -p rustward-inventory -p rustward-notifier') -ne 0) {
+    Exit-Build 62 'Hizmet (rustward-service) veya bildirim ajanı derlemesi başarısız oldu.' "Günlük: $Logs\cargo-build-service.log (rc.exe için Windows SDK gerekir)"
 }
 $serviceSrc = Join-Path $Root 'target\release\rustward-service.exe'
 $inventorySrc = Join-Path $Root 'target\release\rustward-inventory.exe'
+$notifierSrc = Join-Path $Root 'target\release\rustward-notifier.exe'
 
 # ---------------------------------------------------------------- 6. Verify + copy
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Tauri 'target' }
@@ -313,20 +329,20 @@ if (-not $SkipPreview) {
 }
 $builds += @{ Kind = 'service'; Src = $serviceSrc; Dst = 'service\rustward-service.exe'; Sub = 3 }
 $builds += @{ Kind = 'inventory'; Src = $inventorySrc; Dst = 'service\rustward-inventory.exe'; Sub = 3 }
+$builds += @{ Kind = 'notifier'; Src = $notifierSrc; Dst = 'service\rustward-notifier.exe'; Sub = 2 }
 New-Item -ItemType Directory -Force -Path (Join-Path $Dist 'service') | Out-Null
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $dumpbin = Get-ChildItem -Path (Join-Path $vsPath 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
-$commit = 'bilinmiyor'
-try { $commit = (& cmd.exe /d /c "git -C `"$Root`" rev-parse --short HEAD 2>nul") -join '' } catch { $null = $_ }
 $info = @(
     'RustWard Windows derleme bilgisi'
-    "Tarih: $Stamp   Commit: $commit"
+    "Sürüm: v$ProductVersion   Tarih: $Stamp   Commit: $commit"
+    "Build Timestamp: $($env:RUSTWARD_BUILD_TIMESTAMP)"
     ("Windows: {0} {1} {2}.{3}" -f $cv.ProductName, $cv.DisplayVersion, $cv.CurrentBuild, $cv.UBR)
     ("rustc: " + (($rustcInfo -split "`n")[0]))
     "Node.js: $nodeV   WebView2 Runtime: $wv"
     ''
-    'Yönetici onaylı Windows Grup İlkesi uygulama desteği içeren V1.0.0 derlemesi. Tam USB zorlaması için RustWardService hizmeti ve yönetici yetkisi gerekir.'
+    "Yönetici kimlik doğrulaması, kalıcı onaylı Windows Grup İlkesi uygulama desteği ve masaüstü bildirim ajanı içeren v$ProductVersion derlemesi."
     ''
 )
 foreach ($b in $builds) {
@@ -356,6 +372,7 @@ $info += 'RustWard.exe          : gerçek uygulama; RustWard Windows hizmetine b
 $info += 'RustWard-Onizleme.exe : geliştirme önizlemesi; geçici SQLite veritabanı (%TEMP%\rustward-dev-ui), salt okunur aygıt envanteri, etiketli sentetik veri.'
 $info += 'service\rustward-service.exe : RustWard Windows hizmeti (Olay Günlüğü ileti tablosu gömülü). Yalnızca MSI ile, yalnızca test sanal makinesinde kurun.'
 $info += 'service\rustward-inventory.exe : salt okunur envanter ve politika inceleme aracı.'
+$info += 'service\rustward-notifier.exe : oturum dışı yükseltilmemiş Windows bildirim ajanı (salt okunur durum kanalı).'
 $info += 'Taşınabilirlik doğrulanmadı: WebView2 Runtime gerekir; yukarıdaki DLL listesi dışındaki bağımlılıklar denetlenmedi.'
 $info | Out-File -FilePath (Join-Path $Dist 'BUILD-INFO.txt') -Encoding UTF8
 
@@ -377,13 +394,39 @@ if (-not $SkipPreview) {
 # ---------------------------------------------------------------- 7. Complete MSI
 $msiNote = 'MSI: atlandı (-SkipMsi).'
 $msiOk = $true
+$VersionDist = Join-Path $Dist "v$ProductVersion"
+New-Item -ItemType Directory -Force -Path $VersionDist | Out-Null
+$versionExeName = "RustWard-v$ProductVersion.exe"
+$versionExePath = Join-Path $VersionDist $versionExeName
+Copy-Item -LiteralPath (Join-Path $Dist 'RustWard.exe') -Destination $versionExePath -Force
+
+$versionZipName = "RustWard-v$ProductVersion-Portable.zip"
+$versionZipPath = Join-Path $VersionDist $versionZipName
+if (Test-Path -LiteralPath $versionZipPath) { Remove-Item -LiteralPath $versionZipPath -Force }
+$zipItems = @(
+    (Join-Path $Dist 'RustWard.exe'),
+    (Join-Path $Dist 'START-RUSTWARD.cmd'),
+    (Join-Path $Dist 'BUILD-INFO.txt'),
+    (Join-Path $Dist 'service')
+)
+Compress-Archive -Path $zipItems -DestinationPath $versionZipPath -Force
+
+$checksumLines = @(
+    ("{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $versionExePath).Hash.ToLowerInvariant(), $versionExeName),
+    ("{0}  {1}" -f (Get-FileHash -Algorithm SHA256 -LiteralPath $versionZipPath).Hash.ToLowerInvariant(), $versionZipName)
+)
+
 if (-not $SkipMsi) {
     $msiOk = $false
-    # Read by packaging\wix\rustward-service.wxs as $(env.TAURI_RUSTWARD_SERVICE_EXE).
+    # Read by packaging\wix\rustward-service.wxs as $(env.TAURI_RUSTWARD_SERVICE_EXE) and $(env.TAURI_RUSTWARD_NOTIFIER_EXE).
     $env:TAURI_RUSTWARD_SERVICE_EXE = $serviceSrc
+    $env:TAURI_RUSTWARD_NOTIFIER_EXE = $notifierSrc
     $conf = Join-Path $Root 'packaging\tauri.acceptance.conf.json'
     try { $code = Invoke-Logged 'tauri-build-msi' $App "npx tauri build --bundles msi --config `"$conf`"" }
-    finally { Remove-Item Env:\TAURI_RUSTWARD_SERVICE_EXE -ErrorAction SilentlyContinue }
+    finally {
+        Remove-Item Env:\TAURI_RUSTWARD_SERVICE_EXE -ErrorAction SilentlyContinue
+        Remove-Item Env:\TAURI_RUSTWARD_NOTIFIER_EXE -ErrorAction SilentlyContinue
+    }
     $msi = Get-ChildItem -Path (Join-Path $targetDir 'release\bundle\msi') -Filter *.msi -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($code -eq 0 -and $msi) {
@@ -394,30 +437,41 @@ if (-not $SkipMsi) {
             $files = Get-MsiRow $msi.FullName 'SELECT `FileName`, `FileSize` FROM `File`'
             $ctl = Get-MsiRow $msi.FullName 'SELECT `Name`, `Event` FROM `ServiceControl`'
             $reg = Get-MsiRow $msi.FullName 'SELECT `Key`, `Name` FROM `Registry`'
+            $aumid = @()
+            try { $aumid = Get-MsiRow $msi.FullName 'SELECT `Shortcut_`, `PropertyKey`, `PropVariantValue` FROM `MsiShortcutProperty`' } catch { $null = $_ }
             $hasSvc = @($svc | Where-Object { $_[0] -eq 'RustWardService' -and $_[1] -eq 'LocalSystem' -and $_[2] -eq 'service' }).Count -eq 1
             $hasExe = @($files | Where-Object { $_[0] -like '*rustward-service.exe' }).Count -eq 1
-            $hasApp = @($files | Where-Object { $_[0] -like '*.exe' -and $_[0] -notlike '*rustward-service.exe' }).Count -ge 1
+            $hasNotifierExe = @($files | Where-Object { $_[0] -like '*rustward-notifier.exe' }).Count -eq 1
+            $hasApp = @($files | Where-Object { $_[0] -like '*.exe' -and $_[0] -notlike '*rustward-service.exe' -and $_[0] -notlike '*rustward-notifier.exe' }).Count -ge 1
             $hasCtl = @($ctl | Where-Object { $_[0] -eq 'RustWardService' }).Count -ge 1
             $hasEvt = @($reg | Where-Object { $_[0] -like '*EventLog\Application\RustWard*' }).Count -ge 1
+            $hasNotifierRun = @($reg | Where-Object { $_[0] -like '*CurrentVersion\Run*' -and $_[1] -eq 'RustWardNotifier' }).Count -eq 1
+            $hasAumid = @($aumid | Where-Object { $_[1] -eq 'System.AppUserModel.ID' -and $_[2] -eq 'Terabithia.RustWard.Desktop' }).Count -ge 1
             $acl = @()
             try { $acl = Get-MsiRow $msi.FullName 'SELECT `SDDLText` FROM `MsiLockPermissionsEx`' } catch { $null = $_ }
+            $hasAcl = @($acl | Where-Object { $_[0] -eq 'D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)' }).Count -eq 1
             $checks += "ServiceInstall RustWardService/LocalSystem/'service': $hasSvc"
-            $checks += "File rustward-service.exe: $hasExe; masaüstü uygulaması: $hasApp"
-            $checks += "ServiceControl: $hasCtl; EventLog kaynağı (Registry): $hasEvt"
-            $checks += "MsiLockPermissionsEx (veri klasörü ACL): $(@($acl | ForEach-Object { $_[0] }) -join '; ')"
-            $msiOk = $hasSvc -and $hasExe -and $hasApp -and $hasCtl -and $hasEvt
+            $checks += "File rustward-service.exe: $hasExe; rustward-notifier.exe: $hasNotifierExe; masaüstü uygulaması: $hasApp"
+            $checks += "ServiceControl: $hasCtl; EventLog (Registry): $hasEvt; Notifier Run key: $hasNotifierRun; Start Menu AUMID: $hasAumid"
+            $checks += "MsiLockPermissionsEx (veri klasörü ACL, exact=$hasAcl): $(@($acl | ForEach-Object { $_[0] }) -join '; ')"
+            $msiOk = $hasSvc -and $hasExe -and $hasNotifierExe -and $hasApp -and $hasCtl -and $hasEvt -and $hasNotifierRun -and $hasAumid -and $hasAcl
         }
         catch { $checks += "MSI tabloları okunamadı: $_" }
         foreach ($c in $checks) { Write-Info "  $c" }
         $inst = Join-Path $Dist 'installer'
         New-Item -ItemType Directory -Force -Path $inst | Out-Null
         Copy-Item -LiteralPath $msi.FullName -Destination $inst -Force
-        $mh = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi.FullName).Hash.ToLowerInvariant()
+        $versionMsiName = "RustWard-v$ProductVersion-x64-Setup.msi"
+        $versionMsiPath = Join-Path $VersionDist $versionMsiName
+        Copy-Item -LiteralPath $msi.FullName -Destination $versionMsiPath -Force
+        $mh = (Get-FileHash -Algorithm SHA256 -LiteralPath $versionMsiPath).Hash.ToLowerInvariant()
+        "$mh  $versionMsiName" | Out-File -FilePath "$versionMsiPath.sha256" -Encoding ASCII
+        $checksumLines += "$mh  $versionMsiName"
         if ($msiOk) {
-            $msiNote = "MSI (TAM: uygulama + Windows hizmeti + Olay Günlüğü kaynağı + WebView2; KURULMADI): $inst\$($msi.Name)  boyut $('{0:N0}' -f $msi.Length) bayt  SHA-256 $mh"
+            $msiNote = "MSI (TAM: uygulama + Windows hizmeti + bildirim ajanı + AUMID + Olay Günlüğü kaynağı + WebView2; KURULMADI): $versionMsiPath  boyut $('{0:N0}' -f $msi.Length) bayt  SHA-256 $mh"
         }
         else {
-            $msiNote = "MSI oluşturuldu ancak hizmet bileşeni doğrulanamadı: $inst\$($msi.Name)  SHA-256 $mh"
+            $msiNote = "MSI oluşturuldu ancak bir veya daha fazla bileşen doğrulanamadı: $versionMsiPath  SHA-256 $mh"
         }
         Add-Content -Path (Join-Path $Dist 'BUILD-INFO.txt') -Value ($checks + $msiNote) -Encoding UTF8
     }
@@ -426,6 +480,8 @@ if (-not $SkipMsi) {
         Add-Content -Path (Join-Path $Dist 'BUILD-INFO.txt') -Value $msiNote -Encoding UTF8
     }
 }
+$checksumLines | Out-File -FilePath (Join-Path $VersionDist 'SHA256SUMS.txt') -Encoding ASCII
+Copy-Item -LiteralPath (Join-Path $Dist 'BUILD-INFO.txt') -Destination (Join-Path $VersionDist 'BUILD-INFO.txt') -Force
 Write-Info $msiNote
 
 Write-Host ''
@@ -433,6 +489,8 @@ Write-Host 'TAMAMLANDI.' -ForegroundColor Green
 Write-Info "Uygulama: $Dist\RustWard.exe  (başlatmak için: $Dist\START-RUSTWARD.cmd)"
 if (-not $SkipPreview) { Write-Info "Önizleme: $Dist\RustWard-Onizleme.exe  (başlatmak için: $Dist\START-RUSTWARD-ONIZLEME.cmd)" }
 Write-Info "Hizmet: $Dist\service\rustward-service.exe (kurulmadı)"
+Write-Info "Bildirim Ajanı: $Dist\service\rustward-notifier.exe (kurulmadı)"
+Write-Info "Surum Paketi: $VersionDist"
 Write-Info 'Derleme tamamlandı. Bu makinenin Windows ayarlarında değişiklik yapılmadı.'
 if (-not $msiOk) {
     Write-Host 'UYARI: EXE dosyaları hazır, ancak tam MSI oluşturulamadı veya doğrulanamadı.' -ForegroundColor Yellow

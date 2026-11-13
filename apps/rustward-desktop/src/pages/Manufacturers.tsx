@@ -12,9 +12,9 @@ import {
 } from "lucide-react";
 import type {
   BrandIdentifier,
+  BulkManufacturerAction,
+  BulkManufacturerPreviewView,
   CompoundPolicyPlanView,
-  DeviceView,
-  EnforcementSessionView,
   IdentifierKind,
   ManufacturerInput,
   ManufacturerPolicyView,
@@ -36,7 +36,7 @@ import {
   inputClass,
 } from "../components/ui";
 import { useI18n, type Translate } from "../i18n";
-import { useAction, useApi, useResource } from "../lib/hooks";
+import { useAction, useApi, useAuth, useResource } from "../lib/hooks";
 
 const VERIFICATIONS: Verification[] = ["unverified", "public_registry", "vendor_documented", "lab_verified"];
 
@@ -226,31 +226,38 @@ function Editor({
 function WindowsPolicyPlanSection({
   view,
   plan,
-  sessionView: _sessionView,
-  devices: _devices,
+  retroactive,
+  onRetroactiveChange,
+  readOnly,
   onActionDone,
 }: {
   view: ManufacturersView;
   plan: CompoundPolicyPlanView | null;
-  sessionView: EnforcementSessionView | null;
-  devices: DeviceView[];
+  retroactive: boolean;
+  onRetroactiveChange: (v: boolean) => void;
+  readOnly: boolean;
   onActionDone: (msg: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, pick } = useI18n();
   const api = useApi();
   const action = useAction();
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isApplied = plan?.is_applied ?? false;
   const activeCount = plan?.observed.active_denies.length ?? 0;
-  const isGpoReady = true;
+  const isGpoReady = plan ? !plan.blocker_reason : true;
+  const allowedPlans = (plan?.manufacturers ?? []).filter((m) => m.configured_intention === "allowed");
+  const deniedPlans = (plan?.manufacturers ?? []).filter((m) => m.configured_intention === "explicit_deny");
+  const deniedOverrides = (plan?.device_overrides ?? []).filter((d) => d.denied);
+  const compiledDenySet = new Set(plan?.compiled.deny_hardware_ids ?? []);
+  const thirdPartyDenies = (plan?.diff.retained_denies ?? []).filter((id) => !compiledDenySet.has(id));
 
   const handleApply = async () => {
     const res = await action.run(() =>
       api.applyCompoundPolicy({
-        retroactive: true,
+        retroactive,
         expectedPolicyVersion: view.policy_version,
-      })
+      }),
     );
     if (res) {
       setConfirmOpen(false);
@@ -296,6 +303,7 @@ function WindowsPolicyPlanSection({
             <Button
               variant="danger"
               icon={<Undo2 className="size-4" aria-hidden />}
+              disabled={readOnly || action.busy}
               busy={action.busy}
               onClick={() => void handleRollback()}
             >
@@ -305,7 +313,7 @@ function WindowsPolicyPlanSection({
           <Button
             variant="primary"
             icon={<ShieldAlert className="size-4" aria-hidden />}
-            disabled={action.busy}
+            disabled={readOnly || action.busy || (plan ? !plan.can_apply : false)}
             busy={action.busy}
             onClick={() => setConfirmOpen(true)}
           >
@@ -315,7 +323,13 @@ function WindowsPolicyPlanSection({
       }
     >
       <div className="space-y-4 text-sm" data-testid="windows-policy-plan-section">
-        {/* Policy Translation Matrix */}
+        {plan?.blocker_reason && (
+          <div className="rounded border border-rose-300 bg-rose-50 p-2.5 text-xs text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+            {pick(plan.blocker_reason.en, plan.blocker_reason.tr)}
+          </div>
+        )}
+
+        {/* Dynamic Policy Translation Matrix from live CompoundPolicyPlanView */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {/* Allowed Section */}
           <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3.5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
@@ -323,26 +337,33 @@ function WindowsPolicyPlanSection({
               <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
               <span>{t("manufacturers.plan.allowedTitle")}</span>
             </h4>
-            <ul className="mt-2.5 space-y-2 text-xs">
-              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">SanDisk</span>
-                  <Badge tone="success">İzinli (Allowed)</Badge>
-                </div>
-                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                  Donanım Kimliği: USBSTOR\DiskSanDisk (SCSI INQUIRY)
-                </div>
-              </li>
-              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">{t("manufacturers.plan.encryptedUnverifiedTitle")}</span>
-                  <Badge tone="warning">Kimlik Bekleniyor</Badge>
-                </div>
-                <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
-                  {t("manufacturers.plan.tubitakWarning")}
-                </p>
-              </li>
-            </ul>
+            {allowedPlans.length === 0 ? (
+              <p className="mt-2.5 text-xs text-slate-600 dark:text-slate-400">
+                {t("manufacturers.plan.noAllowedRules")}
+              </p>
+            ) : (
+              <ul className="mt-2.5 space-y-2 text-xs">
+                {allowedPlans.map((m) => (
+                  <li key={m.brand_id} className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{m.display_name}</span>
+                      {m.identity_coverage === "unknown" ? (
+                        <Badge tone="warning">{t("manufacturers.coverage.unknown")}</Badge>
+                      ) : (
+                        <Badge tone="success">{t("manufacturers.intention.allowed")}</Badge>
+                      )}
+                    </div>
+                    {m.hardware_ids.length > 0 ? (
+                      <div className="mt-1 break-all font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                        {m.hardware_ids.join(" · ")}
+                      </div>
+                    ) : m.notes ? (
+                      <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">{m.notes}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           {/* Denied Section */}
@@ -351,37 +372,58 @@ function WindowsPolicyPlanSection({
               <ShieldAlert className="size-4 text-rose-600 dark:text-rose-400" aria-hidden />
               <span>{t("manufacturers.plan.deniedTitle")}</span>
             </h4>
-            <ul className="mt-2.5 space-y-2 text-xs">
-              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">Kingston DataTraveler 3.0</span>
-                  <Badge tone="danger">Açıkça Reddedildi</Badge>
-                </div>
-                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                  DenyDeviceIDs: USBSTOR\DiskKingstonDataTraveler_3.0____ (0951:1666)
-                </div>
-              </li>
-              {plan?.device_overrides && plan.device_overrides.filter((d) => d.denied).map((d) => (
-                <li key={d.hardware_id} className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">{d.label ?? "Cihaz Kuralı"}</span>
-                    <Badge tone="danger">Cihaz Engeli</Badge>
-                  </div>
-                  <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                    {d.hardware_id}
-                  </div>
-                </li>
-              ))}
-              <li className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">Seagate & Diğer Bilinmeyenler</span>
-                  <Badge tone="danger">Reddedildi</Badge>
-                </div>
-                <div className="mt-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                  Onaylı kimliği bulunmayan tüm harici USB depolama birimleri
-                </div>
-              </li>
-            </ul>
+            {deniedPlans.length === 0 && deniedOverrides.length === 0 ? (
+              <p className="mt-2.5 text-xs text-slate-600 dark:text-slate-400">
+                {t("manufacturers.plan.noDeniedRules")}
+              </p>
+            ) : (
+              <ul className="mt-2.5 space-y-2 text-xs">
+                {deniedPlans.map((m) => (
+                  <li key={m.brand_id} className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{m.display_name}</span>
+                      <Badge tone={m.windows_policy === "applied" ? "danger" : "warning"}>
+                        {m.windows_policy === "applied" ? t("manufacturers.policy.applied") : t("manufacturers.denied")}
+                      </Badge>
+                    </div>
+                    {m.hardware_ids.length > 0 && (
+                      <div className="mt-1 break-all font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                        DenyDeviceIDs: {m.hardware_ids.join(" · ")}
+                      </div>
+                    )}
+                  </li>
+                ))}
+                {deniedOverrides.map((d) => (
+                  <li key={d.hardware_id} className="rounded bg-white/80 p-2 shadow-xs dark:bg-slate-900/60">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{d.label ?? "Cihaz Kuralı"}</span>
+                      <Badge tone="danger">Cihaz Kuralı</Badge>
+                    </div>
+                    <div className="mt-1 break-all font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                      {d.hardware_id}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* Interactive Retroactive GPO Switch (replaces hardcoded retroactive=1 UI) */}
+        <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+          <Toggle
+            checked={retroactive}
+            disabled={readOnly || action.busy}
+            label={t("manufacturers.plan.retroactiveToggle")}
+            onChange={onRetroactiveChange}
+          />
+          <div className="text-xs">
+            <div className="font-medium text-slate-800 dark:text-slate-200">
+              {t("manufacturers.plan.retroactiveToggle")}
+            </div>
+            <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+              {t("manufacturers.plan.retroactiveHint")}
+            </p>
           </div>
         </div>
 
@@ -417,6 +459,12 @@ function WindowsPolicyPlanSection({
                 </span>
               ))}
             </div>
+            {thirdPartyDenies.length > 0 && (
+              <div className="mt-2 border-t border-amber-200/80 pt-1.5 text-[11px] dark:border-amber-800">
+                <span className="font-semibold">{t("manufacturers.plan.thirdPartyPreserved", { count: thirdPartyDenies.length })} </span>
+                <span className="font-mono">{thirdPartyDenies.join(", ")}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -446,7 +494,7 @@ function WindowsPolicyPlanSection({
                 {t("manufacturers.plan.confirmBody")}
               </p>
 
-              {/* Additions & Retentions */}
+              {/* Additions, Retentions & Removals */}
               {plan && (
                 <div className="space-y-2 text-xs font-mono">
                   {plan.diff.added_denies.length > 0 && (
@@ -469,12 +517,24 @@ function WindowsPolicyPlanSection({
                       </ul>
                     </div>
                   )}
+                  {plan.diff.removed_denies.length > 0 && (
+                    <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                      <div className="font-semibold">{t("manufacturers.plan.diffRemoved")}:</div>
+                      <ul className="mt-1 list-disc pl-4">
+                        {plan.diff.removed_denies.map((id) => (
+                          <li key={id}>- {id}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
 
               <div className="rounded border border-slate-200 bg-slate-50 p-3 font-mono text-xs dark:border-slate-800 dark:bg-slate-900">
                 <div>Kayıt Defteri: HKLM\Software\Policies\Microsoft\Windows\DeviceInstall\Restrictions\DenyDeviceIDs</div>
-                <div>Geriye Dönük (Retroactive): 1 (Halihazırda bağlı aygıtları derhal engeller)</div>
+                <div>
+                  Geriye Dönük (Retroactive): {retroactive ? "1 (Etkin)" : "0 (Yalnızca yeni kurulumlar)"}
+                </div>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 {t("manufacturers.plan.diskSafetyOk")}
@@ -491,6 +551,7 @@ function ManufacturerCard({
   m,
   mPlan,
   view,
+  readOnly,
   onChanged,
   onEdit,
   onRemove,
@@ -498,6 +559,7 @@ function ManufacturerCard({
   m: ManufacturerView;
   mPlan?: ManufacturerPolicyView | undefined;
   view: ManufacturersView;
+  readOnly: boolean;
   onChanged: (msg: string) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -580,10 +642,10 @@ function ManufacturerCard({
       }
       actions={
         <>
-          <Button variant="ghost" icon={<Pencil className="size-4" aria-hidden />} onClick={onEdit}>
+          <Button variant="ghost" icon={<Pencil className="size-4" aria-hidden />} disabled={readOnly} onClick={onEdit}>
             {t("common.edit")}
           </Button>
-          <Button variant="ghost" icon={<Trash2 className="size-4" aria-hidden />} onClick={onRemove}>
+          <Button variant="ghost" icon={<Trash2 className="size-4" aria-hidden />} disabled={readOnly} onClick={onRemove}>
             {t("common.remove")}
           </Button>
         </>
@@ -595,7 +657,7 @@ function ManufacturerCard({
           <label className="flex items-center gap-2">
             <Toggle
               checked={m.allowed}
-              disabled={action.busy}
+              disabled={readOnly || action.busy}
               label={`${t("manufacturers.allowed")}: ${m.display_name}`}
               onChange={(v) => void toggle(() => api.setAllowed(m.id, v, view.policy_version))}
             />
@@ -604,7 +666,7 @@ function ManufacturerCard({
           <label className="flex items-center gap-2">
             <Toggle
               checked={m.enabled}
-              disabled={action.busy || !m.allowed}
+              disabled={readOnly || action.busy || !m.allowed}
               label={`${t("manufacturers.enabled")}: ${m.display_name}`}
               onChange={(v) => void toggle(() => api.setEnabled(m.id, v, view.policy_version))}
             />
@@ -613,7 +675,7 @@ function ManufacturerCard({
           <label className="flex items-center gap-2">
             <Toggle
               checked={!!m.denied}
-              disabled={action.busy}
+              disabled={readOnly || action.busy}
               label={`${t("manufacturers.denyToggle")}: ${m.display_name}`}
               onChange={(v) => void toggle(() => api.setDenied(m.id, v, view.policy_version))}
             />
@@ -703,26 +765,59 @@ function ManufacturerCard({
 export function ManufacturersPage() {
   const { t, tx, formatTime, pick, pickList } = useI18n();
   const api = useApi();
+  const auth = useAuth();
+  const readOnly = Boolean(auth?.auth_enforced && auth.authenticated && auth.current_user?.role === "read_only");
   const [tick, setTick] = useState(0);
   const r = useResource((a) => a.manufacturers(), `m-${tick}`);
   const history = useResource((a) => a.policyChanges(25), `h-${tick}`);
-  const sessionRes = useResource((a) => a.enforcementSession(), `s-${tick}`);
   const compoundPlanRes = useResource((a) => a.compoundPolicyPlan(), `c-${tick}`);
   const devicesRes = useResource((a) => a.devices(true), `d-${tick}`);
   const [editing, setEditing] = useState<ManufacturerView | "new" | null>(null);
   const [removing, setRemoving] = useState<ManufacturerView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [retroactiveChoice, setRetroactiveChoice] = useState<boolean | null>(null);
+  const [bulkPreview, setBulkPreview] = useState<BulkManufacturerPreviewView | null>(null);
+  const [bulkApplyWindows, setBulkApplyWindows] = useState(false);
   const [filter, setFilter] = useState<"all" | "allowed" | "denied" | "configured" | "connected">("all");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 12;
   const removeAction = useAction();
+  const bulkAction = useAction();
   const changed = (msg: string) => {
     setNotice(msg);
     setTick((n) => n + 1);
   };
   const v = r.data;
   const plan = compoundPlanRes.data ?? null;
+  const retroactive = retroactiveChoice ?? plan?.observed.retroactive ?? true;
+
+  const openBulkPreview = async (action: BulkManufacturerAction) => {
+    setBulkApplyWindows(false);
+    const prev = await bulkAction.run(() => api.previewBulkManufacturers(action));
+    if (prev) setBulkPreview(prev);
+  };
+
+  const confirmBulk = async () => {
+    if (!bulkPreview) return;
+    const res = await bulkAction.run(() =>
+      api.applyBulkManufacturers({
+        action: bulkPreview.action,
+        applyToWindows: bulkApplyWindows,
+        retroactive,
+        expectedPolicyVersion: bulkPreview.current_policy_version,
+      }),
+    );
+    if (res) {
+      setBulkPreview(null);
+      const warns = pickList(res.warnings_en, res.warnings_tr);
+      const summary = t("manufacturers.bulk.applied", {
+        updated: res.manufacturers_updated,
+        version: res.policy_version,
+      });
+      changed(warns.length > 0 ? `${summary} ${warns.join(" ")}` : summary);
+    }
+  };
 
   const connectedVids = useMemo(() => {
     const set = new Set<string>();
@@ -775,7 +870,7 @@ export function ManufacturersPage() {
         title={t("manufacturers.title")}
         subtitle={v ? `${t("common.policyVersion", { version: v.policy_version })} · ${v.catalog_version} · ${t("manufacturers.mode")}: ${tx("manufacturers.mode", plan?.is_applied ? "enforce" : v.mode)}` : undefined}
         actions={
-          <Button variant="primary" icon={<Plus className="size-4" aria-hidden />} disabled={!v} onClick={() => setEditing("new")}>
+          <Button variant="primary" icon={<Plus className="size-4" aria-hidden />} disabled={!v || readOnly} onClick={() => setEditing("new")}>
             {t("manufacturers.add")}
           </Button>
         }
@@ -789,10 +884,41 @@ export function ManufacturersPage() {
         <WindowsPolicyPlanSection
           view={v}
           plan={plan}
-          sessionView={sessionRes.data ?? null}
-          devices={devicesRes.data ?? []}
+          retroactive={retroactive}
+          onRetroactiveChange={setRetroactiveChoice}
+          readOnly={readOnly}
           onActionDone={changed}
         />
+      )}
+
+      {v && (
+        <Card title={t("manufacturers.bulk.title")}>
+          <div className="flex flex-wrap items-center gap-2" data-testid="bulk-manufacturer-actions">
+            <Button
+              disabled={readOnly || bulkAction.busy}
+              busy={bulkAction.busy}
+              onClick={() => void openBulkPreview("allow_all")}
+            >
+              {t("manufacturers.bulk.allowAll")}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={readOnly || bulkAction.busy}
+              busy={bulkAction.busy}
+              onClick={() => void openBulkPreview("explicit_deny_all")}
+            >
+              {t("manufacturers.bulk.denyAll")}
+            </Button>
+            <Button
+              disabled={readOnly || bulkAction.busy}
+              busy={bulkAction.busy}
+              onClick={() => void openBulkPreview("unconfigured_all")}
+            >
+              {t("manufacturers.bulk.unconfiguredAll")}
+            </Button>
+          </div>
+          {bulkAction.error && <div className="mt-2"><ErrorNotice error={bulkAction.error} /></div>}
+        </Card>
       )}
 
       {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
@@ -852,6 +978,7 @@ export function ManufacturersPage() {
                     m={m}
                     mPlan={mPlan}
                     view={v}
+                    readOnly={readOnly}
                     onChanged={changed}
                     onEdit={() => setEditing(m)}
                     onRemove={() => setRemoving(m)}
@@ -945,6 +1072,59 @@ export function ManufacturersPage() {
             >
               <p className="text-sm">{t("manufacturers.confirmRemove", { name: removing.display_name })}</p>
               {removeAction.error && <div className="mt-3"><ErrorNotice error={removeAction.error} /></div>}
+            </Dialog>
+          )}
+          {bulkPreview && (
+            <Dialog
+              open
+              title={t("manufacturers.bulk.previewTitle")}
+              onClose={() => setBulkPreview(null)}
+              footer={
+                <>
+                  <Button onClick={() => setBulkPreview(null)}>{t("common.cancel")}</Button>
+                  <Button
+                    variant={bulkPreview.action === "explicit_deny_all" ? "danger" : "primary"}
+                    busy={bulkAction.busy}
+                    onClick={() => void confirmBulk()}
+                  >
+                    {t("manufacturers.bulk.confirm")}
+                  </Button>
+                </>
+              }
+            >
+              <div className="space-y-3 text-sm" data-testid="bulk-preview-modal">
+                <p>
+                  {t("manufacturers.bulk.changingCount", {
+                    changed: bulkPreview.manufacturers_changing,
+                    total: bulkPreview.total_manufacturers,
+                    allowed: bulkPreview.currently_allowed,
+                    denied: bulkPreview.currently_denied,
+                    unconfigured: bulkPreview.currently_unconfigured,
+                  })}
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  {t("manufacturers.bulk.connectedImpact", {
+                    total: bulkPreview.connected_storage_devices,
+                    blocked: bulkPreview.connected_likely_blocked,
+                    allowed: bulkPreview.connected_likely_allowed,
+                  })}
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {t("manufacturers.bulk.preservedSummary", {
+                    custom: bulkPreview.preserved_custom_identifiers_count,
+                    overrides: bulkPreview.preserved_device_overrides_count,
+                  })}
+                </p>
+                <label className="flex items-center gap-2 rounded border border-slate-200 p-2.5 text-xs dark:border-slate-800">
+                  <Toggle
+                    checked={bulkApplyWindows}
+                    label={t("manufacturers.bulk.applyWindowsToggle")}
+                    onChange={setBulkApplyWindows}
+                  />
+                  <span>{t("manufacturers.bulk.applyWindowsToggle")}</span>
+                </label>
+                {bulkAction.error && <ErrorNotice error={bulkAction.error} />}
+              </div>
             </Dialog>
           )}
         </>

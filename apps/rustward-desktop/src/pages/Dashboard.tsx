@@ -82,6 +82,19 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
   const epoch = useDeviceEpoch();
   const r = useResource((api) => api.dashboard(), `dashboard-${epoch}`);
   const d = r.data;
+  const cat = d?.protection_category;
+  const gpoActive =
+    d?.protection_verified === true ||
+    cat === "protection_active" ||
+    cat === "policy_applied_no_target" ||
+    cat === "protection_partial";
+  const showNotValidatedBanner =
+    !d ||
+    (!d.protection_verified &&
+      cat !== "protection_active" &&
+      cat !== "policy_applied_no_target" &&
+      cat !== "protection_partial" &&
+      (cat === undefined || d.not_validated_banner !== null));
 
   return (
     <div className="space-y-4">
@@ -96,12 +109,59 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
           </>
         }
       />
-      {/* Shown until real enforcement validation succeeds. */}
-      {(!d || !d.protection_verified) && <NotValidatedBanner />}
+      {/* Shown only when real GPO protection is inactive / not validated. */}
+      {showNotValidatedBanner && <NotValidatedBanner />}
       {r.error && <ErrorNotice error={r.error} onRetry={r.reload} />}
       {r.loading && !d && <Loading />}
       {d && (
         <>
+          {d.protection_category && (
+            <section
+              data-testid="protection-category"
+              data-category={d.protection_category}
+              className={`rounded-lg border p-3.5 text-sm ${
+                d.protection_category === "protection_active" || d.protection_category === "policy_applied_no_target"
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100"
+                  : d.protection_category === "protection_partial" || d.protection_category === "pending_apply"
+                    ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+                    : "border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-100"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 font-semibold">
+                  <Badge
+                    tone={
+                      d.protection_category === "protection_active" || d.protection_category === "policy_applied_no_target"
+                        ? "success"
+                        : d.protection_category === "protection_partial" || d.protection_category === "pending_apply"
+                          ? "warning"
+                          : "neutral"
+                    }
+                  >
+                    {t(`dash.cat.${d.protection_category}` as never)}
+                  </Badge>
+                  {d.pending_policy_apply && (
+                    <Badge tone="warning">{t("dash.cat.pending_apply")}</Badge>
+                  )}
+                </div>
+                {d.approved_policy_version != null && (
+                  <span className="font-mono text-xs opacity-80">
+                    Onaylı GPO v{d.approved_policy_version}
+                  </span>
+                )}
+              </div>
+              {(d.protection_detail_tr || d.protection_detail_en) && (
+                <p className="mt-1.5 text-xs">
+                  {pick(d.protection_detail_en ?? "", d.protection_detail_tr)}
+                </p>
+              )}
+              {d.startup_reconcile_status && (
+                <p className="mt-1 font-mono text-[11px] opacity-75">
+                  Açılış mutabakatı: {d.startup_reconcile_status}
+                </p>
+              )}
+            </section>
+          )}
           <ProtectionPanel p={d.windows_protection} />
           {d.windows_protection?.summary && <SummaryTiles s={d.windows_protection.summary} />}
           {d.windows_protection?.blockers && d.windows_protection.blockers.length > 0 && (
@@ -117,10 +177,16 @@ export function DashboardPage({ onNavigate }: { onNavigate: (p: PageId) => void 
               cards readable. */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
             <Stat
-              icon={<FlaskConical className="size-4" aria-hidden />}
-              label={t("prot.simulation")}
+              icon={gpoActive ? <ShieldCheck className="size-4 text-emerald-600" aria-hidden /> : <FlaskConical className="size-4" aria-hidden />}
+              label={gpoActive ? t("dashboard.protection") : t("prot.simulation")}
               value={<span className="text-base">{lang === "tr" ? d.enforcement_label_tr : d.enforcement_label_en}</span>}
-              hint={<span className="text-xs">{t("prot.simulationNote")}</span>}
+              hint={
+                <span className="text-xs">
+                  {gpoActive
+                    ? pick(d.protection_detail_en ?? d.enforcement_label_en, d.protection_detail_tr ?? d.enforcement_label_tr)
+                    : t("prot.simulationNote")}
+                </span>
+              }
             />
             <Stat
               icon={<Server className="size-4" aria-hidden />}

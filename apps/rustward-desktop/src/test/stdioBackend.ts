@@ -45,6 +45,7 @@ export function startRealBackend(
   const pending: Array<{ resolve: (v: ResponseBody) => void; reject: (e: unknown) => void }> = [];
   let stderr = "";
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+  child.stdin.on("error", () => {});
   let closed = false;
   const rl = createInterface({ input: child.stdout });
   rl.on("line", (line) => {

@@ -107,12 +107,19 @@ mod tests {
             WXS.contains("Permanent=\"yes\""),
             "audit data survives uninstall"
         );
-        // Nothing in the fragment touches device-installation policy.
+        // V1.1 notifier startup entry + all-users Start Menu AUMID metadata are allowed;
+        // nothing in the fragment touches DeviceInstall Group Policy.
+        assert!(WXS.contains("Name=\"rustward-notifier.exe\""));
+        assert!(WXS.contains("Source=\"$(env.TAURI_RUSTWARD_NOTIFIER_EXE)\""));
+        assert!(WXS.contains("Key=\"Software\\Microsoft\\Windows\\CurrentVersion\\Run\""));
+        assert!(WXS.contains("Name=\"RustWardNotifier\""));
+        assert!(WXS.contains("System.AppUserModel.ID"));
+        assert!(WXS.contains("Terabithia.RustWard.Desktop"));
+        assert_eq!(WXS.matches("<RegistryValue").count(), 1);
         for forbidden in [
             "DeviceInstall",
             "Restrictions",
             "DenyDeviceClasses",
-            "RegistryValue",
         ] {
             assert!(!WXS.contains(forbidden), "{forbidden}");
         }

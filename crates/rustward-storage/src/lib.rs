@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod migrations;
 pub mod model;
 
@@ -32,9 +33,10 @@ use rustward_core::policy_edit::{ChangeRecord, EditOutcome, PolicyState};
 use sha2::{Digest, Sha256};
 
 pub use model::{
-    AppSettings, AuditCheckpoint, BackupKind, BackupRecord, BackupRejection, ChainStatus,
-    CheckpointCheck, DeviceRow, EventFilter, Language, NewEvent, PolicyChangeRow, RestoreCandidate,
-    SecurityEvent, Severity, Theme,
+    AppSettings, AppUserRecord, ApprovedPolicyRecord, AuditCheckpoint, AuthAttemptOutcome,
+    BackupKind, BackupRecord, BackupRejection, ChainStatus, CheckpointCheck, DeviceRow,
+    EventFilter, EventMetadata, Language, NewEvent, PolicyChangeRow, RestoreCandidate,
+    SecurityEvent, Severity, Theme, UserRole,
 };
 
 /// [`Store::check_checkpoint`] on a database file opened **read-only** (safe
@@ -996,10 +998,18 @@ impl Store {
         }
         let prev = Self::last_hash(conn)?;
         let hash = event_hash(&prev, now, e)?;
+        let meta = EventMetadata::from_details(&e.details);
+        let pnp_problem_code = meta.pnp_problem_code.map(i64::from);
         conn.execute(
-            "INSERT INTO security_events (utc_ms, severity, kind, device_key, message, simulated,
-                 enforcement_state, policy_version, details_json, prev_hash, hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO security_events (
+                 utc_ms, severity, kind, device_key, message, simulated,
+                 enforcement_state, policy_version, details_json, prev_hash, hash,
+                 computer_name, manufacturer_id, device_name, vid_pid, transport,
+                 pnp_problem_code, effective_decision, enforcement_outcome,
+                 actor_username, windows_user, policy_revision
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                     ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 now,
                 e.severity.as_str(),
@@ -1011,7 +1021,18 @@ impl Store {
                 e.policy_version.map(to_i64).transpose()?,
                 serde_json::to_string(&e.details)?,
                 prev,
-                hash
+                hash,
+                meta.computer_name,
+                meta.manufacturer_id,
+                meta.device_name,
+                meta.vid_pid,
+                meta.transport,
+                pnp_problem_code,
+                meta.effective_decision,
+                meta.enforcement_outcome,
+                meta.actor_username,
+                meta.windows_user,
+                meta.policy_revision
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -1029,19 +1050,24 @@ impl Store {
         Ok(id)
     }
 
-    /// Query events, newest first.
-    pub fn list_events(&self, f: &EventFilter) -> Result<Vec<SecurityEvent>, StorageError> {
-        let mut sql = String::from(
-            "SELECT id, utc_ms, severity, kind, device_key, message, simulated, enforcement_state,
-                    policy_version, details_json, prev_hash, hash FROM security_events WHERE 1 = 1",
-        );
+    fn build_event_where(f: &EventFilter) -> (String, Vec<rusqlite::types::Value>) {
+        let mut where_sql = String::from(" WHERE 1 = 1");
         let mut args: Vec<rusqlite::types::Value> = Vec::new();
-        if let Some(t) = f.text.as_deref().filter(|t| !t.is_empty()) {
-            sql.push_str(
-                " AND (instr(lower(message), lower(?)) > 0 OR instr(lower(kind), lower(?)) > 0)",
+        if let Some(t) = f.text.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            where_sql.push_str(
+                " AND (instr(lower(message), lower(?)) > 0
+                  OR instr(lower(kind), lower(?)) > 0
+                  OR instr(lower(COALESCE(device_key, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(manufacturer_id, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(device_name, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(vid_pid, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(actor_username, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(windows_user, '')), lower(?)) > 0
+                  OR instr(lower(details_json), lower(?)) > 0)",
             );
-            args.push(t.to_owned().into());
-            args.push(t.to_owned().into());
+            for _ in 0..9 {
+                args.push(t.to_owned().into());
+            }
         }
         if let Some(s) = f.min_severity {
             let allowed: Vec<&str> = [Severity::Info, Severity::Warning, Severity::Critical]
@@ -1049,33 +1075,96 @@ impl Store {
                 .filter(|x| *x >= s)
                 .map(Severity::as_str)
                 .collect();
-            sql.push_str(&format!(
+            where_sql.push_str(&format!(
                 " AND severity IN ({})",
                 vec!["?"; allowed.len()].join(",")
             ));
             args.extend(allowed.into_iter().map(|a| a.to_owned().into()));
         }
-        if let Some(k) = &f.kind {
-            sql.push_str(" AND kind = ?");
-            args.push(k.clone().into());
+        if let Some(k) = f.kind.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(" AND kind = ?");
+            args.push(k.to_owned().into());
         }
-        if let Some(d) = &f.device_key {
-            sql.push_str(" AND device_key = ?");
-            args.push(d.clone().into());
+        if let Some(d) = f.device_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(" AND device_key = ?");
+            args.push(d.to_owned().into());
         }
         if let Some(s) = f.since_ms {
-            sql.push_str(" AND utc_ms >= ?");
+            where_sql.push_str(" AND utc_ms >= ?");
             args.push(s.into());
         }
         if let Some(u) = f.until_ms {
-            sql.push_str(" AND utc_ms < ?");
+            where_sql.push_str(" AND utc_ms < ?");
             args.push(u.into());
         }
         if let Some(sim) = f.simulated {
-            sql.push_str(" AND simulated = ?");
+            where_sql.push_str(" AND simulated = ?");
             args.push(i64::from(sim).into());
         }
-        sql.push_str(" ORDER BY id DESC LIMIT ? OFFSET ?");
+        if let Some(mfg) = f.manufacturer_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(
+                " AND (lower(COALESCE(manufacturer_id, '')) = lower(?)
+                  OR instr(lower(details_json), lower(?)) > 0)",
+            );
+            args.push(mfg.to_owned().into());
+            args.push(mfg.to_owned().into());
+        }
+        if let Some(dev) = f.device_query.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(
+                " AND (instr(lower(COALESCE(device_key, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(device_name, '')), lower(?)) > 0
+                  OR instr(lower(COALESCE(vid_pid, '')), lower(?)) > 0
+                  OR instr(lower(details_json), lower(?)) > 0)",
+            );
+            for _ in 0..4 {
+                args.push(dev.to_owned().into());
+            }
+        }
+        if let Some(win) = f.windows_user.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(
+                " AND (instr(lower(COALESCE(windows_user, '')), lower(?)) > 0
+                  OR instr(lower(details_json), lower(?)) > 0)",
+            );
+            args.push(win.to_owned().into());
+            args.push(win.to_owned().into());
+        }
+        if let Some(dec) = f.effective_decision.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(
+                " AND (lower(COALESCE(effective_decision, '')) = lower(?)
+                  OR instr(lower(details_json), lower(?)) > 0)",
+            );
+            args.push(dec.to_owned().into());
+            args.push(dec.to_owned().into());
+        }
+        if let Some(actor) = f.actor_username.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            where_sql.push_str(
+                " AND (instr(lower(COALESCE(actor_username, '')), lower(?)) > 0
+                  OR instr(lower(details_json), lower(?)) > 0)",
+            );
+            args.push(actor.to_owned().into());
+            args.push(actor.to_owned().into());
+        }
+        (where_sql, args)
+    }
+
+    /// Count events matching `f` without pagination limit/offset.
+    pub fn count_events(&self, f: &EventFilter) -> Result<u64, StorageError> {
+        let (where_sql, args) = Self::build_event_where(f);
+        let sql = format!("SELECT COUNT(*) FROM security_events{where_sql}");
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(args.iter()), |r| r.get(0))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    /// Query events, newest first.
+    pub fn list_events(&self, f: &EventFilter) -> Result<Vec<SecurityEvent>, StorageError> {
+        let (where_sql, mut args) = Self::build_event_where(f);
+        let sql = format!(
+            "SELECT id, utc_ms, severity, kind, device_key, message, simulated, enforcement_state,
+                    policy_version, details_json, prev_hash, hash
+             FROM security_events{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?"
+        );
         args.push(i64::from(f.limit.unwrap_or(200).min(5000)).into());
         args.push(i64::from(f.offset.unwrap_or(0)).into());
 
@@ -1614,6 +1703,611 @@ impl Store {
         Ok(to)
     }
 
+    // ------------------------------------------------------ approved snapshot
+
+    fn approved_policy_signature(
+        record: &ApprovedPolicyRecord,
+        deny_json: &str,
+        allow_json: &str,
+        third_json: &str,
+    ) -> String {
+        let canonical = [
+            record.policy_version.to_string(),
+            record.revision_id.clone(),
+            record.catalog_version.clone(),
+            deny_json.to_owned(),
+            allow_json.to_owned(),
+            third_json.to_owned(),
+            u8::from(record.retroactive).to_string(),
+            u8::from(record.auto_reconcile).to_string(),
+            record.approved_by.clone(),
+            record.approved_ms.to_string(),
+        ]
+        .join("\u{1f}");
+        sha256_hex(canonical.as_bytes())
+    }
+
+    /// Reads the last explicitly admin-approved Windows USB GPO policy snapshot.
+    pub fn approved_policy(&self) -> Result<Option<ApprovedPolicyRecord>, StorageError> {
+        struct RawApprovedRow {
+            version_i64: i64,
+            revision_id: String,
+            catalog_version: String,
+            deny_json: String,
+            allow_json: String,
+            third_json: String,
+            retroactive: bool,
+            auto_reconcile: bool,
+            approved_by: String,
+            approved_ms: i64,
+            signature: String,
+        }
+        let row: Option<RawApprovedRow> = self
+            .conn
+            .query_row(
+                "SELECT policy_version, revision_id, catalog_version, deny_ids_json,
+                        allow_ids_json, third_party_denies_json, retroactive, auto_reconcile,
+                        approved_by, approved_ms, signature_sha256
+                 FROM approved_compound_policy WHERE id = 1",
+                [],
+                |r| {
+                    Ok(RawApprovedRow {
+                        version_i64: r.get(0)?,
+                        revision_id: r.get(1)?,
+                        catalog_version: r.get(2)?,
+                        deny_json: r.get(3)?,
+                        allow_json: r.get(4)?,
+                        third_json: r.get(5)?,
+                        retroactive: r.get(6)?,
+                        auto_reconcile: r.get(7)?,
+                        approved_by: r.get(8)?,
+                        approved_ms: r.get(9)?,
+                        signature: r.get(10)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(RawApprovedRow {
+            version_i64,
+            revision_id,
+            catalog_version,
+            deny_json,
+            allow_json,
+            third_json,
+            retroactive,
+            auto_reconcile,
+            approved_by,
+            approved_ms,
+            signature,
+        }) = row
+        else {
+            return Ok(None);
+        };
+        let policy_version = u64::try_from(version_i64)
+            .map_err(|_| StorageError::Invalid("approved policy version negative".into()))?;
+        let record = ApprovedPolicyRecord {
+            policy_version,
+            revision_id,
+            catalog_version,
+            deny_ids: serde_json::from_str(&deny_json)?,
+            allow_ids: serde_json::from_str(&allow_json)?,
+            third_party_denies: serde_json::from_str(&third_json)?,
+            retroactive,
+            auto_reconcile,
+            approved_by,
+            approved_ms,
+        };
+        let expected_sig =
+            Self::approved_policy_signature(&record, &deny_json, &allow_json, &third_json);
+        if !auth::constant_time_str_eq(&signature, &expected_sig) {
+            return Err(StorageError::Invalid(
+                "approved Windows policy snapshot failed integrity verification".into(),
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    /// Atomically stores the latest admin-approved Windows USB GPO policy snapshot.
+    pub fn save_approved_policy(
+        &mut self,
+        record: &ApprovedPolicyRecord,
+    ) -> Result<(), StorageError> {
+        let deny_json = serde_json::to_string(&record.deny_ids)?;
+        let allow_json = serde_json::to_string(&record.allow_ids)?;
+        let third_json = serde_json::to_string(&record.third_party_denies)?;
+        let signature =
+            Self::approved_policy_signature(record, &deny_json, &allow_json, &third_json);
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO approved_compound_policy (
+                 id, policy_version, revision_id, catalog_version, deny_ids_json,
+                 allow_ids_json, third_party_denies_json, retroactive, auto_reconcile,
+                 approved_by, approved_ms, signature_sha256
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                 policy_version = excluded.policy_version,
+                 revision_id = excluded.revision_id,
+                 catalog_version = excluded.catalog_version,
+                 deny_ids_json = excluded.deny_ids_json,
+                 allow_ids_json = excluded.allow_ids_json,
+                 third_party_denies_json = excluded.third_party_denies_json,
+                 retroactive = excluded.retroactive,
+                 auto_reconcile = excluded.auto_reconcile,
+                 approved_by = excluded.approved_by,
+                 approved_ms = excluded.approved_ms,
+                 signature_sha256 = excluded.signature_sha256",
+            params![
+                to_i64(record.policy_version)?,
+                record.revision_id,
+                record.catalog_version,
+                deny_json,
+                allow_json,
+                third_json,
+                record.retroactive,
+                record.auto_reconcile,
+                record.approved_by,
+                record.approved_ms,
+                signature,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clears the persisted approved Windows policy snapshot (called on intentional GPO rollback).
+    pub fn clear_approved_policy(&mut self) -> Result<(), StorageError> {
+        self.conn
+            .execute("DELETE FROM approved_compound_policy WHERE id = 1", [])?;
+        Ok(())
+    }
+
+    // --------------------------------------------------------- operator auth
+
+    /// Returns `true` once initial administrator setup has created at least one user.
+    pub fn has_any_users(&self) -> Result<bool, StorageError> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0))?;
+        Ok(count > 0)
+    }
+
+    /// Lists all configured RustWard operator accounts without secret hashes.
+    pub fn list_app_users(&self) -> Result<Vec<AppUserRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, username, display_name, role, failed_attempts, locked_until_ms,
+                    created_ms, updated_ms, recovery_hash_sealed
+             FROM app_users ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], user_from_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Creates the mandatory first administrator account only when `app_users` is empty.
+    pub fn create_initial_admin(
+        &mut self,
+        username: &str,
+        display_name: &str,
+        password_hash: &str,
+        recovery_hash_sealed: &str,
+    ) -> Result<AppUserRecord, StorageError> {
+        let username = auth::validate_username(username).map_err(StorageError::Invalid)?;
+        let display_name = display_name.trim();
+        if display_name.is_empty() || display_name.chars().count() > 80 {
+            return Err(StorageError::Invalid(
+                "display name must be 1 to 80 characters".into(),
+            ));
+        }
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: i64 = tx.query_row("SELECT COUNT(*) FROM app_users", [], |r| r.get(0))?;
+        if existing > 0 {
+            return Err(StorageError::Invalid(
+                "initial administrator has already been created".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO app_users (
+                 username, display_name, role, password_hash, recovery_hash_sealed,
+                 failed_attempts, locked_until_ms, created_ms, updated_ms
+             ) VALUES (?1, ?2, 'admin', ?3, ?4, 0, NULL, ?5, ?5)",
+            params![username, display_name, password_hash, recovery_hash_sealed, now],
+        )?;
+        let id = tx.last_insert_rowid();
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Info,
+                kind: "admin_initialized".into(),
+                device_key: None,
+                message: format!("initial RustWard administrator account '{username}' initialized"),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "actor_username": username,
+                    "role": "admin",
+                }),
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(AppUserRecord {
+            id,
+            username,
+            display_name: display_name.to_owned(),
+            role: UserRole::Admin,
+            failed_attempts: 0,
+            locked_until_ms: None,
+            created_ms: now,
+            updated_ms: now,
+            has_recovery_key: true,
+        })
+    }
+
+    /// Creates an additional operator user (`admin` or `read_only`) and records an audit event.
+    pub fn create_app_user(
+        &mut self,
+        username: &str,
+        display_name: &str,
+        role: UserRole,
+        password_hash: &str,
+        recovery_hash_sealed: Option<&str>,
+        actor: &str,
+    ) -> Result<AppUserRecord, StorageError> {
+        let username = auth::validate_username(username).map_err(StorageError::Invalid)?;
+        let display_name = display_name.trim();
+        if display_name.is_empty() || display_name.chars().count() > 80 {
+            return Err(StorageError::Invalid(
+                "display name must be 1 to 80 characters".into(),
+            ));
+        }
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let dup: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM app_users WHERE lower(username) = lower(?1)",
+            params![username],
+            |r| r.get(0),
+        )?;
+        if dup > 0 {
+            return Err(StorageError::Invalid(format!(
+                "user '{username}' already exists"
+            )));
+        }
+        tx.execute(
+            "INSERT INTO app_users (
+                 username, display_name, role, password_hash, recovery_hash_sealed,
+                 failed_attempts, locked_until_ms, created_ms, updated_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, ?6, ?6)",
+            params![
+                username,
+                display_name,
+                role.as_str(),
+                password_hash,
+                recovery_hash_sealed,
+                now
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Info,
+                kind: "user_created".into(),
+                device_key: None,
+                message: format!(
+                    "operator account '{username}' (role={}) created by {actor}",
+                    role.as_str()
+                ),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "actor_username": actor,
+                    "target_username": username,
+                    "role": role.as_str(),
+                }),
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(AppUserRecord {
+            id,
+            username,
+            display_name: display_name.to_owned(),
+            role,
+            failed_attempts: 0,
+            locked_until_ms: None,
+            created_ms: now,
+            updated_ms: now,
+            has_recovery_key: recovery_hash_sealed.is_some(),
+        })
+    }
+
+    /// Removes an operator account, refusing to delete the last remaining `admin`.
+    pub fn delete_app_user(&mut self, username: &str, actor: &str) -> Result<(), StorageError> {
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(i64, String, String)> = tx
+            .query_row(
+                "SELECT id, username, role FROM app_users WHERE lower(username) = lower(?1)",
+                params![username.trim()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((id, canonical_username, role_str)) = row else {
+            return Err(StorageError::Invalid(format!(
+                "user '{}' not found",
+                username.trim()
+            )));
+        };
+        if role_str == UserRole::Admin.as_str() {
+            let admin_count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM app_users WHERE role = 'admin'",
+                [],
+                |r| r.get(0),
+            )?;
+            if admin_count <= 1 {
+                return Err(StorageError::Invalid(
+                    "cannot delete the last remaining administrator account".into(),
+                ));
+            }
+        }
+        tx.execute("DELETE FROM app_users WHERE id = ?1", params![id])?;
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: Severity::Warning,
+                kind: "user_deleted".into(),
+                device_key: None,
+                message: format!(
+                    "operator account '{canonical_username}' (role={role_str}) deleted by {actor}"
+                ),
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "actor_username": actor,
+                    "target_username": canonical_username,
+                    "role": role_str,
+                }),
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(())
+    }
+
+    /// Verifies `username` + `password` using Argon2id and enforces per-account rate limiting.
+    pub fn authenticate_user(
+        &mut self,
+        username: &str,
+        password: &str,
+        max_failures: u32,
+        lockout_ms: i64,
+    ) -> Result<AuthAttemptOutcome, StorageError> {
+        const DUMMY_PHC: &str =
+            "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let candidate_user = username.trim();
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        #[allow(clippy::type_complexity)]
+        let row: Option<(
+            i64,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            Option<i64>,
+            i64,
+            i64,
+        )> = tx
+            .query_row(
+                "SELECT id, username, display_name, role, password_hash, recovery_hash_sealed,
+                        failed_attempts, locked_until_ms, created_ms, updated_ms
+                 FROM app_users WHERE lower(username) = lower(?1)",
+                params![candidate_user],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            id,
+            canonical_user,
+            display_name,
+            role_str,
+            stored_hash,
+            recovery_sealed,
+            prev_failures_i64,
+            locked_until_ms,
+            created_ms,
+            _updated_ms,
+        )) = row
+        else {
+            let _ = auth::verify_secret(password, DUMMY_PHC);
+            return Ok(AuthAttemptOutcome::InvalidCredentials {
+                username: candidate_user.to_owned(),
+                failed_attempts: 0,
+                now_locked_until_ms: None,
+            });
+        };
+        let prev_failures = u32::try_from(prev_failures_i64).unwrap_or(0);
+        if let Some(until) = locked_until_ms
+            && now < until
+        {
+            return Ok(AuthAttemptOutcome::Locked {
+                username: canonical_user,
+                locked_until_ms: until,
+                failed_attempts: prev_failures,
+            });
+        }
+        let valid = auth::verify_secret(password, &stored_hash);
+        if valid {
+            tx.execute(
+                "UPDATE app_users SET failed_attempts = 0, locked_until_ms = NULL, updated_ms = ?2 WHERE id = ?1",
+                params![id, now],
+            )?;
+            tx.commit()?;
+            let role = UserRole::parse(&role_str)
+                .ok_or_else(|| StorageError::Invalid(format!("invalid user role '{role_str}'")))?;
+            return Ok(AuthAttemptOutcome::Success(AppUserRecord {
+                id,
+                username: canonical_user,
+                display_name,
+                role,
+                failed_attempts: 0,
+                locked_until_ms: None,
+                created_ms,
+                updated_ms: now,
+                has_recovery_key: recovery_sealed.is_some(),
+            }));
+        }
+        let next_failures = if locked_until_ms.is_some_and(|until| now >= until) {
+            1
+        } else {
+            prev_failures.saturating_add(1)
+        };
+        let new_lock_until = if next_failures >= max_failures {
+            Some(now.saturating_add(lockout_ms))
+        } else {
+            None
+        };
+        tx.execute(
+            "UPDATE app_users SET failed_attempts = ?2, locked_until_ms = ?3, updated_ms = ?4 WHERE id = ?1",
+            params![id, i64::from(next_failures), new_lock_until, now],
+        )?;
+        tx.commit()?;
+        Ok(AuthAttemptOutcome::InvalidCredentials {
+            username: canonical_user,
+            failed_attempts: next_failures,
+            now_locked_until_ms: new_lock_until,
+        })
+    }
+
+    /// Reads the stored sealed recovery envelope and role for `username`.
+    pub fn get_recovery_sealed(
+        &self,
+        username: &str,
+    ) -> Result<Option<(String, UserRole, Option<String>)>, StorageError> {
+        let row: Option<(String, String, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT username, role, recovery_hash_sealed FROM app_users WHERE lower(username) = lower(?1)",
+                params![username.trim()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        match row {
+            Some((u, role_str, sealed)) => {
+                let role = UserRole::parse(&role_str).ok_or_else(|| {
+                    StorageError::Invalid(format!("invalid user role '{role_str}'"))
+                })?;
+                Ok(Some((u, role, sealed)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Updates a user's `Argon2id` password hash (and optionally replaces the sealed recovery envelope).
+    pub fn update_user_password(
+        &mut self,
+        username: &str,
+        new_password_hash: &str,
+        new_recovery_sealed: Option<&str>,
+        via_recovery: bool,
+        actor: &str,
+    ) -> Result<(), StorageError> {
+        let now = self.clock.now_ms();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let canonical: Option<String> = tx
+            .query_row(
+                "SELECT username FROM app_users WHERE lower(username) = lower(?1)",
+                params![username.trim()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(canonical_user) = canonical else {
+            return Err(StorageError::Invalid(format!(
+                "user '{}' not found",
+                username.trim()
+            )));
+        };
+        tx.execute(
+            "UPDATE app_users
+             SET password_hash = ?2,
+                 recovery_hash_sealed = COALESCE(?3, recovery_hash_sealed),
+                 failed_attempts = 0,
+                 locked_until_ms = NULL,
+                 updated_ms = ?4
+             WHERE lower(username) = lower(?1)",
+            params![canonical_user, new_password_hash, new_recovery_sealed, now],
+        )?;
+        let kind = if via_recovery {
+            "password_reset_with_recovery"
+        } else {
+            "password_changed"
+        };
+        let msg = if via_recovery {
+            format!("password reset via recovery key for '{canonical_user}' by {actor}")
+        } else {
+            format!("password changed for '{canonical_user}' by {actor}")
+        };
+        Self::append_event_tx(
+            &tx,
+            now,
+            &NewEvent {
+                severity: if via_recovery {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                },
+                kind: kind.into(),
+                device_key: None,
+                message: msg,
+                simulated: false,
+                enforcement_state: "n/a".into(),
+                policy_version: None,
+                details: serde_json::json!({
+                    "actor_username": actor,
+                    "target_username": canonical_user,
+                    "via_recovery": via_recovery,
+                    "recovery_rotated": new_recovery_sealed.is_some(),
+                }),
+            },
+        )?;
+        tx.commit()?;
+        self.mirror_new_events();
+        Ok(())
+    }
+
     /// Raw connection for tests of corruption handling.
     #[doc(hidden)]
     pub fn connection_for_tests(&self) -> &Connection {
@@ -1639,6 +2333,24 @@ fn event_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SecurityEvent> {
         details: serde_json::from_str(&details).unwrap_or(serde_json::Value::Null),
         prev_hash: r.get(10)?,
         hash: r.get(11)?,
+    })
+}
+
+fn user_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppUserRecord> {
+    let role_str: String = r.get(3)?;
+    let role = UserRole::parse(&role_str).unwrap_or(UserRole::ReadOnly);
+    let failed_i64: i64 = r.get(4)?;
+    let recovery_sealed: Option<String> = r.get(8)?;
+    Ok(AppUserRecord {
+        id: r.get(0)?,
+        username: r.get(1)?,
+        display_name: r.get(2)?,
+        role,
+        failed_attempts: u32::try_from(failed_i64).unwrap_or(0),
+        locked_until_ms: r.get(5)?,
+        created_ms: r.get(6)?,
+        updated_ms: r.get(7)?,
+        has_recovery_key: recovery_sealed.is_some(),
     })
 }
 

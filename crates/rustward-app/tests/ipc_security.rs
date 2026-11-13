@@ -146,6 +146,7 @@ fn privileged_samples(version: u64) -> Vec<Request> {
                 notifications_enabled: false,
                 audit_retention_days: 30,
                 inventory_refresh_seconds: 3600,
+                ..SettingsView::default()
             },
         },
         Request::ExportEvents {
@@ -185,6 +186,32 @@ fn privileged_samples(version: u64) -> Vec<Request> {
         Request::RecoverDevice {
             device_key: "0123456789abcdef0123456789abcdef".into(),
         },
+        Request::SetupInitialAdmin {
+            username: "admin1".into(),
+            display_name: "Admin One".into(),
+            password: "ValidPass!2026".into(),
+        },
+        Request::ResetPasswordWithRecovery {
+            username: "admin1".into(),
+            recovery_key: "RWREC-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF".into(),
+            new_password: "ValidPass!2026".into(),
+        },
+        Request::CreateAppUser {
+            username: "op1".into(),
+            display_name: "Op One".into(),
+            role: "read_only".into(),
+            password: "ValidPass!2026".into(),
+        },
+        Request::ListAppUsers,
+        Request::DeleteAppUser {
+            username: "op1".into(),
+        },
+        Request::ApplyBulkManufacturers {
+            action: rustward_core::policy_edit::BulkManufacturerAction::AllowAll,
+            apply_to_windows: false,
+            retroactive: true,
+            expected_policy_version: version,
+        },
     ];
     for r in &all {
         assert_eq!(r.access_level(), AccessLevel::Administrator, "{}", r.name());
@@ -214,7 +241,13 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::RestoreDevicePolicy { .. }
             | Request::ApplyCompoundPolicy { .. }
             | Request::RollbackCompoundPolicy
-            | Request::RecoverDevice { .. } => {}
+            | Request::RecoverDevice { .. }
+            | Request::SetupInitialAdmin { .. }
+            | Request::ResetPasswordWithRecovery { .. }
+            | Request::CreateAppUser { .. }
+            | Request::ListAppUsers
+            | Request::DeleteAppUser { .. }
+            | Request::ApplyBulkManufacturers { .. } => {}
             Request::GetDashboard
             | Request::ListDevices { .. }
             | Request::ListManufacturers
@@ -229,7 +262,19 @@ fn privileged_samples(version: u64) -> Vec<Request> {
             | Request::GetEnforcementSession
             | Request::GetSettings
             | Request::RunSimulation
-            | Request::GetCompoundPolicyPlan => unreachable!("read-only request in privileged list"),
+            | Request::GetCompoundPolicyPlan
+            | Request::GetAuthStatus
+            | Request::Login { .. }
+            | Request::Logout
+            | Request::LockSession
+            | Request::HeartbeatSession
+            | Request::ChangePassword { .. }
+            | Request::VerifyExitAuthorization { .. }
+            | Request::PreviewBulkManufacturers { .. }
+            | Request::GetNotificationFeed { .. }
+            | Request::QueryAuditEvents { .. }
+            | Request::VerifyAuditChain
+            | Request::GetAboutInfo => unreachable!("read-only request in privileged list"),
         }
     }
     all
@@ -357,6 +402,7 @@ fn no_privileged_request_succeeds_without_an_elevated_administrator_on_the_admin
                 version: PROTOCOL_VERSION,
                 request_id: attempts,
                 request,
+                auth_token: None,
             };
             let reply = process(&env, caller, &s);
             let err = reply.result.unwrap_err();
@@ -413,6 +459,7 @@ fn read_only_requests_work_for_standard_users_and_change_nothing() {
             version: PROTOCOL_VERSION,
             request_id: 1,
             request: r,
+            auth_token: None,
         };
         assert!(
             process(&env, &user, &s).result.is_ok(),
@@ -452,6 +499,7 @@ fn replayed_policy_mutations_are_rejected_by_version_checks() {
             version: PROTOCOL_VERSION,
             request_id: 5,
             request: r,
+            auth_token: None,
         };
         let first = process(&env, &admin(), &s);
         let replay = process(&env, &admin(), &s);
@@ -497,6 +545,7 @@ fn interrupted_connection_applies_a_mutation_at_most_once() {
         version: PROTOCOL_VERSION,
         request_id: 1,
         request: request.clone(),
+        auth_token: None,
     })
     .unwrap();
     rustward_ipc::transport::Transport::send(&mut client_end, &frame).unwrap();
@@ -545,6 +594,7 @@ fn duplicate_non_versioned_admin_requests_are_harmless_and_audited() {
         notifications_enabled: true,
         audit_retention_days: 365,
         inventory_refresh_seconds: 30,
+        ..SettingsView::default()
     };
     for _ in 0..2 {
         s.handle(
@@ -578,6 +628,7 @@ fn malformed_and_unsupported_envelopes_are_refused_without_side_effects() {
             id: "sandisk".into(),
             expected_policy_version: before.policy_version,
         },
+        auth_token: None,
     };
     assert_eq!(
         process(&env, &admin(), &s).result.unwrap_err().code,
@@ -601,6 +652,7 @@ fn malformed_and_unsupported_envelopes_are_refused_without_side_effects() {
             version: PROTOCOL_VERSION,
             request_id: 2,
             request: bad,
+            auth_token: None,
         };
         assert_eq!(
             process(&env, &admin(), &s).result.unwrap_err().code,

@@ -12,6 +12,7 @@ rustward-storage.workspace = true
 rustward-ipc.workspace = true
 rustward-enforcement.workspace = true
 rustward-windows.workspace = true
+zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

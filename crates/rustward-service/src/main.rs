@@ -159,7 +159,8 @@ pub(crate) fn build_runtime(
             },
             &default_policy_state()?,
         )
-        .map_err(|e| e.to_string())?,
+        .map_err(|e| e.to_string())?
+        .with_app_auth(true),
     );
     Ok((ServiceRuntime::new(Arc::clone(&app), clock), app))
 }

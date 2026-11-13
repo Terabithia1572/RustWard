@@ -25,6 +25,16 @@ pub trait Handler {
         identity: &ClientIdentity,
     ) -> Result<ResponseBody, IpcError>;
 
+    /// Process one request alongside an optional application session token from [`RequestEnvelope::auth_token`].
+    fn handle_with_token(
+        &self,
+        request: &Request,
+        identity: &ClientIdentity,
+        _auth_token: Option<&str>,
+    ) -> Result<ResponseBody, IpcError> {
+        self.handle(request, identity)
+    }
+
     /// Called when a request is refused by authorization (before `handle`),
     /// so the server can audit the attempt. Must not fail or block for long.
     fn authorization_failed(
@@ -97,6 +107,7 @@ pub struct Client<T: Transport> {
     transport: T,
     next_id: u64,
     timeout: Duration,
+    auth_token: Option<String>,
 }
 
 impl<T: Transport> Client<T> {
@@ -106,17 +117,34 @@ impl<T: Transport> Client<T> {
             transport,
             next_id: 1,
             timeout,
+            auth_token: None,
         }
+    }
+
+    /// Sets or clears the opaque session token attached to subsequent requests.
+    pub fn set_auth_token(&mut self, token: Option<String>) {
+        self.auth_token = token;
     }
 
     /// Send a request and wait for its response.
     pub fn call(&mut self, request: Request) -> Result<ResponseBody, ClientError> {
+        let token = self.auth_token.clone();
+        self.call_with_token(request, token)
+    }
+
+    /// Send a request with an explicit `auth_token` and wait for its response.
+    pub fn call_with_token(
+        &mut self,
+        request: Request,
+        auth_token: Option<String>,
+    ) -> Result<ResponseBody, ClientError> {
         let request_id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
         let frame = frame::encode(&RequestEnvelope {
             version: PROTOCOL_VERSION,
             request_id,
             request,
+            auth_token,
         })?;
         self.transport.send(&frame)?;
         let reply = self.transport.recv(self.timeout)?;
@@ -152,7 +180,9 @@ pub fn process(
                     handler.authorization_failed(&env.request, identity, e);
                 })
             })
-            .and_then(|()| handler.handle(&env.request, identity))
+            .and_then(|()| {
+                handler.handle_with_token(&env.request, identity, env.auth_token.as_deref())
+            })
     } else {
         Err(IpcError::new(
             ErrorCode::VersionMismatch,

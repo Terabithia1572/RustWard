@@ -1,7 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Api, toApiError, type ApiError } from "../api/client";
+import type { AuthStatusView } from "../api/types";
 
 const ApiContext = createContext<Api | null>(null);
+const AuthContext = createContext<AuthStatusView | null>(null);
+
+export function AuthProvider({ auth, children }: { auth: AuthStatusView | null; children: ReactNode }) {
+  return <AuthContext.Provider value={auth}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(): AuthStatusView | null {
+  return useContext(AuthContext);
+}
 
 export function ApiProvider({ api, children }: { api: Api; children: ReactNode }) {
   return <ApiContext.Provider value={api}>{children}</ApiContext.Provider>;

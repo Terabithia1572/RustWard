@@ -1091,7 +1091,10 @@ fn v1_database_upgrades_to_v2_keeping_data_and_gaining_guards() {
         .unwrap();
     }
     let s = Store::open(&path, clock()).unwrap();
-    assert_eq!(s.schema_version().unwrap(), 2);
+    assert_eq!(
+        s.schema_version().unwrap(),
+        rustward_storage::migrations::latest_version()
+    );
     let ev = s
         .list_events(&EventFilter {
             kind: Some("legacy_event".into()),
@@ -1212,10 +1215,248 @@ fn concurrent_first_opens_of_a_new_database_serialise_cleanly() {
             .connection_for_tests()
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 2, "each migration recorded once");
+        assert_eq!(
+            versions,
+            i64::from(rustward_storage::migrations::latest_version()),
+            "each migration recorded once"
+        );
         assert!(matches!(
             s.verify_chain().unwrap(),
             ChainStatus::Intact { entries: 1 }
         ));
     }
+}
+
+#[test]
+fn v2_database_upgrades_to_v3_preserving_hash_chain_and_legacy_settings() {
+    let dir = TempDir::new("migrate-v2-v3");
+    let path = dir.0.join("v2.db");
+    {
+        let mut conn = rusqlite::Connection::open(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_ms INTEGER NOT NULL);",
+        )
+        .unwrap();
+        for (v, sql) in rustward_storage::migrations::MIGRATIONS.iter().take(2) {
+            tx.execute_batch(sql).unwrap();
+            tx.execute(
+                "INSERT INTO schema_migrations (version, applied_ms) VALUES (?1, 100)",
+                [v],
+            )
+            .unwrap();
+        }
+        // Save V1.0.0 settings JSON (missing v1.1 fields).
+        tx.execute(
+            "INSERT INTO settings (key, value, updated_ms) VALUES ('app_settings',
+             '{\"theme\":\"system\",\"language\":\"tr\",\"notifications_enabled\":true,\"audit_retention_days\":365,\"inventory_refresh_seconds\":30}',
+             100)",
+            [],
+        )
+        .unwrap();
+        // Append two valid hash-chained v2 events matching event_hash format.
+        let e1_hash = rustward_storage::sha256_hex(
+            format!(
+                "{}\u{1f}100\u{1f}info\u{1f}policy_initialized\u{1f}\u{1f}init\u{1f}0\u{1f}n/a\u{1f}1\u{1f}{{}}",
+                rustward_storage::CHAIN_GENESIS
+            )
+            .as_bytes(),
+        );
+        tx.execute(
+            "INSERT INTO security_events (utc_ms, severity, kind, device_key, message, simulated, enforcement_state, policy_version, details_json, prev_hash, hash)
+             VALUES (100, 'info', 'policy_initialized', NULL, 'init', 0, 'n/a', 1, '{}', ?1, ?2)",
+            rusqlite::params![rustward_storage::CHAIN_GENESIS, e1_hash],
+        )
+        .unwrap();
+        let e2_hash = rustward_storage::sha256_hex(
+            format!(
+                "{e1_hash}\u{1f}200\u{1f}warning\u{1f}device_blocked\u{1f}dev1\u{1f}blocked\u{1f}0\u{1f}enforced\u{1f}1\u{1f}{{\"manufacturer_id\":\"kingston\"}}"
+            )
+            .as_bytes(),
+        );
+        tx.execute(
+            "INSERT INTO security_events (utc_ms, severity, kind, device_key, message, simulated, enforcement_state, policy_version, details_json, prev_hash, hash)
+             VALUES (200, 'warning', 'device_blocked', 'dev1', 'blocked', 0, 'enforced', 1, '{\"manufacturer_id\":\"kingston\"}', ?1, ?2)",
+            rusqlite::params![e1_hash, e2_hash],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let mut s = Store::open(&path, clock()).unwrap();
+    assert_eq!(
+        s.schema_version().unwrap(),
+        rustward_storage::migrations::latest_version()
+    );
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { entries: 2 }
+    ));
+    let settings = s.settings().unwrap();
+    assert!(settings.reconcile_on_startup);
+    assert_eq!(settings.session_idle_timeout_minutes, 15);
+
+    // Append post-v3 event with full metadata and verify filtering + intact chain of 3.
+    s.append_event(&NewEvent {
+        severity: Severity::Critical,
+        kind: "device_blocked".into(),
+        device_key: Some("k-sandisk".into()),
+        message: "SanDisk UASP engellendi".into(),
+        simulated: false,
+        enforcement_state: "windows_blocked_verified".into(),
+        policy_version: Some(2),
+        details: serde_json::json!({
+            "computer_name": "PC-LAB",
+            "manufacturer_id": "sandisk",
+            "device_name": "SanDisk 3.2Gen1",
+            "vid_pid": "0781:55A3",
+            "transport": "uasp_scsi",
+            "pnp_problem_code": 28,
+            "effective_decision": "blocked",
+            "enforcement_outcome": "windows_blocked_verified",
+            "actor_username": "secadmin",
+            "windows_user": "PC-LAB\\User1",
+            "policy_revision": "v2-abcd"
+        }),
+    })
+    .unwrap();
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { entries: 3 }
+    ));
+
+    let f = EventFilter {
+        manufacturer_id: Some("sandisk".into()),
+        windows_user: Some("User1".into()),
+        effective_decision: Some("blocked".into()),
+        ..EventFilter::default()
+    };
+    assert_eq!(s.count_events(&f).unwrap(), 1);
+    let rows = s.list_events(&f).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].device_key.as_deref(), Some("k-sandisk"));
+}
+
+#[test]
+fn approved_policy_round_trip_and_tamper_detection() {
+    let mut s = Store::open_in_memory(clock()).unwrap();
+    assert!(s.approved_policy().unwrap().is_none());
+    let rec = rustward_storage::ApprovedPolicyRecord {
+        policy_version: 7,
+        revision_id: "v7-1234abcd".into(),
+        catalog_version: "v1".into(),
+        deny_ids: vec!["USB\\VID_0951&PID_1666".into()],
+        allow_ids: vec!["USB\\VID_0781&PID_55A3".into()],
+        third_party_denies: vec!["PCI\\VEN_1234".into()],
+        retroactive: true,
+        auto_reconcile: true,
+        approved_by: "secadmin".into(),
+        approved_ms: 1_700_000_000_000,
+    };
+    s.save_approved_policy(&rec).unwrap();
+    assert_eq!(s.approved_policy().unwrap().unwrap(), rec);
+
+    // Tamper detection
+    s.connection_for_tests()
+        .execute(
+            "UPDATE approved_compound_policy SET deny_ids_json = '[]' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    assert!(s.approved_policy().is_err());
+
+    s.clear_approved_policy().unwrap();
+    assert!(s.approved_policy().unwrap().is_none());
+}
+
+#[test]
+fn operator_auth_lockout_role_deletion_and_recovery_lifecycle() {
+    let clk = Arc::new(ManualClock::new(10_000));
+    let mut s = Store::open_in_memory(clk.clone()).unwrap();
+    assert!(!s.has_any_users().unwrap());
+
+    let admin_hash = rustward_storage::auth::hash_secret("InitPass#123").unwrap();
+    let rec_hash = rustward_storage::auth::hash_secret("RWRECV1").unwrap();
+    let sealed = format!(
+        "{}{}",
+        rustward_storage::auth::DPAPI_ENVELOPE_PREFIX,
+        rustward_storage::auth::encode_hex(rec_hash.as_bytes())
+    );
+    let admin = s
+        .create_initial_admin("secadmin", "Security Admin", &admin_hash, &sealed)
+        .unwrap();
+    assert_eq!(admin.role, rustward_storage::UserRole::Admin);
+    assert!(s.has_any_users().unwrap());
+
+    // Cannot create a second initial admin once setup is completed.
+    assert!(s
+        .create_initial_admin("second", "Second", &admin_hash, &sealed)
+        .is_err());
+
+    // Cannot delete the last admin.
+    assert!(s.delete_app_user("secadmin", "secadmin").is_err());
+
+    // Create a read-only operator.
+    let ro_hash = rustward_storage::auth::hash_secret("Viewer#123").unwrap();
+    let ro = s
+        .create_app_user(
+            "viewer1",
+            "Auditor",
+            rustward_storage::UserRole::ReadOnly,
+            &ro_hash,
+            None,
+            "secadmin",
+        )
+        .unwrap();
+    assert_eq!(ro.role, rustward_storage::UserRole::ReadOnly);
+    assert_eq!(s.list_app_users().unwrap().len(), 2);
+
+    // Lockout after 3 failed attempts.
+    for attempt in 1..=3 {
+        let res = s
+            .authenticate_user("secadmin", "WrongPass!9", 3, 60_000)
+            .unwrap();
+        match res {
+            rustward_storage::AuthAttemptOutcome::InvalidCredentials {
+                failed_attempts,
+                now_locked_until_ms,
+                ..
+            } => {
+                assert_eq!(failed_attempts, attempt);
+                assert_eq!(now_locked_until_ms.is_some(), attempt == 3);
+            }
+            other => panic!("unexpected auth outcome: {other:?}"),
+        }
+    }
+    assert!(matches!(
+        s.authenticate_user("secadmin", "InitPass#123", 3, 60_000)
+            .unwrap(),
+        rustward_storage::AuthAttemptOutcome::Locked { .. }
+    ));
+
+    // Once lockout duration expires, correct password succeeds and resets counter.
+    clk.advance(60_001);
+    assert!(matches!(
+        s.authenticate_user("secadmin", "InitPass#123", 3, 60_000)
+            .unwrap(),
+        rustward_storage::AuthAttemptOutcome::Success(u) if u.username == "secadmin"
+    ));
+
+    // Rotate password and verify new password works while old fails.
+    let new_hash = rustward_storage::auth::hash_secret("NewPass#456").unwrap();
+    s.update_user_password("secadmin", &new_hash, None, true, "secadmin")
+        .unwrap();
+    assert!(matches!(
+        s.authenticate_user("secadmin", "NewPass#456", 3, 60_000)
+            .unwrap(),
+        rustward_storage::AuthAttemptOutcome::Success(_)
+    ));
+
+    // Delete read-only account cleanly.
+    s.delete_app_user("viewer1", "secadmin").unwrap();
+    assert_eq!(s.list_app_users().unwrap().len(), 1);
+    assert!(matches!(
+        s.verify_chain().unwrap(),
+        ChainStatus::Intact { .. }
+    ));
 }

@@ -30,6 +30,18 @@ pub enum Language {
 pub const MIN_RETENTION_DAYS: u32 = 30;
 /// Maximum audit retention in days.
 pub const MAX_RETENTION_DAYS: u32 = 3650;
+/// Minimum session idle lock timeout in minutes.
+pub const MIN_SESSION_IDLE_MINUTES: u32 = 1;
+/// Maximum session idle lock timeout in minutes.
+pub const MAX_SESSION_IDLE_MINUTES: u32 = 240;
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_idle_timeout_minutes() -> u32 {
+    15
+}
 
 /// Application settings (stored as one validated JSON document).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,12 +50,24 @@ pub struct AppSettings {
     pub theme: Theme,
     /// Language.
     pub language: Language,
-    /// Desktop notifications for denied devices.
+    /// Desktop notifications for USB enforcement events.
     pub notifications_enabled: bool,
     /// Days to keep security events.
     pub audit_retention_days: u32,
     /// Background inventory refresh interval for the service, seconds.
     pub inventory_refresh_seconds: u32,
+    /// Re-apply the last admin-approved Windows USB GPO snapshot when Windows / service starts.
+    #[serde(default = "default_true")]
+    pub reconcile_on_startup: bool,
+    /// Idle session auto-lock threshold in minutes.
+    #[serde(default = "default_idle_timeout_minutes")]
+    pub session_idle_timeout_minutes: u32,
+    /// Notify when Windows actively blocks a USB storage device (`ProblemCode` 28 + GPO match).
+    #[serde(default = "default_true")]
+    pub notify_on_blocked: bool,
+    /// Warn when a denied device is not yet blocked in Windows (requires reconnect/reinstall or GPO refresh).
+    #[serde(default = "default_true")]
+    pub notify_on_unblocked_warning: bool,
 }
 
 impl Default for AppSettings {
@@ -54,6 +78,10 @@ impl Default for AppSettings {
             notifications_enabled: true,
             audit_retention_days: 365,
             inventory_refresh_seconds: 30,
+            reconcile_on_startup: true,
+            session_idle_timeout_minutes: default_idle_timeout_minutes(),
+            notify_on_blocked: true,
+            notify_on_unblocked_warning: true,
         }
     }
 }
@@ -68,6 +96,13 @@ impl AppSettings {
         }
         if !(5..=3600).contains(&self.inventory_refresh_seconds) {
             return Err("inventory_refresh_seconds must be between 5 and 3600".into());
+        }
+        if !(MIN_SESSION_IDLE_MINUTES..=MAX_SESSION_IDLE_MINUTES)
+            .contains(&self.session_idle_timeout_minutes)
+        {
+            return Err(format!(
+                "session_idle_timeout_minutes must be between {MIN_SESSION_IDLE_MINUTES} and {MAX_SESSION_IDLE_MINUTES}"
+            ));
         }
         Ok(())
     }
@@ -162,7 +197,7 @@ pub struct SecurityEvent {
 /// Event query.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventFilter {
-    /// Case-insensitive substring in message or kind.
+    /// Case-insensitive substring across sanitized message, kind, device, and actor columns.
     pub text: Option<String>,
     /// Minimum severity.
     pub min_severity: Option<Severity>,
@@ -176,6 +211,21 @@ pub struct EventFilter {
     pub until_ms: Option<i64>,
     /// Only simulated / only non-simulated.
     pub simulated: Option<bool>,
+    /// Filter by manufacturer/brand identifier.
+    #[serde(default)]
+    pub manufacturer_id: Option<String>,
+    /// Substring match across device key, device name, or sanitized VID/PID.
+    #[serde(default)]
+    pub device_query: Option<String>,
+    /// Filter by Windows user / interactive session account.
+    #[serde(default)]
+    pub windows_user: Option<String>,
+    /// Filter by effective decision (`allowed`, `blocked`, etc.).
+    #[serde(default)]
+    pub effective_decision: Option<String>,
+    /// Filter by RustWard authenticated actor username.
+    #[serde(default)]
+    pub actor_username: Option<String>,
     /// Page size (default 200, max 5000).
     pub limit: Option<u32>,
     /// Offset.
@@ -440,4 +490,182 @@ pub struct RestoreCandidate {
     pub state: rustward_core::policy_edit::PolicyState,
     /// Settings stored in the backup (validated).
     pub settings: AppSettings,
+}
+
+/// Structured indexed audit metadata extracted from `SecurityEvent.details`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventMetadata {
+    /// Local computer / workstation identifier.
+    pub computer_name: Option<String>,
+    /// Matched manufacturer catalog identifier.
+    pub manufacturer_id: Option<String>,
+    /// Sanitized device display / product name.
+    pub device_name: Option<String>,
+    /// USB VID:PID (`XXXX:YYYY`) when available.
+    pub vid_pid: Option<String>,
+    /// Bus / storage transport (`usbstor`, `uasp_scsi`, etc.).
+    pub transport: Option<String>,
+    /// Windows PnP ProblemCode (`28`, `0`, etc.).
+    pub pnp_problem_code: Option<u32>,
+    /// Effective decision (`allowed`, `blocked`, `not_applicable`, etc.).
+    pub effective_decision: Option<String>,
+    /// Real enforcement outcome (`windows_blocked_verified`, `windows_allowed_verified`, `gpo_applied`, `not_enforced`, etc.).
+    pub enforcement_outcome: Option<String>,
+    /// Authenticated RustWard operator username (if action performed in-app).
+    pub actor_username: Option<String>,
+    /// Logged-in Windows interactive user (`DOMAIN\user` or `None` when ambiguous/unknown).
+    pub windows_user: Option<String>,
+    /// Policy revision / version identifier string.
+    pub policy_revision: Option<String>,
+}
+
+fn first_nonempty_str(details: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(s) = details.get(*key).and_then(|v| v.as_str()) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
+impl EventMetadata {
+    /// Extracts canonical indexed audit fields from an event's JSON `details` object.
+    #[must_use]
+    pub fn from_details(details: &serde_json::Value) -> Self {
+        let pnp_problem_code = details
+            .get("pnp_problem_code")
+            .or_else(|| details.get("problem_code"))
+            .and_then(|v| v.as_u64())
+            .and_then(|u| u32::try_from(u).ok());
+        Self {
+            computer_name: first_nonempty_str(details, &["computer_name", "workstation_id"]),
+            manufacturer_id: first_nonempty_str(details, &["manufacturer_id", "brand_id"]),
+            device_name: first_nonempty_str(
+                details,
+                &["device_name", "friendly_name", "product", "label"],
+            ),
+            vid_pid: first_nonempty_str(details, &["vid_pid", "usb_vid_pid"]),
+            transport: first_nonempty_str(details, &["transport"]),
+            pnp_problem_code,
+            effective_decision: first_nonempty_str(
+                details,
+                &["effective_decision", "decision", "verdict"],
+            ),
+            enforcement_outcome: first_nonempty_str(details, &["enforcement_outcome", "outcome"]),
+            actor_username: first_nonempty_str(details, &["actor_username", "actor"]),
+            windows_user: first_nonempty_str(details, &["windows_user"]),
+            policy_revision: first_nonempty_str(details, &["policy_revision", "revision_id"]),
+        }
+    }
+}
+
+/// Persisted snapshot of the last admin-approved Windows USB GPO configuration.
+///
+/// Used at Windows / `RustWardService` startup to verify and deterministically
+/// reconcile local Group Policy against the explicitly committed admin state,
+/// preserving non-RustWard entries and respecting `auto_reconcile`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovedPolicyRecord {
+    /// RustWard policy version that generated this Windows GPO snapshot.
+    pub policy_version: u64,
+    /// Stable revision identifier (`v{policy_version}-{hash_prefix}`).
+    pub revision_id: String,
+    /// Catalog version active when approved.
+    pub catalog_version: String,
+    /// Compiled RustWard-managed `DenyDeviceIDs` list.
+    pub deny_ids: Vec<String>,
+    /// Compiled RustWard-managed `AllowDeviceIDs` list.
+    pub allow_ids: Vec<String>,
+    /// Pre-existing non-RustWard entries observed/preserved in Windows GPO.
+    pub third_party_denies: Vec<String>,
+    /// Whether `DenyDeviceIDsRetroactive` was approved as enabled.
+    pub retroactive: bool,
+    /// Cached copy of auto-reconcile setting when saved.
+    pub auto_reconcile: bool,
+    /// Authenticated administrator who approved applying to Windows.
+    pub approved_by: String,
+    /// UTC milliseconds timestamp of approval.
+    pub approved_ms: i64,
+}
+
+/// Role inside the RustWard management application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserRole {
+    /// Full policy configuration, Windows apply/rollback, user/password management, and authorized exit.
+    Admin,
+    /// Can inspect status, inventory, manufacturers (read-only), and audit logs without mutating policy or exiting.
+    ReadOnly,
+}
+
+impl UserRole {
+    /// Database text encoding.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::ReadOnly => "read_only",
+        }
+    }
+
+    /// Parses database text encoding.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "admin" => Some(Self::Admin),
+            "read_only" => Some(Self::ReadOnly),
+            _ => None,
+        }
+    }
+}
+
+/// Public sanitized projection of a persisted `app_users` row (never contains hashes or sealed secrets).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppUserRecord {
+    /// SQLite row id.
+    pub id: i64,
+    /// Unique lowercase-comparable login name.
+    pub username: String,
+    /// Operator display name.
+    pub display_name: String,
+    /// Assigned role.
+    pub role: UserRole,
+    /// Consecutive failed password attempts since last success.
+    pub failed_attempts: u32,
+    /// Lockout expiration timestamp in UTC milliseconds, if locked.
+    pub locked_until_ms: Option<i64>,
+    /// Creation timestamp in UTC ms.
+    pub created_ms: i64,
+    /// Last update timestamp in UTC ms.
+    pub updated_ms: i64,
+    /// Whether a DPAPI-sealed recovery verifier exists for this account.
+    pub has_recovery_key: bool,
+}
+
+/// Result of verifying credentials against `app_users`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthAttemptOutcome {
+    /// Credentials verified; failed-attempt counter reset.
+    Success(AppUserRecord),
+    /// Account currently rate-limited until `locked_until_ms`.
+    Locked {
+        /// Account username if present.
+        username: String,
+        /// UTC milliseconds when lockout expires.
+        locked_until_ms: i64,
+        /// Current consecutive failures.
+        failed_attempts: u32,
+    },
+    /// Invalid username or password.
+    InvalidCredentials {
+        /// Attempted username.
+        username: String,
+        /// Recorded failures for existing user (or 0 if user absent).
+        failed_attempts: u32,
+        /// Whether this failure triggered a temporary lockout.
+        now_locked_until_ms: Option<i64>,
+    },
 }

@@ -6,10 +6,10 @@
   auto-start LocalSystem service and creates %ProgramData%\RustWard with a
   protected DACL (SYSTEM + BUILTIN\Administrators only).
 
-  The service binary path comes from the TAURI_RUSTWARD_SERVICE_EXE
-  environment variable: tauri-bundler clears the WiX environment except
-  SYSTEMROOT/TMP/TEMP and variables starting with TAURI (tauri-bundler 2.10.4,
-  msi/mod.rs clear_env_for_wix). scripts/build-release.ps1 sets it.
+  The service and notifier binary paths come from the TAURI_RUSTWARD_SERVICE_EXE
+  and TAURI_RUSTWARD_NOTIFIER_EXE environment variables: tauri-bundler clears the
+  WiX environment except SYSTEMROOT/TMP/TEMP and variables starting with TAURI
+  (tauri-bundler 2.10.4, msi/mod.rs clear_env_for_wix). scripts/windows/Build-RustWard.ps1 sets them.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
@@ -42,6 +42,18 @@
                           SupportsErrors="yes" SupportsWarnings="yes"
                           SupportsInformationals="yes" />
       </Component>
+
+      <Component Id="RustWardNotifierComponent" Guid="8E4C1B2A-9D3F-4A1E-B7C5-3F6D8A2E9C41" Win64="yes">
+        <File Id="RustWardNotifierExe" Name="rustward-notifier.exe"
+              Source="$(env.TAURI_RUSTWARD_NOTIFIER_EXE)" KeyPath="yes" Checksum="yes" />
+        <!-- Launch the unprivileged per-session desktop notification agent at
+             user logon outside Session 0. Uses ONLY PIPE_NAME_STATUS (read-only). -->
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run">
+          <RegistryValue Name="RustWardNotifier"
+                         Type="string"
+                         Value="&quot;[#RustWardNotifierExe]&quot;" />
+        </RegistryKey>
+      </Component>
     </DirectoryRef>
 
     <DirectoryRef Id="TARGETDIR">
@@ -57,5 +69,20 @@
         </Directory>
       </Directory>
     </DirectoryRef>
+
+    <!-- Attach explicit AppUserModelID to the all-users Start Menu shortcut
+         so Windows Action Center associates rustward-notifier toasts with RustWard. -->
+    <CustomTable Id="MsiShortcutProperty">
+      <Column Id="MsiShortcutProperty" Type="string" Width="72" PrimaryKey="yes" />
+      <Column Id="Shortcut_" Type="string" Width="72" />
+      <Column Id="PropertyKey" Type="string" Width="255" />
+      <Column Id="PropVariantValue" Type="string" Width="255" Nullable="yes" />
+      <Row>
+        <Data Column="MsiShortcutProperty">RustWardAppUserModelId</Data>
+        <Data Column="Shortcut_">ApplicationStartMenuShortcut</Data>
+        <Data Column="PropertyKey">System.AppUserModel.ID</Data>
+        <Data Column="PropVariantValue">Terabithia.RustWard.Desktop</Data>
+      </Row>
+    </CustomTable>
   </Fragment>
 </Wix>

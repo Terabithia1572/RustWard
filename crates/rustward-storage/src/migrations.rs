@@ -113,6 +113,59 @@ CREATE TRIGGER backups_no_delete BEFORE DELETE ON backups
 BEGIN SELECT RAISE(ABORT, 'backup registry is append-only'); END;
 ",
     ),
+    (
+        3,
+        r"
+-- Last explicitly admin-approved Windows USB GPO policy snapshot for startup reconciliation.
+CREATE TABLE approved_compound_policy (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    policy_version          INTEGER NOT NULL,
+    revision_id             TEXT NOT NULL,
+    catalog_version         TEXT NOT NULL,
+    deny_ids_json           TEXT NOT NULL,
+    allow_ids_json          TEXT NOT NULL,
+    third_party_denies_json TEXT NOT NULL,
+    retroactive             INTEGER NOT NULL CHECK (retroactive IN (0, 1)),
+    auto_reconcile          INTEGER NOT NULL DEFAULT 1 CHECK (auto_reconcile IN (0, 1)),
+    approved_by             TEXT NOT NULL,
+    approved_ms             INTEGER NOT NULL,
+    signature_sha256        TEXT NOT NULL
+);
+
+-- Application-level RBAC accounts (Argon2id + per-user CSPRNG salt, no hardcoded passwords).
+CREATE TABLE app_users (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    username             TEXT NOT NULL UNIQUE,
+    display_name         TEXT NOT NULL,
+    role                 TEXT NOT NULL CHECK (role IN ('admin', 'read_only')),
+    password_hash        TEXT NOT NULL,
+    recovery_hash_sealed TEXT,
+    failed_attempts      INTEGER NOT NULL DEFAULT 0,
+    locked_until_ms      INTEGER,
+    created_ms           INTEGER NOT NULL,
+    updated_ms           INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX app_users_username_nocase ON app_users(lower(username));
+
+-- Indexed nullable audit metadata columns on security_events.
+-- Existing pre-v3 rows remain NULL without triggering BEFORE UPDATE or altering hashes.
+ALTER TABLE security_events ADD COLUMN computer_name TEXT;
+ALTER TABLE security_events ADD COLUMN manufacturer_id TEXT;
+ALTER TABLE security_events ADD COLUMN device_name TEXT;
+ALTER TABLE security_events ADD COLUMN vid_pid TEXT;
+ALTER TABLE security_events ADD COLUMN transport TEXT;
+ALTER TABLE security_events ADD COLUMN pnp_problem_code INTEGER;
+ALTER TABLE security_events ADD COLUMN effective_decision TEXT;
+ALTER TABLE security_events ADD COLUMN enforcement_outcome TEXT;
+ALTER TABLE security_events ADD COLUMN actor_username TEXT;
+ALTER TABLE security_events ADD COLUMN windows_user TEXT;
+ALTER TABLE security_events ADD COLUMN policy_revision TEXT;
+CREATE INDEX security_events_mfg ON security_events(manufacturer_id);
+CREATE INDEX security_events_decision ON security_events(effective_decision);
+CREATE INDEX security_events_winuser ON security_events(windows_user);
+CREATE INDEX security_events_actor ON security_events(actor_username);
+",
+    ),
 ];
 
 /// Latest schema version known to this build.

@@ -39,6 +39,7 @@ fn main() -> std::process::ExitCode {
     };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
+    let mut session_token: Option<String> = None;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -46,10 +47,25 @@ fn main() -> std::process::ExitCode {
         }
         let reply = match serde_json::from_str::<rustward_ipc::Request>(&line) {
             // Same path as the Tauri `ipc_call` command.
-            Ok(request) => match bridge.call(request) {
-                Ok(body) => serde_json::json!({ "ok": body }),
-                Err(e) => serde_json::json!({ "err": e }),
-            },
+            Ok(request) => {
+                let clears = matches!(
+                    request,
+                    rustward_ipc::Request::Logout
+                        | rustward_ipc::Request::LockSession
+                        | rustward_ipc::Request::ResetPasswordWithRecovery { .. }
+                );
+                match bridge.call_with_token(request, session_token.clone()) {
+                    Ok(body) => {
+                        if let rustward_ipc::ResponseBody::Login(ref login) = body {
+                            session_token = Some(login.session_token.clone());
+                        } else if clears {
+                            session_token = None;
+                        }
+                        serde_json::json!({ "ok": body })
+                    }
+                    Err(e) => serde_json::json!({ "err": e }),
+                }
+            }
             Err(e) => serde_json::json!({
                 "err": { "code": "invalid_request", "message": format!("malformed request: {e}") }
             }),

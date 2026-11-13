@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Archive, Eraser, History, Monitor, ShieldCheck } from "lucide-react";
-import type { BackupView, RestorePreviewView, SettingsView } from "../api/types";
+import { Archive, Eraser, History, KeyRound, Monitor, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import type { BackupView, RestorePreviewView, SettingsView, UserRole } from "../api/types";
 import { Badge, Button, Card, Dialog, Empty, ErrorNotice, Field, Loading, PageHeader, Toggle, inputClass } from "../components/ui";
 import { useI18n } from "../i18n";
-import { useAction, useApi, useResource } from "../lib/hooks";
+import { useAction, useApi, useAuth, useResource } from "../lib/hooks";
 
 /** Same rule as the service (`[A-Za-z0-9_-]{1,64}`); the service re-validates. */
 export const WORKSTATION_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -199,25 +199,245 @@ function BackupsCard() {
 
 export const RETENTION_RANGE = [30, 3650] as const;
 export const REFRESH_RANGE = [5, 3600] as const;
+export const IDLE_RANGE = [1, 240] as const;
 
 function inRange(n: number, [lo, hi]: readonly [number, number]): boolean {
   return Number.isInteger(n) && n >= lo && n <= hi;
 }
 
+function PasswordCard() {
+  const { t, pick } = useI18n();
+  const api = useApi();
+  const action = useAction();
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const submit = async () => {
+    setLocalError(null);
+    setNotice(null);
+    if (newPw !== confirmPw) {
+      setLocalError(t("auth.passwordMismatch"));
+      return;
+    }
+    const res = await action.run(() => api.changePassword(currentPw, newPw));
+    setCurrentPw("");
+    setNewPw("");
+    setConfirmPw("");
+    if (res) setNotice(pick(res.summary, res.summary_tr) || t("settings.passwordChanged"));
+  };
+
+  return (
+    <Card title={t("settings.passwordCard")}>
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <Field label={t("auth.currentPassword")}>
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              className={inputClass}
+              value={currentPw}
+              autoComplete="current-password"
+              onChange={(e) => setCurrentPw(e.target.value)}
+            />
+          )}
+        </Field>
+        <Field label={t("auth.newPassword")}>
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              className={inputClass}
+              value={newPw}
+              autoComplete="new-password"
+              onChange={(e) => setNewPw(e.target.value)}
+            />
+          )}
+        </Field>
+        <Field label={t("auth.passwordConfirm")}>
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              className={inputClass}
+              value={confirmPw}
+              autoComplete="new-password"
+              onChange={(e) => setConfirmPw(e.target.value)}
+            />
+          )}
+        </Field>
+        <Button
+          type="submit"
+          icon={<KeyRound className="size-4" aria-hidden />}
+          busy={action.busy}
+          disabled={!currentPw || !newPw}
+        >
+          {t("settings.passwordCard")}
+        </Button>
+        {localError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{localError}</p>}
+        {notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
+        {action.error && <ErrorNotice error={action.error} />}
+      </form>
+    </Card>
+  );
+}
+
+function UsersCard({ currentUsername }: { currentUsername: string }) {
+  const { t, formatTime } = useI18n();
+  const api = useApi();
+  const [tick, setTick] = useState(0);
+  const usersRes = useResource((a) => a.listAppUsers(), `users-${tick}`);
+  const action = useAction();
+  const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [role, setRole] = useState<UserRole>("read_only");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const create = async () => {
+    setNotice(null);
+    const created = await action.run(() => api.createAppUser(username.trim(), displayName.trim(), role, password));
+    setPassword("");
+    if (created) {
+      setUsername("");
+      setDisplayName("");
+      setNotice(t("settings.userCreated"));
+      setTick((n) => n + 1);
+    }
+  };
+
+  const remove = async (targetUsername: string) => {
+    setNotice(null);
+    const res = await action.run(() => api.deleteAppUser(targetUsername));
+    if (res) {
+      setNotice(t("settings.userDeleted"));
+      setTick((n) => n + 1);
+    }
+  };
+
+  return (
+    <Card
+      title={
+        <div className="flex items-center gap-2">
+          <Users className="size-4 text-cyan-600" aria-hidden />
+          <span>{t("settings.usersCard")}</span>
+        </div>
+      }
+      className="lg:col-span-2"
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          {usersRes.error ? (
+            <ErrorNotice error={usersRes.error} onRetry={usersRes.reload} />
+          ) : !usersRes.data ? (
+            <Loading />
+          ) : usersRes.data.length === 0 ? (
+            <Empty />
+          ) : (
+            <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800" data-testid="app-users-list">
+              {usersRes.data.map((u) => (
+                <li key={u.username} className="flex items-center justify-between gap-2 py-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 font-medium">
+                      <span>{u.display_name}</span>
+                      <span className="font-mono text-xs text-slate-500">({u.username})</span>
+                      <Badge tone={u.role === "admin" ? "info" : "warning"}>
+                        {t(u.role === "admin" ? "role.admin" : "role.read_only")}
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {formatTime(u.created_ms)}
+                      {u.has_recovery_key && " · Kurtarma anahtarı tanımlı"}
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    icon={<Trash2 className="size-4" aria-hidden />}
+                    disabled={action.busy || u.username.toLowerCase() === currentUsername.toLowerCase()}
+                    onClick={() => void remove(u.username)}
+                  >
+                    {t("settings.deleteUser")}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <form
+          className="space-y-2.5 rounded-md border border-slate-200 p-3 dark:border-slate-800"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void create();
+          }}
+        >
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("settings.createUser")}</h3>
+          <Field label={t("auth.username")}>
+            {(id) => <input id={id} className={inputClass} value={username} onChange={(e) => setUsername(e.target.value)} />}
+          </Field>
+          <Field label={t("auth.displayName")}>
+            {(id) => <input id={id} className={inputClass} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />}
+          </Field>
+          <Field label={t("settings.roleLabel")}>
+            {(id) => (
+              <select id={id} className={inputClass} value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
+                <option value="read_only">{t("role.read_only")}</option>
+                <option value="admin">{t("role.admin")}</option>
+              </select>
+            )}
+          </Field>
+          <Field label={t("auth.password")}>
+            {(id) => <input id={id} type="password" className={inputClass} value={password} onChange={(e) => setPassword(e.target.value)} />}
+          </Field>
+          <Button
+            type="submit"
+            variant="primary"
+            icon={<UserPlus className="size-4" aria-hidden />}
+            busy={action.busy}
+            disabled={!username.trim() || !displayName.trim() || !password}
+          >
+            {t("settings.createUser")}
+          </Button>
+          {notice && <p role="status" className="text-xs text-emerald-700 dark:text-emerald-300">{notice}</p>}
+          {action.error && <ErrorNotice error={action.error} />}
+        </form>
+      </div>
+    </Card>
+  );
+}
+
 export function SettingsPage({ settings, onSaved }: { settings: SettingsView | null; onSaved: (s: SettingsView) => void }) {
   const { t, pick } = useI18n();
   const api = useApi();
+  const auth = useAuth();
+  const readOnly = Boolean(auth?.auth_enforced && auth.authenticated && auth.current_user?.role === "read_only");
   const fallback = useResource((a) => (settings ? Promise.resolve(settings) : a.settings()), `settings-${settings ? "given" : "load"}`);
   const current = settings ?? fallback.data;
   const [draft, setDraft] = useState<SettingsView | null>(current ?? null);
+  const [syncedJson, setSyncedJson] = useState<string | null>(() => (current ? JSON.stringify(current) : null));
   const save = useAction();
   const maint = useAction();
   const diag = useResource((a) => a.diagnostics(), "settings-diag");
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (current) setDraft(current);
-  }, [current]);
+    if (!current) return;
+    const nextJson = JSON.stringify(current);
+    setDraft((prev) => {
+      if (!prev) return current;
+      // Preserve unsaved operator edits if `settings` arrives asynchronously after `fallback`.
+      if (syncedJson !== null && JSON.stringify(prev) !== syncedJson) return prev;
+      return current;
+    });
+    setSyncedJson(nextJson);
+  }, [current, syncedJson]);
 
   if (!draft) {
     return (
@@ -228,14 +448,25 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
     );
   }
 
+  const idleMinutes = draft.session_idle_timeout_minutes ?? 15;
   const retentionOk = inRange(draft.audit_retention_days, RETENTION_RANGE);
   const refreshOk = inRange(draft.inventory_refresh_seconds, REFRESH_RANGE);
+  const idleOk = inRange(idleMinutes, IDLE_RANGE);
   const dirty = JSON.stringify(draft) !== JSON.stringify(current);
 
   const submit = async () => {
-    if (!retentionOk || !refreshOk) return;
-    const res = await save.run(() => api.saveSettings(draft));
+    if (!retentionOk || !refreshOk || !idleOk) return;
+    const payload: SettingsView = {
+      ...draft,
+      reconcile_on_startup: draft.reconcile_on_startup ?? true,
+      session_idle_timeout_minutes: idleMinutes,
+      notify_on_blocked: draft.notify_on_blocked ?? true,
+      notify_on_unblocked_warning: draft.notify_on_unblocked_warning ?? true,
+    };
+    const res = await save.run(() => api.saveSettings(payload));
     if (res) {
+      setDraft(res);
+      setSyncedJson(JSON.stringify(res));
       onSaved(res);
       setNotice(t("settings.saved"));
     }
@@ -251,7 +482,12 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
       <PageHeader
         title={t("settings.title")}
         actions={
-          <Button variant="primary" disabled={!dirty || !retentionOk || !refreshOk} busy={save.busy} onClick={() => void submit()}>
+          <Button
+            variant="primary"
+            disabled={readOnly || !dirty || !retentionOk || !refreshOk || !idleOk}
+            busy={save.busy}
+            onClick={() => void submit()}
+          >
             {t("common.save")}
           </Button>
         }
@@ -267,6 +503,7 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
                   id={id}
                   className={inputClass}
                   value={draft.theme}
+                  disabled={readOnly}
                   onChange={(e) => setDraft({ ...draft, theme: e.target.value as SettingsView["theme"] })}
                 >
                   <option value="system">{t("settings.theme.system")}</option>
@@ -281,6 +518,7 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
                   id={id}
                   className={inputClass}
                   value={draft.language}
+                  disabled={readOnly}
                   onChange={(e) => setDraft({ ...draft, language: e.target.value as SettingsView["language"] })}
                 >
                   <option value="tr">Türkçe</option>
@@ -291,12 +529,43 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
             <div className="flex items-start gap-3">
               <Toggle
                 checked={draft.notifications_enabled}
+                disabled={readOnly}
                 onChange={(v) => setDraft({ ...draft, notifications_enabled: v })}
                 label={t("settings.notifications")}
               />
               <div>
                 <div className="text-sm font-medium">{t("settings.notifications")}</div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{t("settings.notificationsHint")}</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 pl-4">
+              <Toggle
+                checked={draft.notify_on_blocked ?? true}
+                disabled={readOnly || !draft.notifications_enabled}
+                onChange={(v) => setDraft({ ...draft, notify_on_blocked: v })}
+                label={t("settings.notifyOnBlocked")}
+              />
+              <div className="text-xs text-slate-700 dark:text-slate-300">{t("settings.notifyOnBlocked")}</div>
+            </div>
+            <div className="flex items-start gap-3 pl-4">
+              <Toggle
+                checked={draft.notify_on_unblocked_warning ?? true}
+                disabled={readOnly || !draft.notifications_enabled}
+                onChange={(v) => setDraft({ ...draft, notify_on_unblocked_warning: v })}
+                label={t("settings.notifyOnUnblockedWarning")}
+              />
+              <div className="text-xs text-slate-700 dark:text-slate-300">{t("settings.notifyOnUnblockedWarning")}</div>
+            </div>
+            <div className="flex items-start gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <Toggle
+                checked={draft.reconcile_on_startup ?? true}
+                disabled={readOnly}
+                onChange={(v) => setDraft({ ...draft, reconcile_on_startup: v })}
+                label={t("settings.reconcileOnStartup")}
+              />
+              <div>
+                <div className="text-sm font-medium">{t("settings.reconcileOnStartup")}</div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{t("settings.reconcileOnStartupHint")}</p>
               </div>
             </div>
           </div>
@@ -314,6 +583,7 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
                   type="number"
                   min={RETENTION_RANGE[0]}
                   max={RETENTION_RANGE[1]}
+                  disabled={readOnly}
                   className={inputClass}
                   value={draft.audit_retention_days}
                   onChange={(e) => setDraft({ ...draft, audit_retention_days: Number(e.target.value) })}
@@ -331,13 +601,37 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
                   type="number"
                   min={REFRESH_RANGE[0]}
                   max={REFRESH_RANGE[1]}
+                  disabled={readOnly}
                   className={inputClass}
                   value={draft.inventory_refresh_seconds}
                   onChange={(e) => setDraft({ ...draft, inventory_refresh_seconds: Number(e.target.value) })}
                 />
               )}
             </Field>
-            <Button icon={<Eraser className="size-4" aria-hidden />} busy={maint.busy} onClick={() => void maintenance("apply_retention")}>
+            <Field
+              label={t("settings.idleTimeoutMinutes")}
+              hint={`${IDLE_RANGE[0]}–${IDLE_RANGE[1]}`}
+              error={idleOk ? null : `${IDLE_RANGE[0]}–${IDLE_RANGE[1]}`}
+            >
+              {(id) => (
+                <input
+                  id={id}
+                  type="number"
+                  min={IDLE_RANGE[0]}
+                  max={IDLE_RANGE[1]}
+                  disabled={readOnly}
+                  className={inputClass}
+                  value={idleMinutes}
+                  onChange={(e) => setDraft({ ...draft, session_idle_timeout_minutes: Number(e.target.value) })}
+                />
+              )}
+            </Field>
+            <Button
+              icon={<Eraser className="size-4" aria-hidden />}
+              disabled={readOnly}
+              busy={maint.busy}
+              onClick={() => void maintenance("apply_retention")}
+            >
               {t("settings.applyRetention")}
             </Button>
             {maint.error && <ErrorNotice error={maint.error} />}
@@ -345,6 +639,10 @@ export function SettingsPage({ settings, onSaved }: { settings: SettingsView | n
         </Card>
         <WorkstationCard />
         <BackupsCard />
+        {auth?.auth_enforced && auth.authenticated && <PasswordCard />}
+        {auth?.auth_enforced && auth.authenticated && auth.current_user?.role === "admin" && (
+          <UsersCard currentUsername={auth.current_user.username} />
+        )}
         <Card title={t("settings.admin")}>
           <div className="flex gap-3 text-sm">
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-cyan-600" aria-hidden />

@@ -16,11 +16,12 @@
 //!
 //! Sessions live in the hash-chained audit log (`enforcement_session_*`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rustward_enforcement::checklist::{device_deny_checklist, planned_deny_policy};
 use rustward_enforcement::compound_policy::{
-    compile_compound_policy, extract_observed_policy, validate_hardware_id, CompoundPolicyPlanView,
+    compile_compound_policy, extract_observed_policy, is_generic_storage_id,
+    validate_hardware_id, CompoundPolicyPlanView, ObservedWindowsPolicy,
 };
 use rustward_enforcement::device_install::RESTRICTIONS_KEY;
 use rustward_enforcement::observer::EvidenceLevel;
@@ -30,7 +31,8 @@ use rustward_ipc::messages::{
 };
 use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, ResponseBody};
 use rustward_storage::{
-    EventFilter, NewEvent, SecurityEvent, Severity, device_key, mask_instance_id, sha256_hex,
+    ApprovedPolicyRecord, EventFilter, NewEvent, SecurityEvent, Severity, device_key,
+    mask_instance_id, sha256_hex,
 };
 
 use super::{AppService, Inner, edit_err, empty_snapshot, storage_err};
@@ -177,33 +179,258 @@ fn blocker() -> TextTrEn {
     }
 }
 
+/// Privileged Group Policy write abstraction so startup reconciliation and
+/// third-party GPO preservation can be thoroughly tested alongside live Win32 COM calls.
+pub trait GpoBackend: Send + Sync {
+    /// Checks whether the Local GPO writer is ready for writes.
+    fn check_capability(&self) -> Result<(), String>;
+    /// Applies managed USB restrictions while preserving third-party entries.
+    fn apply_compound_policy(
+        &self,
+        deny_ids: &[String],
+        allow_ids: &[String],
+        third_party_denies: &[String],
+        third_party_allows: &[String],
+        retroactive: bool,
+    ) -> Result<(), String>;
+    /// Removes RustWard-managed entries while keeping third-party GPO entries intact.
+    fn restore_compound_policy(
+        &self,
+        third_party_denies: &[String],
+        third_party_allows: &[String],
+    ) -> Result<(), String>;
+    /// Triggers targeted Win32 PnP restart for a newly allowed device instance.
+    fn restart_device_instance(&self, instance_id: &str) -> Result<(), String>;
+    /// Requests OS Group Policy refresh.
+    fn trigger_refresh(&self);
+    /// Requests OS PnP hardware rescan.
+    fn trigger_rescan(&self);
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct RealWindowsGpoBackend;
+
+impl GpoBackend for RealWindowsGpoBackend {
+    fn check_capability(&self) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            rustward_windows::gpo_writer::GpoPolicyWriter::check_capability()
+        }
+        #[cfg(not(windows))]
+        {
+            Err("Local Group Policy COM operations require Windows".into())
+        }
+    }
+
+    fn apply_compound_policy(
+        &self,
+        deny_ids: &[String],
+        allow_ids: &[String],
+        third_party_denies: &[String],
+        third_party_allows: &[String],
+        retroactive: bool,
+    ) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            rustward_windows::gpo_writer::GpoPolicyWriter::apply_compound_policy_preserving(
+                deny_ids,
+                allow_ids,
+                third_party_denies,
+                third_party_allows,
+                retroactive,
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (deny_ids, allow_ids, third_party_denies, third_party_allows, retroactive);
+            Err("Local Group Policy operations require Windows".into())
+        }
+    }
+
+    fn restore_compound_policy(
+        &self,
+        third_party_denies: &[String],
+        third_party_allows: &[String],
+    ) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            rustward_windows::gpo_writer::GpoPolicyWriter::restore_compound_policy_preserving(
+                third_party_denies,
+                third_party_allows,
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (third_party_denies, third_party_allows);
+            Err("Local Group Policy operations require Windows".into())
+        }
+    }
+
+    fn restart_device_instance(&self, instance_id: &str) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            rustward_windows::gpo_writer::GpoPolicyWriter::restart_device_instance(instance_id)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = instance_id;
+            Err("pnputil requires Windows".into())
+        }
+    }
+
+    fn trigger_refresh(&self) {
+        #[cfg(windows)]
+        rustward_windows::gpo_writer::GpoPolicyWriter::trigger_policy_refresh();
+    }
+
+    fn trigger_rescan(&self) {
+        #[cfg(windows)]
+        rustward_windows::gpo_writer::GpoPolicyWriter::trigger_device_rescan();
+    }
+}
+
+static REAL_WINDOWS_GPO_BACKEND: RealWindowsGpoBackend = RealWindowsGpoBackend;
+
+fn is_rustward_managed_entry(
+    entry: &str,
+    plan: &CompoundPolicyPlanView,
+    previous_approved: Option<&ApprovedPolicyRecord>,
+    v: &super::Validated,
+) -> bool {
+    if is_generic_storage_id(entry) {
+        return true;
+    }
+    if plan
+        .compiled
+        .deny_hardware_ids
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(entry))
+        || plan
+            .compiled
+            .allow_hardware_ids
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(entry))
+    {
+        return true;
+    }
+    if plan
+        .manufacturers
+        .iter()
+        .any(|m| m.hardware_ids.iter().any(|h| h.eq_ignore_ascii_case(entry)))
+    {
+        return true;
+    }
+    if let Some(prev) = previous_approved
+        && (prev.deny_ids.iter().any(|d| d.eq_ignore_ascii_case(entry))
+            || prev.allow_ids.iter().any(|a| a.eq_ignore_ascii_case(entry)))
+    {
+        return true;
+    }
+    let inner_policy = v.policy.policy();
+    if inner_policy
+        .denied_devices
+        .iter()
+        .chain(inner_policy.allowed_devices.iter())
+        .any(|d| d.hardware_id.trim().eq_ignore_ascii_case(entry))
+    {
+        return true;
+    }
+    let upper = entry.trim().to_ascii_uppercase();
+    if upper.starts_with("USBSTOR\\") || upper.starts_with("SCSI\\DISK") {
+        return true;
+    }
+    if upper.starts_with("USB\\") {
+        return v.catalog.catalog().brands.iter().any(|b| {
+            b.identifiers.iter().any(|i| {
+                let val = i.value.trim().to_ascii_uppercase();
+                !val.is_empty()
+                    && match i.kind {
+                        rustward_core::catalog::IdentifierKind::UsbVid => {
+                            let needle = format!("VID_{val}");
+                            upper.contains(&needle)
+                        }
+                        rustward_core::catalog::IdentifierKind::InquiryVendor => {
+                            val.len() >= 4 && upper.contains(&val)
+                        }
+                    }
+            })
+        });
+    }
+    false
+}
+
+fn collect_preserved_third_party_entries(
+    observed: Option<&ObservedWindowsPolicy>,
+    plan: &CompoundPolicyPlanView,
+    previous_approved: Option<&ApprovedPolicyRecord>,
+    v: &super::Validated,
+) -> (Vec<String>, Vec<String>) {
+    let mut denies = BTreeSet::new();
+    let mut allows = BTreeSet::new();
+
+    if let Some(obs) = observed {
+        for entry in &obs.active_denies {
+            let trimmed = entry.trim();
+            if !trimmed.is_empty() && !is_rustward_managed_entry(trimmed, plan, previous_approved, v) {
+                denies.insert(trimmed.to_ascii_uppercase());
+            }
+        }
+        for entry in &obs.active_allows {
+            let trimmed = entry.trim();
+            if !trimmed.is_empty() && !is_rustward_managed_entry(trimmed, plan, previous_approved, v) {
+                allows.insert(trimmed.to_ascii_uppercase());
+            }
+        }
+    } else if let Some(prev) = previous_approved {
+        for entry in &prev.third_party_denies {
+            let trimmed = entry.trim();
+            if !trimmed.is_empty() {
+                denies.insert(trimmed.to_ascii_uppercase());
+            }
+        }
+    }
+
+    (denies.into_iter().collect(), allows.into_iter().collect())
+}
+
+fn normalized_uppercase_set(a: &[String], b: &[String]) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for item in a.iter().chain(b.iter()) {
+        let trimmed = item.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_ascii_uppercase());
+        }
+    }
+    set.into_iter().collect()
+}
+
 impl AppService {
     pub(crate) fn is_live_windows(&self) -> bool {
         self.policy_source.name() == "windows_registry_read_only"
     }
 
+    fn effective_gpo_backend(&self) -> Option<&dyn GpoBackend> {
+        if let Some(ref custom) = self.gpo_backend {
+            Some(custom.as_ref())
+        } else if self.is_live_windows() {
+            Some(&REAL_WINDOWS_GPO_BACKEND)
+        } else {
+            None
+        }
+    }
+
     /// Verifies that the Local Group Policy COM API and policy store are functional.
     pub(crate) fn check_desktop_capability(&self) -> Result<(), TextTrEn> {
-        if !self.is_live_windows() {
+        let Some(backend) = self.effective_gpo_backend() else {
             return Err(blocker());
+        };
+        if let Err(e) = backend.check_capability() {
+            return Err(TextTrEn {
+                tr: format!("Windows Grup İlkesi (IGroupPolicyObject) COM sağlayıcısı başlatılamadı: {e}"),
+                en: format!("Windows Group Policy (IGroupPolicyObject) COM provider failed to initialize: {e}"),
+            });
         }
-        #[cfg(windows)]
-        {
-            if let Err(e) = rustward_windows::gpo_writer::GpoPolicyWriter::check_capability() {
-                return Err(TextTrEn {
-                    tr: format!("Windows Grup İlkesi (IGroupPolicyObject) COM sağlayıcısı başlatılamadı: {e}"),
-                    en: format!("Windows Group Policy (IGroupPolicyObject) COM provider failed to initialize: {e}"),
-                });
-            }
-            Ok(())
-        }
-        #[cfg(not(windows))]
-        {
-            Err(TextTrEn {
-                tr: "Masaüstü kontrollü uygulama yalnızca Windows üzerinde desteklenir.".into(),
-                en: "Desktop-managed enforcement is only supported on Windows.".into(),
-            })
-        }
+        Ok(())
     }
 
     fn latest(g: &Inner, kind: &str) -> Result<Option<SecurityEvent>, IpcError> {
@@ -1135,13 +1362,37 @@ impl AppService {
         let g = self.lock()?;
         let v = Self::validated(&g.store)?;
         let snap = g.last.clone().unwrap_or_else(empty_snapshot);
-        Ok(compile_compound_policy(
+        let mut plan = compile_compound_policy(
             &v.policy,
             &v.catalog,
             &snap.devices,
             snapshot_ref,
             true,
-        ))
+        );
+        if let Ok(Some(prev)) = g.store.approved_policy() {
+            for active in &plan.observed.active_denies {
+                let in_prev = prev.deny_ids.iter().any(|d| d.eq_ignore_ascii_case(active));
+                let in_desired = plan
+                    .compiled
+                    .deny_hardware_ids
+                    .iter()
+                    .any(|d| d.eq_ignore_ascii_case(active));
+                if in_prev && !in_desired && !plan.diff.removed_denies.iter().any(|r| r.eq_ignore_ascii_case(active)) {
+                    plan.diff.removed_denies.push(active.clone());
+                }
+            }
+            let has_conflict = plan.manufacturers.iter().any(|m| {
+                m.windows_policy == rustward_enforcement::compound_policy::WindowsPolicyStatus::Conflict
+            });
+            plan.diff.is_synchronized = plan.diff.added_denies.is_empty()
+                && plan.diff.removed_denies.is_empty()
+                && !has_conflict;
+            plan.is_applied = plan.diff.is_synchronized
+                && plan.observed.raw_gpo_present
+                && !plan.compiled.deny_hardware_ids.is_empty()
+                && !has_conflict;
+        }
+        Ok(plan)
     }
 
     /// Apply the unified compound policy to Windows Group Policy (administrator).
@@ -1150,6 +1401,7 @@ impl AppService {
         retroactive: bool,
         expected_policy_version: u64,
         identity: &ClientIdentity,
+        actor_override: Option<&str>,
     ) -> Result<CompoundPolicyPlanView, IpcError> {
         if !identity.is_administrator {
             return Err(IpcError::new(
@@ -1158,6 +1410,7 @@ impl AppService {
             ));
         }
 
+        let _ = self.refresh_inventory();
         let plan = self.get_compound_policy_plan()?;
 
         // Optimistic concurrency check
@@ -1189,8 +1442,33 @@ impl AppService {
             })?;
         }
 
-        let is_live_windows = self.is_live_windows();
-        if is_live_windows {
+        let actor_name = actor_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| identity.actor());
+        let windows_user = self.current_windows_user();
+        let captured_before = self.capture_policy_unlocked();
+        let observed_before = captured_before
+            .as_ref()
+            .ok()
+            .map(|c| extract_observed_policy(&c.values));
+
+        let (v, settings, previous_approved) = {
+            let g = self.lock()?;
+            let v = Self::validated(&g.store)?;
+            let settings = g.store.settings().map_err(storage_err)?;
+            let prev = g.store.approved_policy().ok().flatten();
+            (v, settings, prev)
+        };
+        let computer_name = v.policy.policy().workstation_id.clone();
+
+        let (third_party_denies, third_party_allows) = collect_preserved_third_party_entries(
+            observed_before.as_ref(),
+            &plan,
+            previous_approved.as_ref(),
+            &v,
+        );
+
+        if let Some(backend) = self.effective_gpo_backend() {
             if let Err(cap_err) = self.check_desktop_capability() {
                 return Err(IpcError::new(
                     ErrorCode::Unavailable,
@@ -1198,32 +1476,38 @@ impl AppService {
                 ));
             }
 
-            #[cfg(windows)]
             {
-                use rustward_windows::gpo_writer::GpoPolicyWriter;
-                {
-                    let mut g = self.lock()?;
-                    self.session_event(
-                        &mut g,
-                        Severity::Warning,
-                        "compound_enforcement_mutation_started",
-                        format!(
-                            "privileged backend applying compound Windows Group Policy with {} deny rules",
-                            plan.compiled.deny_hardware_ids.len()
-                        ),
-                        serde_json::json!({
-                            "revision_id": plan.compiled.revision_id,
-                            "deny_hardware_ids": plan.compiled.deny_hardware_ids,
-                            "allow_hardware_ids": plan.compiled.allow_hardware_ids,
-                            "retroactive": retroactive,
-                            "actor": identity.actor(),
-                        }),
-                    )?;
-                }
+                let mut g = self.lock()?;
+                self.session_event(
+                    &mut g,
+                    Severity::Warning,
+                    "compound_enforcement_mutation_started",
+                    format!(
+                        "privileged backend applying compound Windows Group Policy with {} deny rules",
+                        plan.compiled.deny_hardware_ids.len()
+                    ),
+                    serde_json::json!({
+                        "computer_name": computer_name,
+                        "policy_revision": plan.compiled.revision_id,
+                        "revision_id": plan.compiled.revision_id,
+                        "deny_hardware_ids": plan.compiled.deny_hardware_ids,
+                        "allow_hardware_ids": plan.compiled.allow_hardware_ids,
+                        "third_party_denies_preserved": third_party_denies.len(),
+                        "retroactive": retroactive,
+                        "actor": identity.actor(),
+                        "actor_username": actor_name,
+                        "windows_user": windows_user,
+                        "enforcement_outcome": "gpo_applying",
+                    }),
+                )?;
+            }
 
-                GpoPolicyWriter::apply_compound_policy(
+            backend
+                .apply_compound_policy(
                     &plan.compiled.deny_hardware_ids,
                     &plan.compiled.allow_hardware_ids,
+                    &third_party_denies,
+                    &third_party_allows,
                     retroactive,
                 )
                 .map_err(|e| {
@@ -1233,50 +1517,67 @@ impl AppService {
                     )
                 })?;
 
-                GpoPolicyWriter::trigger_policy_refresh();
+            backend.trigger_refresh();
 
-                // Targeted recovery: for any connected USB storage device whose manufacturer
-                // is configured as Allowed and which was in Code 28, trigger pnputil /restart-device
-                let devices_to_recover: Vec<String> = {
-                    let g = self.lock()?;
-                    let snap = g.last.clone().unwrap_or_else(empty_snapshot);
-                    snap.devices
-                        .into_iter()
-                        .filter(|d| {
-                            d.present == Some(true)
-                                && d.problem_code == Some(28)
-                                && plan.manufacturers.iter().any(|m| {
-                                    m.configured_intention
-                                        == rustward_enforcement::compound_policy::ConfiguredIntention::Allowed
-                                        && (m.hardware_ids.iter().any(|h| d.has_id(h))
-                                            || d.friendly_name.as_deref().is_some_and(|f| {
-                                                f.to_ascii_lowercase().contains(&m.brand_id.to_ascii_lowercase())
-                                            }))
-                                })
-                        })
-                        .filter_map(|d| {
-                            if d.instance_id.to_ascii_uppercase().starts_with("USB") {
-                                Some(d.instance_id)
-                            } else if let Some(parent) = d.parent_instance_id {
-                                if parent.to_ascii_uppercase().starts_with("USB") {
-                                    Some(parent)
-                                } else {
-                                    Some(d.instance_id)
-                                }
+            // Targeted recovery: for any connected USB storage device whose manufacturer
+            // is configured as Allowed and which was in Code 28, trigger devnode restart
+            let devices_to_recover: Vec<String> = {
+                let g = self.lock()?;
+                let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+                snap.devices
+                    .into_iter()
+                    .filter(|d| {
+                        d.present == Some(true)
+                            && d.problem_code == Some(28)
+                            && plan.manufacturers.iter().any(|m| {
+                                m.configured_intention
+                                    == rustward_enforcement::compound_policy::ConfiguredIntention::Allowed
+                                    && (m.hardware_ids.iter().any(|h| d.has_id(h))
+                                        || d.friendly_name.as_deref().is_some_and(|f| {
+                                            f.to_ascii_lowercase().contains(&m.brand_id.to_ascii_lowercase())
+                                        }))
+                            })
+                    })
+                    .map(|d| {
+                        if d.instance_id.to_ascii_uppercase().starts_with("USB") {
+                            d.instance_id
+                        } else if let Some(parent) = d.parent_instance_id {
+                            if parent.to_ascii_uppercase().starts_with("USB") {
+                                parent
                             } else {
-                                Some(d.instance_id)
+                                d.instance_id
                             }
-                        })
-                        .collect()
-                };
+                        } else {
+                            d.instance_id
+                        }
+                    })
+                    .collect()
+            };
 
-                for inst in &devices_to_recover {
-                    let _ = GpoPolicyWriter::restart_device_instance(inst);
-                }
-
-                GpoPolicyWriter::trigger_device_rescan();
-                std::thread::sleep(std::time::Duration::from_millis(500));
+            for inst in &devices_to_recover {
+                let _ = backend.restart_device_instance(inst);
             }
+
+            backend.trigger_rescan();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            let approved_record = ApprovedPolicyRecord {
+                policy_version: v.version,
+                revision_id: plan.compiled.revision_id.clone(),
+                catalog_version: v.catalog.catalog().catalog_version.clone(),
+                deny_ids: plan.compiled.deny_hardware_ids.clone(),
+                allow_ids: plan.compiled.allow_hardware_ids.clone(),
+                third_party_denies: third_party_denies.clone(),
+                retroactive,
+                auto_reconcile: settings.reconcile_on_startup,
+                approved_by: actor_name.clone(),
+                approved_ms: self.clock.now_ms(),
+            };
+            let mut g = self.lock()?;
+            g.store
+                .save_approved_policy(&approved_record)
+                .map_err(storage_err)?;
+            g.startup_reconcile_status = Some("already_in_sync".into());
         }
 
         let _ = self.refresh_inventory();
@@ -1294,10 +1595,16 @@ impl AppService {
                     updated_plan.diff.is_synchronized
                 ),
                 serde_json::json!({
+                    "computer_name": computer_name,
+                    "policy_revision": updated_plan.compiled.revision_id,
                     "revision_id": updated_plan.compiled.revision_id,
                     "active_denies": updated_plan.observed.active_denies,
+                    "third_party_denies": third_party_denies,
                     "is_applied": updated_plan.is_applied,
                     "actor": identity.actor(),
+                    "actor_username": actor_name,
+                    "windows_user": windows_user,
+                    "enforcement_outcome": "gpo_applied",
                 }),
             )?;
         }
@@ -1344,16 +1651,12 @@ impl AppService {
             }
         };
 
-        let is_live_windows = self.is_live_windows();
-        if is_live_windows {
-            #[cfg(windows)]
-            {
-                use rustward_windows::gpo_writer::GpoPolicyWriter;
-                GpoPolicyWriter::restart_device_instance(&instance_id)
-                    .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
-                GpoPolicyWriter::trigger_device_rescan();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
+        if let Some(backend) = self.effective_gpo_backend() {
+            backend
+                .restart_device_instance(&instance_id)
+                .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+            backend.trigger_rescan();
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
 
         let _ = self.refresh_inventory();
@@ -1367,6 +1670,7 @@ impl AppService {
     pub(crate) fn rollback_compound_policy_direct(
         &self,
         identity: &ClientIdentity,
+        actor_override: Option<&str>,
     ) -> Result<CompoundPolicyPlanView, IpcError> {
         if !identity.is_administrator {
             return Err(IpcError::new(
@@ -1375,8 +1679,31 @@ impl AppService {
             ));
         }
 
-        let is_live_windows = self.is_live_windows();
-        if is_live_windows {
+        let actor_name = actor_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| identity.actor());
+        let windows_user = self.current_windows_user();
+        let captured_before = self.capture_policy_unlocked();
+        let observed_before = captured_before
+            .as_ref()
+            .ok()
+            .map(|c| extract_observed_policy(&c.values));
+        let pre_plan = self.get_compound_policy_plan()?;
+        let (v, previous_approved) = {
+            let g = self.lock()?;
+            let v = Self::validated(&g.store)?;
+            let prev = g.store.approved_policy().ok().flatten();
+            (v, prev)
+        };
+        let computer_name = v.policy.policy().workstation_id.clone();
+        let (third_party_denies, third_party_allows) = collect_preserved_third_party_entries(
+            observed_before.as_ref(),
+            &pre_plan,
+            previous_approved.as_ref(),
+            &v,
+        );
+
+        if let Some(backend) = self.effective_gpo_backend() {
             if let Err(cap_err) = self.check_desktop_capability() {
                 return Err(IpcError::new(
                     ErrorCode::Unavailable,
@@ -1384,30 +1711,34 @@ impl AppService {
                 ));
             }
 
-            #[cfg(windows)]
             {
-                use rustward_windows::gpo_writer::GpoPolicyWriter;
-                {
-                    let mut g = self.lock()?;
-                    self.session_event(
-                        &mut g,
-                        Severity::Info,
-                        "compound_enforcement_rollback_started",
-                        "privileged backend restoring previous compound Windows Group Policy restrictions".to_string(),
-                        serde_json::json!({
-                            "actor": identity.actor(),
-                        }),
-                    )?;
-                }
-
-                GpoPolicyWriter::restore_compound_policy().map_err(|e| {
-                    IpcError::new(ErrorCode::Internal, format!("GPO rollback failed: {e}"))
-                })?;
-
-                GpoPolicyWriter::trigger_policy_refresh();
-                GpoPolicyWriter::trigger_device_rescan();
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                let mut g = self.lock()?;
+                self.session_event(
+                    &mut g,
+                    Severity::Info,
+                    "compound_enforcement_rollback_started",
+                    "privileged backend restoring previous compound Windows Group Policy restrictions".to_string(),
+                    serde_json::json!({
+                        "computer_name": computer_name,
+                        "third_party_denies_preserved": third_party_denies.len(),
+                        "actor": identity.actor(),
+                        "actor_username": actor_name,
+                        "windows_user": windows_user,
+                    }),
+                )?;
             }
+
+            backend
+                .restore_compound_policy(&third_party_denies, &third_party_allows)
+                .map_err(|e| IpcError::new(ErrorCode::Internal, format!("GPO rollback failed: {e}")))?;
+
+            backend.trigger_refresh();
+            backend.trigger_rescan();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            let mut g = self.lock()?;
+            g.store.clear_approved_policy().map_err(storage_err)?;
+            g.startup_reconcile_status = Some("none".into());
         }
 
         let _ = self.refresh_inventory();
@@ -1424,13 +1755,237 @@ impl AppService {
                     updated_plan.observed.active_denies.len()
                 ),
                 serde_json::json!({
+                    "computer_name": computer_name,
                     "active_denies": updated_plan.observed.active_denies,
+                    "third_party_denies": third_party_denies,
                     "actor": identity.actor(),
+                    "actor_username": actor_name,
+                    "windows_user": windows_user,
+                    "enforcement_outcome": "gpo_rolled_back",
                 }),
             )?;
         }
 
         Ok(updated_plan)
+    }
+
+    /// Reconciles local Windows Group Policy at service startup against the last
+    /// admin-approved policy snapshot while preserving third-party GPO entries.
+    pub fn reconcile_startup(&self) -> Result<String, IpcError> {
+        let windows_user = self.current_windows_user();
+        let (approved_res, settings, computer_name) = {
+            let g = self.lock()?;
+            let settings = g.store.settings().map_err(storage_err)?;
+            let approved_res = g.store.approved_policy();
+            let computer_name = Self::validated(&g.store)
+                .map(|v| v.policy.policy().workstation_id.clone())
+                .unwrap_or_else(|_| "WORKSTATION".to_owned());
+            (approved_res, settings, computer_name)
+        };
+
+        let approved = match approved_res {
+            Ok(Some(rec)) => rec,
+            Ok(None) => {
+                let mut g = self.lock()?;
+                g.startup_reconcile_status = Some("none".into());
+                return Ok("none".into());
+            }
+            Err(e) => {
+                let msg = format!("approved policy snapshot verification failed: {e}");
+                let mut g = self.lock()?;
+                g.startup_reconcile_status = Some("failed".into());
+                let _ = self.session_event(
+                    &mut g,
+                    Severity::Critical,
+                    "startup_reconcile_failed",
+                    msg.clone(),
+                    serde_json::json!({
+                        "computer_name": computer_name,
+                        "actor_username": "system_startup",
+                        "windows_user": windows_user,
+                        "enforcement_outcome": "reconcile_failed",
+                    }),
+                );
+                return Err(IpcError::new(ErrorCode::Internal, msg));
+            }
+        };
+
+        if !settings.reconcile_on_startup {
+            let mut g = self.lock()?;
+            g.startup_reconcile_status = Some("skipped_disabled".into());
+            let _ = self.session_event(
+                &mut g,
+                Severity::Info,
+                "startup_reconcile_skipped",
+                "startup policy reconciliation skipped because reconcile_on_startup is disabled".into(),
+                serde_json::json!({
+                    "computer_name": computer_name,
+                    "policy_revision": approved.revision_id,
+                    "actor_username": "system_startup",
+                    "windows_user": windows_user,
+                }),
+            );
+            return Ok("skipped_disabled".into());
+        }
+
+        for hwid in &approved.deny_ids {
+            if let Err(e) = validate_hardware_id(hwid) {
+                let msg = format!("approved deny ID '{hwid}' failed validation: {e}");
+                let mut g = self.lock()?;
+                g.startup_reconcile_status = Some("failed".into());
+                return Err(IpcError::new(ErrorCode::ValidationFailed, msg));
+            }
+        }
+        for hwid in &approved.allow_ids {
+            if let Err(e) = validate_hardware_id(hwid) {
+                let msg = format!("approved allow ID '{hwid}' failed validation: {e}");
+                let mut g = self.lock()?;
+                g.startup_reconcile_status = Some("failed".into());
+                return Err(IpcError::new(ErrorCode::ValidationFailed, msg));
+            }
+        }
+
+        let Some(backend) = self.effective_gpo_backend() else {
+            let mut g = self.lock()?;
+            g.startup_reconcile_status = Some("none".into());
+            return Ok("none".into());
+        };
+
+        let captured = self.capture_policy_unlocked();
+        let observed = captured
+            .as_ref()
+            .ok()
+            .map(|c| extract_observed_policy(&c.values));
+        let plan_for_classification = self.get_compound_policy_plan()?;
+        let v = {
+            let g = self.lock()?;
+            Self::validated(&g.store)?
+        };
+        let (live_third_denies, live_third_allows) = collect_preserved_third_party_entries(
+            observed.as_ref(),
+            &plan_for_classification,
+            Some(&approved),
+            &v,
+        );
+        let third_denies = normalized_uppercase_set(&approved.third_party_denies, &live_third_denies);
+        let expected_denies = normalized_uppercase_set(&approved.deny_ids, &third_denies);
+        let expected_allows = normalized_uppercase_set(&approved.allow_ids, &live_third_allows);
+
+        let in_sync = observed.as_ref().is_some_and(|obs| {
+            let obs_denies = normalized_uppercase_set(&obs.active_denies, &[]);
+            let obs_allows = normalized_uppercase_set(&obs.active_allows, &[]);
+            let needs_gpo_flag = !expected_denies.is_empty() || !expected_allows.is_empty();
+            obs_denies == expected_denies
+                && obs_allows == expected_allows
+                && obs.retroactive == approved.retroactive
+                && (!needs_gpo_flag || obs.raw_gpo_present)
+        });
+
+        if in_sync {
+            let mut g = self.lock()?;
+            g.startup_reconcile_status = Some("already_in_sync".into());
+            let _ = self.session_event(
+                &mut g,
+                Severity::Info,
+                "startup_reconcile_in_sync",
+                format!(
+                    "startup check verified Windows Group Policy matches approved revision {}",
+                    approved.revision_id
+                ),
+                serde_json::json!({
+                    "computer_name": computer_name,
+                    "policy_revision": approved.revision_id,
+                    "actor_username": "system_startup",
+                    "windows_user": windows_user,
+                    "enforcement_outcome": "gpo_in_sync",
+                }),
+            );
+            return Ok("already_in_sync".into());
+        }
+
+        if let Err(e) = backend.check_capability() {
+            let msg = format!("startup GPO capability check failed: {e}");
+            let mut g = self.lock()?;
+            g.startup_reconcile_status = Some("failed".into());
+            let _ = self.session_event(
+                &mut g,
+                Severity::Critical,
+                "startup_reconcile_failed",
+                msg.clone(),
+                serde_json::json!({
+                    "computer_name": computer_name,
+                    "policy_revision": approved.revision_id,
+                    "actor_username": "system_startup",
+                    "windows_user": windows_user,
+                    "enforcement_outcome": "reconcile_failed",
+                }),
+            );
+            return Err(IpcError::new(ErrorCode::Unavailable, msg));
+        }
+
+        let apply_res = if approved.deny_ids.is_empty()
+            && approved.allow_ids.is_empty()
+            && third_denies.is_empty()
+            && live_third_allows.is_empty()
+        {
+            backend.restore_compound_policy(&[], &[])
+        } else {
+            backend.apply_compound_policy(
+                &approved.deny_ids,
+                &approved.allow_ids,
+                &third_denies,
+                &live_third_allows,
+                approved.retroactive,
+            )
+        };
+
+        if let Err(e) = apply_res {
+            let msg = format!("startup GPO reconciliation failed: {e}");
+            let mut g = self.lock()?;
+            g.startup_reconcile_status = Some("failed".into());
+            let _ = self.session_event(
+                &mut g,
+                Severity::Critical,
+                "startup_reconcile_failed",
+                msg.clone(),
+                serde_json::json!({
+                    "computer_name": computer_name,
+                    "policy_revision": approved.revision_id,
+                    "actor_username": "system_startup",
+                    "windows_user": windows_user,
+                    "enforcement_outcome": "reconcile_failed",
+                }),
+            );
+            return Err(IpcError::new(ErrorCode::Internal, msg));
+        }
+
+        backend.trigger_refresh();
+        backend.trigger_rescan();
+        let _ = self.refresh_inventory();
+
+        let mut g = self.lock()?;
+        g.startup_reconcile_status = Some("reconciled".into());
+        self.session_event(
+            &mut g,
+            Severity::Warning,
+            "startup_reconcile_applied",
+            format!(
+                "startup reconciliation restored approved Windows Group Policy revision {} ({} deny rules)",
+                approved.revision_id,
+                approved.deny_ids.len()
+            ),
+            serde_json::json!({
+                "computer_name": computer_name,
+                "policy_revision": approved.revision_id,
+                "deny_count": approved.deny_ids.len(),
+                "third_party_preserved": third_denies.len(),
+                "actor_username": "system_startup",
+                "windows_user": windows_user,
+                "enforcement_outcome": "gpo_reconciled",
+            }),
+        )?;
+
+        Ok("reconciled".into())
     }
 
     /// Current session state (read-only towards Windows).

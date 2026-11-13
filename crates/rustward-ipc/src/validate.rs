@@ -73,6 +73,21 @@ fn query(q: &EventQuery) -> Result<(), IpcError> {
     if let Some(t) = &q.text {
         text("text", t, 200)?;
     }
+    if let Some(m) = &q.manufacturer_id {
+        text("manufacturer_id", m, 64)?;
+    }
+    if let Some(d) = &q.device_query {
+        text("device_query", d, 128)?;
+    }
+    if let Some(w) = &q.windows_user {
+        text("windows_user", w, 128)?;
+    }
+    if let Some(e) = &q.effective_decision {
+        text("effective_decision", e, 64)?;
+    }
+    if let Some(a) = &q.actor_username {
+        text("actor_username", a, 64)?;
+    }
     if let Some(s) = &q.min_severity
         && !["info", "warning", "critical"].contains(&s.as_str())
     {
@@ -111,6 +126,30 @@ fn settings(s: &SettingsView) -> Result<(), IpcError> {
     }
     if !(5..=3600).contains(&s.inventory_refresh_seconds) {
         return Err(bad("inventory_refresh_seconds must be 5..=3600"));
+    }
+    if !(1..=240).contains(&s.session_idle_timeout_minutes) {
+        return Err(bad("session_idle_timeout_minutes must be 1..=240"));
+    }
+    Ok(())
+}
+
+fn non_empty_text(field: &str, s: &str, max: usize) -> Result<(), IpcError> {
+    text(field, s, max)?;
+    if s.trim().is_empty() {
+        return Err(bad(format!("{field} is required")));
+    }
+    Ok(())
+}
+
+fn validate_secret_input(field: &str, s: &str) -> Result<(), IpcError> {
+    if s.is_empty() {
+        return Err(bad(format!("{field} is required")));
+    }
+    if s.chars().count() > 128 {
+        return Err(bad(format!("{field} longer than 128 characters")));
+    }
+    if s.chars().any(char::is_control) {
+        return Err(bad(format!("{field} contains control characters")));
     }
     Ok(())
 }
@@ -242,6 +281,10 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
         Request::ApplyCompoundPolicy {
             expected_policy_version,
             ..
+        }
+        | Request::ApplyBulkManufacturers {
+            expected_policy_version,
+            ..
         } => {
             if *expected_policy_version == 0 {
                 Err(bad("expected_policy_version must be at least 1"))
@@ -249,6 +292,66 @@ pub fn validate_request(r: &Request) -> Result<(), IpcError> {
                 Ok(())
             }
         }
+        Request::GetAuthStatus
+        | Request::Logout
+        | Request::LockSession
+        | Request::HeartbeatSession
+        | Request::ListAppUsers
+        | Request::PreviewBulkManufacturers { .. }
+        | Request::VerifyAuditChain
+        | Request::GetAboutInfo => Ok(()),
+        Request::GetNotificationFeed { after_event_id } => {
+            if after_event_id.is_some_and(|id| id < 0) {
+                Err(bad("after_event_id must be non-negative"))
+            } else {
+                Ok(())
+            }
+        }
+        Request::QueryAuditEvents { query: q } => query(q),
+        Request::SetupInitialAdmin {
+            username,
+            display_name,
+            password,
+        } => {
+            non_empty_text("username", username, 64)?;
+            non_empty_text("display_name", display_name, 80)?;
+            validate_secret_input("password", password)
+        }
+        Request::Login { username, password }
+        | Request::VerifyExitAuthorization { username, password } => {
+            non_empty_text("username", username, 64)?;
+            validate_secret_input("password", password)
+        }
+        Request::ChangePassword {
+            current_password,
+            new_password,
+        } => {
+            validate_secret_input("current_password", current_password)?;
+            validate_secret_input("new_password", new_password)
+        }
+        Request::ResetPasswordWithRecovery {
+            username,
+            recovery_key,
+            new_password,
+        } => {
+            non_empty_text("username", username, 64)?;
+            validate_secret_input("recovery_key", recovery_key)?;
+            validate_secret_input("new_password", new_password)
+        }
+        Request::CreateAppUser {
+            username,
+            display_name,
+            role,
+            password,
+        } => {
+            non_empty_text("username", username, 64)?;
+            non_empty_text("display_name", display_name, 80)?;
+            if !["admin", "read_only"].contains(&role.as_str()) {
+                return Err(bad("role must be admin or read_only"));
+            }
+            validate_secret_input("password", password)
+        }
+        Request::DeleteAppUser { username } => non_empty_text("username", username, 64),
     }
 }
 
@@ -387,10 +490,7 @@ mod tests {
             Request::UpdateSettings {
                 settings: SettingsView {
                     theme: "neon".into(),
-                    language: "tr".into(),
-                    notifications_enabled: true,
-                    audit_retention_days: 365,
-                    inventory_refresh_seconds: 30,
+                    ..SettingsView::default()
                 },
             },
         ];

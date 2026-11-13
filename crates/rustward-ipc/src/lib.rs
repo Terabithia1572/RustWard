@@ -64,6 +64,9 @@ pub struct RequestEnvelope {
     pub request_id: u64,
     /// Request.
     pub request: Request,
+    /// Opaque session token presented for authenticated operator actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 /// Response envelope.
@@ -309,6 +312,7 @@ mod tests {
                     notifications_enabled: true,
                     audit_retention_days: 365,
                     inventory_refresh_seconds: 30,
+                    ..messages::SettingsView::default()
                 },
             },
             Request::ApplyRetention,

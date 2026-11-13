@@ -1,5 +1,13 @@
 import type {
+  AboutInfoView,
+  AppUserView,
+  AuditChainVerificationView,
+  AuditPageView,
+  AuthStatusView,
   BackupView,
+  BulkManufacturerAction,
+  BulkManufacturerApplyResultView,
+  BulkManufacturerPreviewView,
   CompoundPolicyPlanView,
   DashboardView,
   DeviceView,
@@ -12,18 +20,23 @@ import type {
   ErrorCode,
   EventQuery,
   EventView,
+  ExitAuthorizationView,
   ExplanationView,
   ExportFormat,
   ExportView,
+  LoginResultView,
   ManufacturerInput,
   ManufacturersView,
   MutationView,
+  NotificationFeedView,
   PolicyChangeView,
+  RecoveryResetView,
   Request,
   RestorePreviewView,
   ResponseBody,
   SettingsView,
   SimulationView,
+  UserRole,
 } from "./types";
 
 /** Error returned by the backend (validated server-side). */
@@ -285,5 +298,111 @@ export class Api {
     type: "apply_retention" | "create_backup" | "refresh_inventory" | "load_synthetic_inventory",
   ): Promise<{ message: string; message_tr?: string }> {
     return expect(await this.call({ type }), "done");
+  }
+
+  // ---- V1.1 Enterprise Security, Auth, Bulk Actions & Audited Operations ----
+
+  async authStatus(): Promise<AuthStatusView> {
+    return expect(await this.call({ type: "get_auth_status" }), "auth_status");
+  }
+  async setupInitialAdmin(username: string, displayName: string, password: string): Promise<LoginResultView> {
+    return expect(
+      await this.call({ type: "setup_initial_admin", username, display_name: displayName, password }),
+      "login",
+    );
+  }
+  async login(username: string, password: string): Promise<LoginResultView> {
+    return expect(await this.call({ type: "login", username, password }), "login");
+  }
+  async logout(): Promise<AuthStatusView> {
+    return expect(await this.call({ type: "logout" }), "auth_status");
+  }
+  async lockSession(): Promise<AuthStatusView> {
+    return expect(await this.call({ type: "lock_session" }), "auth_status");
+  }
+  async heartbeatSession(): Promise<AuthStatusView> {
+    return expect(await this.call({ type: "heartbeat_session" }), "auth_status");
+  }
+  async changePassword(currentPassword: string, newPassword: string): Promise<MutationView> {
+    return expect(
+      await this.call({ type: "change_password", current_password: currentPassword, new_password: newPassword }),
+      "mutation",
+    );
+  }
+  async resetPasswordWithRecovery(
+    username: string,
+    recoveryKey: string,
+    newPassword: string,
+  ): Promise<RecoveryResetView> {
+    return expect(
+      await this.call({
+        type: "reset_password_with_recovery",
+        username,
+        recovery_key: recoveryKey,
+        new_password: newPassword,
+      }),
+      "recovery_reset",
+    );
+  }
+  async createAppUser(
+    username: string,
+    displayName: string,
+    role: UserRole,
+    password: string,
+  ): Promise<AppUserView[]> {
+    return expect(
+      await this.call({ type: "create_app_user", username, display_name: displayName, role, password }),
+      "app_users",
+    );
+  }
+  async listAppUsers(): Promise<AppUserView[]> {
+    return expect(await this.call({ type: "list_app_users" }), "app_users");
+  }
+  async deleteAppUser(username: string): Promise<AppUserView[]> {
+    return expect(await this.call({ type: "delete_app_user", username }), "app_users");
+  }
+  async verifyExitAuthorization(username: string, password: string): Promise<ExitAuthorizationView> {
+    return expect(
+      await this.call({ type: "verify_exit_authorization", username, password }),
+      "exit_authorized",
+    );
+  }
+  async previewBulkManufacturers(action: BulkManufacturerAction): Promise<BulkManufacturerPreviewView> {
+    return expect(
+      await this.call({ type: "preview_bulk_manufacturers", action }),
+      "bulk_preview",
+    );
+  }
+  async applyBulkManufacturers(args: {
+    action: BulkManufacturerAction;
+    applyToWindows: boolean;
+    retroactive: boolean;
+    expectedPolicyVersion: number;
+  }): Promise<BulkManufacturerApplyResultView> {
+    return expect(
+      await this.call({
+        type: "apply_bulk_manufacturers",
+        action: args.action,
+        apply_to_windows: args.applyToWindows,
+        retroactive: args.retroactive,
+        expected_policy_version: args.expectedPolicyVersion,
+      }),
+      "bulk_apply_result",
+    );
+  }
+  async notificationFeed(afterEventId?: number | null): Promise<NotificationFeedView> {
+    return expect(
+      await this.call({ type: "get_notification_feed", after_event_id: afterEventId ?? null }),
+      "notification_feed",
+    );
+  }
+  async queryAuditEvents(query: EventQuery): Promise<AuditPageView> {
+    return expect(await this.call({ type: "query_audit_events", query }), "audit_page");
+  }
+  async verifyAuditChain(): Promise<AuditChainVerificationView> {
+    return expect(await this.call({ type: "verify_audit_chain" }), "audit_chain_verification");
+  }
+  async aboutInfo(): Promise<AboutInfoView> {
+    return expect(await this.call({ type: "get_about_info" }), "about_info");
   }
 }

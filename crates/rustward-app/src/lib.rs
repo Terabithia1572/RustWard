@@ -11,13 +11,18 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 mod guided;
 pub mod inventory;
 pub mod l10n;
 mod observation;
 mod policy_source;
+mod v11;
 
-use std::collections::HashMap;
+pub use guided::GpoBackend;
+pub(crate) use rustward_enforcement::NOT_VALIDATED_BANNER_TR;
+
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -36,8 +41,7 @@ use rustward_core::policy_edit::{
 };
 use rustward_core::report::utc_date;
 use rustward_enforcement::{
-    DeviceInstallRestrictionProvider, EnforcementProvider, EnvironmentFacts,
-    NOT_VALIDATED_BANNER_TR, PlanInputs,
+    DeviceInstallRestrictionProvider, EnforcementProvider, EnvironmentFacts, PlanInputs,
 };
 use rustward_ipc::messages::{
     ActualEnforcementView, AdapterView, BackupView, DashboardView, DatabaseHealthView, DeviceView,
@@ -51,8 +55,8 @@ use rustward_ipc::rpc::Handler;
 use rustward_ipc::{ClientIdentity, ErrorCode, IpcError, Request, ResponseBody};
 use rustward_storage::{
     AppSettings, BackupKind, BackupRecord, ChainStatus, Clock, DeviceRow, EventFilter,
-    EventObserver, Language, NewEvent, RestoreCandidate, SecurityEvent, Severity, StorageError,
-    Store, Theme, device_key, mask_instance_id, sha256_hex,
+    EventMetadata, EventObserver, Language, NewEvent, RestoreCandidate, SecurityEvent, Severity,
+    StorageError, Store, Theme, UserRole, device_key, mask_instance_id, sha256_hex,
 };
 
 pub use inventory::{EmptyInventory, FixtureInventory, InventorySource, LiveInventory};
@@ -121,6 +125,8 @@ struct Inner {
     auth_suppressed: u64,
     staged_restore: Option<StagedRestore>,
     restore_counter: u64,
+    auth: auth::AuthManager,
+    startup_reconcile_status: Option<String>,
 }
 
 /// A verified backup waiting for `ApplyRestore`.
@@ -169,6 +175,8 @@ pub struct AppService {
     config: AppConfig,
     provider: DeviceInstallRestrictionProvider,
     policy_source: Box<dyn PolicySource>,
+    gpo_backend: Option<Arc<dyn guided::GpoBackend>>,
+    windows_user_resolver: fn() -> Option<String>,
     started_ms: i64,
 }
 
@@ -304,6 +312,28 @@ fn device_label(rec: &DeviceRecord, dec: &Decision) -> String {
     })
 }
 
+pub(crate) fn decision_brand_id(
+    reason: &rustward_core::evaluate::DecisionReason,
+) -> Option<String> {
+    match reason {
+        rustward_core::evaluate::DecisionReason::BrandAllowed { brand_id }
+        | rustward_core::evaluate::DecisionReason::BrandDenied { brand_id }
+        | rustward_core::evaluate::DecisionReason::BrandNotAllowed { brand_id } => {
+            Some(brand_id.clone())
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn decision_transport(category: &DeviceCategory) -> Option<String> {
+    match category {
+        DeviceCategory::UsbStorageDisk { transport } => {
+            Some(json_code(&serde_json::json!({ "t": transport }), "t"))
+        }
+        _ => None,
+    }
+}
+
 fn row_from(
     dec: &Decision,
     rec: &DeviceRecord,
@@ -312,20 +342,8 @@ fn row_from(
     state: &str,
 ) -> DeviceRow {
     let category = json_code(&dec.classification.category, "kind");
-    let transport = match &dec.classification.category {
-        DeviceCategory::UsbStorageDisk { transport } => {
-            Some(json_code(&serde_json::json!({ "t": transport }), "t"))
-        }
-        _ => None,
-    };
-    let matched_brand = match &dec.reason {
-        rustward_core::evaluate::DecisionReason::BrandAllowed { brand_id }
-        | rustward_core::evaluate::DecisionReason::BrandDenied { brand_id }
-        | rustward_core::evaluate::DecisionReason::BrandNotAllowed { brand_id } => {
-            Some(brand_id.clone())
-        }
-        _ => None,
-    };
+    let transport = decision_transport(&dec.classification.category);
+    let matched_brand = decision_brand_id(&dec.reason);
     DeviceRow {
         device_key: device_key(&rec.instance_id),
         display_id: mask_instance_id(&rec.instance_id),
@@ -365,10 +383,14 @@ fn row_from(
 }
 
 fn device_view(r: &DeviceRow) -> DeviceView {
-    device_view_with_policy(r, None)
+    device_view_with_evidence(r, None, None)
 }
 
-fn device_view_with_policy(r: &DeviceRow, policy: Option<&rustward_core::policy::ValidatedPolicy>) -> DeviceView {
+fn device_view_with_evidence(
+    r: &DeviceRow,
+    policy: Option<&rustward_core::policy::ValidatedPolicy>,
+    verified_denied_keys: Option<&HashSet<String>>,
+) -> DeviceView {
     let override_status = policy.and_then(|p| {
         let hw = r.vendor_level_id.as_deref().unwrap_or(&r.display_id);
         if p.device_denied(hw) {
@@ -379,6 +401,8 @@ fn device_view_with_policy(r: &DeviceRow, policy: Option<&rustward_core::policy:
             None
         }
     });
+    let enforcement_verified =
+        verified_denied_keys.is_some_and(|keys| keys.contains(&r.device_key));
 
     DeviceView {
         device_key: r.device_key.clone(),
@@ -399,8 +423,7 @@ fn device_view_with_policy(r: &DeviceRow, policy: Option<&rustward_core::policy:
         reason: r.last_reason.clone(),
         policy_version: r.last_policy_version,
         enforcement_state: r.enforcement_state.clone(),
-        // No runtime enforcement evidence exists in this build.
-        enforcement_verified: false,
+        enforcement_verified,
         device_override: override_status,
     }
 }
@@ -455,6 +478,10 @@ const PENDING_NATIVE: &[(&str, &str)] = &[
 
 fn event_view(e: SecurityEvent, names: l10n::Names<'_>) -> EventView {
     let message_tr = l10n::event(&e, names);
+    let meta = EventMetadata::from_details(&e.details);
+    let policy_revision = meta
+        .policy_revision
+        .or_else(|| e.policy_version.map(|v| format!("v{v}")));
     EventView {
         message_tr,
         id: e.id,
@@ -466,6 +493,20 @@ fn event_view(e: SecurityEvent, names: l10n::Names<'_>) -> EventView {
         simulated: e.simulated,
         enforcement_state: e.enforcement_state,
         policy_version: e.policy_version,
+        computer_name: meta.computer_name,
+        manufacturer_id: meta.manufacturer_id,
+        device_name: meta.device_name,
+        vid_pid: meta.vid_pid,
+        transport: meta.transport,
+        pnp_problem_code: meta.pnp_problem_code,
+        effective_decision: meta.effective_decision,
+        enforcement_outcome: meta.enforcement_outcome,
+        actor_username: meta.actor_username,
+        windows_user: meta.windows_user,
+        policy_revision,
+        details: e.details,
+        prev_hash: e.prev_hash,
+        hash: e.hash,
     }
 }
 
@@ -485,11 +526,15 @@ fn settings_view(s: &AppSettings) -> SettingsView {
         notifications_enabled: s.notifications_enabled,
         audit_retention_days: s.audit_retention_days,
         inventory_refresh_seconds: s.inventory_refresh_seconds,
+        reconcile_on_startup: s.reconcile_on_startup,
+        session_idle_timeout_minutes: s.session_idle_timeout_minutes,
+        notify_on_blocked: s.notify_on_blocked,
+        notify_on_unblocked_warning: s.notify_on_unblocked_warning,
     }
 }
 
 fn settings_from(v: &SettingsView) -> Result<AppSettings, IpcError> {
-    Ok(AppSettings {
+    let settings = AppSettings {
         theme: match v.theme.as_str() {
             "system" => Theme::System,
             "light" => Theme::Light,
@@ -504,21 +549,52 @@ fn settings_from(v: &SettingsView) -> Result<AppSettings, IpcError> {
         notifications_enabled: v.notifications_enabled,
         audit_retention_days: v.audit_retention_days,
         inventory_refresh_seconds: v.inventory_refresh_seconds,
-    })
+        reconcile_on_startup: v.reconcile_on_startup,
+        session_idle_timeout_minutes: v.session_idle_timeout_minutes,
+        notify_on_blocked: v.notify_on_blocked,
+        notify_on_unblocked_warning: v.notify_on_unblocked_warning,
+    };
+    settings
+        .validate()
+        .map_err(|e| IpcError::new(ErrorCode::InvalidRequest, e))?;
+    Ok(settings)
 }
 
-fn event_filter(q: &EventQuery) -> EventFilter {
-    EventFilter {
+fn event_filter(q: &EventQuery) -> Result<EventFilter, IpcError> {
+    let min_severity = match q.min_severity.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(
+            Severity::parse(s)
+                .ok_or_else(|| IpcError::new(ErrorCode::InvalidRequest, "invalid min_severity"))?,
+        ),
+        None => None,
+    };
+    Ok(EventFilter {
         text: q.text.clone(),
-        min_severity: q.min_severity.as_deref().and_then(Severity::parse),
+        min_severity,
         kind: q.kind.clone(),
         device_key: None,
         since_ms: q.since_ms,
         until_ms: q.until_ms,
         simulated: q.simulated,
+        manufacturer_id: q.manufacturer_id.clone(),
+        device_query: q.device_query.clone(),
+        windows_user: q.windows_user.clone(),
+        effective_decision: q.effective_decision.clone(),
+        actor_username: q.actor_username.clone(),
         limit: q.limit,
         offset: q.offset,
-    }
+    })
+}
+
+fn default_windows_user_resolver() -> Option<String> {
+    rustward_windows::wts::current_single_interactive_windows_user()
+}
+
+fn default_computer_name() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn empty_snapshot() -> DeviceSnapshot {
@@ -584,12 +660,16 @@ impl AppService {
                 auth_suppressed: 0,
                 staged_restore: None,
                 restore_counter: 0,
+                auth: auth::AuthManager::new(false),
+                startup_reconcile_status: None,
             }),
             inventory: Mutex::new(inventory),
             clock,
             config,
             provider: DeviceInstallRestrictionProvider,
             policy_source: Box::new(LivePolicySource),
+            gpo_backend: None,
+            windows_user_resolver: default_windows_user_resolver,
             started_ms,
         })
     }
@@ -599,6 +679,37 @@ impl AppService {
     pub fn with_policy_source(mut self, source: Box<dyn PolicySource>) -> Self {
         self.policy_source = source;
         self
+    }
+
+    /// Enable or disable application-level operator authentication enforcement.
+    #[must_use]
+    pub fn with_app_auth(self, enabled: bool) -> Self {
+        if let Ok(mut g) = self.inner.lock() {
+            g.auth.set_force_auth(enabled);
+        }
+        self
+    }
+
+    /// Replace the active GPO enforcement backend (used in deterministic tests).
+    #[must_use]
+    pub fn with_gpo_backend(mut self, backend: Arc<dyn guided::GpoBackend>) -> Self {
+        self.gpo_backend = Some(backend);
+        self
+    }
+
+    /// Replace the interactive Windows user resolver (used in deterministic tests).
+    #[must_use]
+    pub fn with_windows_user_resolver(mut self, resolver: fn() -> Option<String>) -> Self {
+        self.windows_user_resolver = resolver;
+        self
+    }
+
+    pub(crate) fn resolved_windows_user(&self) -> Option<String> {
+        (self.windows_user_resolver)()
+    }
+
+    pub(crate) fn resolved_computer_name(&self) -> Option<String> {
+        default_computer_name()
     }
 
     pub(crate) fn capture_policy_unlocked(
@@ -1134,10 +1245,10 @@ impl AppService {
             .map_or(u32::MAX, |g| g.consecutive_failures)
     }
 
-    /// Collect the inventory, record detections and simulated decisions.
+    /// Collect the inventory, record detections and simulated or observed policy status.
     pub fn refresh_inventory(&self) -> Result<RefreshSummary, IpcError> {
-        // Enumerate Windows devices WITHOUT the state lock (this is the slow
-        // part); refreshes are serialized by the inventory lock.
+        // Enumerate Windows devices and inspect Windows policy WITHOUT the state lock;
+        // refreshes are serialized by the inventory lock.
         let mut inv = self
             .inventory
             .lock()
@@ -1145,10 +1256,11 @@ impl AppService {
         let t = std::time::Instant::now();
         let collected = inv.collect();
         let collect_ms = elapsed_ms(t);
-        let mut g = self.lock()?;
         drop(inv);
+        let captured = self.capture_policy_unlocked();
+        let mut g = self.lock()?;
         let t = std::time::Instant::now();
-        let result = self.apply_collected(&mut g, collected);
+        let result = self.apply_collected(&mut g, collected, captured);
         let apply_ms = elapsed_ms(t);
         let now = self.clock.now_ms();
         let p = &mut g.perf;
@@ -1165,10 +1277,91 @@ impl AppService {
         result
     }
 
+    /// Inspect live Windows SetupAPI + GPO restrictions after background refresh so
+    /// desktop notifications remain timely even when no UI window is open.
+    pub fn observe_windows_enforcement(&self) -> Result<(), IpcError> {
+        if !self.is_live_windows() {
+            return Ok(());
+        }
+        let captured = self.capture_policy_unlocked();
+        if captured.is_err() {
+            return Ok(());
+        }
+        let mut g = self.lock()?;
+        let synthetic = g
+            .last
+            .as_ref()
+            .is_none_or(|s| matches!(s.source, SnapshotSource::Synthetic { .. }));
+        if synthetic {
+            return Ok(());
+        }
+        let _ = self.enforcement_observation(&mut g, captured)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn device_audit_details(
+        rec: &DeviceRecord,
+        dec: &Decision,
+        computer_name: Option<&str>,
+        windows_user: Option<&str>,
+        policy_revision: Option<&str>,
+        effective_decision: Option<&str>,
+        enforcement_outcome: Option<&str>,
+        extra: Option<(&str, serde_json::Value)>,
+    ) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "category".into(),
+            serde_json::json!(json_code(&dec.classification.category, "kind")),
+        );
+        map.insert(
+            "display_id".into(),
+            serde_json::json!(mask_instance_id(&rec.instance_id)),
+        );
+        if let Some(cn) = computer_name {
+            map.insert("computer_name".into(), serde_json::json!(cn));
+        }
+        if let Some(m) = decision_brand_id(&dec.reason) {
+            map.insert("manufacturer_id".into(), serde_json::json!(m));
+        }
+        let dev_name = device_label(rec, dec);
+        map.insert("device_name".into(), serde_json::json!(dev_name));
+        if let Some(u) = &dec.classification.usb_ancestor {
+            map.insert(
+                "vid_pid".into(),
+                serde_json::json!(format!("{:04X}:{:04X}", u.ids.vid, u.ids.pid)),
+            );
+        }
+        if let Some(transport) = decision_transport(&dec.classification.category) {
+            map.insert("transport".into(), serde_json::json!(transport));
+        }
+        if let Some(code) = rec.problem_code {
+            map.insert("pnp_problem_code".into(), serde_json::json!(code));
+        }
+        if let Some(wu) = windows_user {
+            map.insert("windows_user".into(), serde_json::json!(wu));
+        }
+        if let Some(pr) = policy_revision {
+            map.insert("policy_revision".into(), serde_json::json!(pr));
+        }
+        if let Some(ed) = effective_decision {
+            map.insert("effective_decision".into(), serde_json::json!(ed));
+        }
+        if let Some(eo) = enforcement_outcome {
+            map.insert("enforcement_outcome".into(), serde_json::json!(eo));
+        }
+        if let Some((k, v)) = extra {
+            map.insert(k.to_owned(), v);
+        }
+        serde_json::Value::Object(map)
+    }
+
     fn apply_collected(
         &self,
         g: &mut Inner,
         collected: Result<(DeviceSnapshot, Vec<String>), String>,
+        captured: Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
     ) -> Result<RefreshSummary, IpcError> {
         let now = self.clock.now_ms();
         let state_code = self.enforcement_state_code();
@@ -1202,6 +1395,28 @@ impl AppService {
             .iter()
             .map(|d| (d.instance_id.to_ascii_uppercase(), d))
             .collect();
+        let windows_user = self.resolved_windows_user();
+        let computer_name = Some(
+            self.resolved_computer_name()
+                .unwrap_or_else(|| v.state.policy.workstation_id.clone()),
+        );
+        let policy_revision = Some(format!("v{}", v.version));
+        let verified_denied_keys: HashSet<String> = if !synthetic {
+            if let Ok(ref cap) = captured {
+                rustward_enforcement::observer::observe(&snap, &v.policy, &v.catalog, cap)
+                    .devices
+                    .into_iter()
+                    .filter(|d| {
+                        d.evidence == rustward_enforcement::observer::EvidenceLevel::InstallDenied
+                    })
+                    .map(|d| device_key(&d.instance_id))
+                    .collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
         let old = g.last.take().unwrap_or_else(empty_snapshot);
         let diff = diff_snapshots(&old, &snap);
         let mut summary = RefreshSummary {
@@ -1239,14 +1454,43 @@ impl AppService {
             let key = device_key(&rec.instance_id);
             let label = device_label(rec, dec);
             let category = json_code(&dec.classification.category, "kind");
+            let eff_dec = match dec.verdict {
+                Verdict::Allow => "allowed",
+                Verdict::Deny => "blocked",
+                Verdict::NotApplicable => "not_applicable",
+            };
+            let windows_blocked = verified_denied_keys.contains(&key);
+            let outcome = if synthetic {
+                "simulated"
+            } else if dec.verdict == Verdict::Deny && windows_blocked {
+                "windows_blocked_verified"
+            } else if dec.verdict == Verdict::Deny && captured.is_ok() {
+                "not_enforced"
+            } else if dec.verdict == Verdict::Allow && captured.is_ok() {
+                "allowed"
+            } else {
+                "unverified"
+            };
             event(
                 &mut g.store,
                 Severity::Info,
                 "device_detected",
                 Some(key.clone()),
-                format!("{label} detected ({category}){}", if synthetic { " [SYNTHETIC]" } else { "" }),
+                format!(
+                    "{label} detected ({category}){}",
+                    if synthetic { " [SYNTHETIC]" } else { "" }
+                ),
                 synthetic,
-                serde_json::json!({ "category": category, "display_id": mask_instance_id(&rec.instance_id) }),
+                Self::device_audit_details(
+                    rec,
+                    dec,
+                    computer_name.as_deref(),
+                    windows_user.as_deref(),
+                    policy_revision.as_deref(),
+                    Some(eff_dec),
+                    Some(outcome),
+                    None,
+                ),
             )
             .map_err(storage_err)?;
             if dec.classification.category.scope() != StorageScope::NotInScope {
@@ -1255,16 +1499,61 @@ impl AppService {
                     summary.simulated_denials += 1;
                 }
                 let e = explain(dec);
-                event(
-                    &mut g.store,
-                    if deny { Severity::Warning } else { Severity::Info },
-                    "decision_simulated",
-                    Some(key),
-                    format!("{label}: {} — enforcement NOT ACTIVE", e.summary_en),
-                    true,
-                    serde_json::json!({ "verdict": verdict_code(dec.verdict), "reason": json_code(&dec.reason, "code"), "summary_tr": e.summary_tr }),
-                )
-                .map_err(storage_err)?;
+                if synthetic || (deny && captured.is_err()) {
+                    let mut det = Self::device_audit_details(
+                        rec,
+                        dec,
+                        computer_name.as_deref(),
+                        windows_user.as_deref(),
+                        policy_revision.as_deref(),
+                        Some(eff_dec),
+                        Some("simulated"),
+                        Some((
+                            "reason",
+                            serde_json::json!(json_code(&dec.reason, "code")),
+                        )),
+                    );
+                    if let Some(obj) = det.as_object_mut() {
+                        obj.insert("verdict".into(), serde_json::json!(verdict_code(dec.verdict)));
+                        obj.insert("summary_tr".into(), serde_json::json!(e.summary_tr));
+                    }
+                    event(
+                        &mut g.store,
+                        if deny {
+                            Severity::Warning
+                        } else {
+                            Severity::Info
+                        },
+                        "decision_simulated",
+                        Some(key),
+                        format!("{label}: {} — enforcement NOT ACTIVE", e.summary_en),
+                        true,
+                        det,
+                    )
+                    .map_err(storage_err)?;
+                } else if deny && !windows_blocked {
+                    event(
+                        &mut g.store,
+                        Severity::Warning,
+                        "usb_deny_not_enforced",
+                        Some(key),
+                        format!(
+                            "{label}: denied by RustWard policy, but Windows installation blocking is NOT currently verified (apply Group Policy or reconnect)."
+                        ),
+                        false,
+                        Self::device_audit_details(
+                            rec,
+                            dec,
+                            computer_name.as_deref(),
+                            windows_user.as_deref(),
+                            policy_revision.as_deref(),
+                            Some("blocked"),
+                            Some("not_enforced"),
+                            Some(("summary_tr", serde_json::json!(e.summary_tr))),
+                        ),
+                    )
+                    .map_err(storage_err)?;
+                }
             }
         }
         if !diff.removed.is_empty() {
@@ -1284,7 +1573,16 @@ impl AppService {
                     Some(device_key(&rec.instance_id)),
                     format!("{} removed", device_label(rec, &old_dec)),
                     synthetic,
-                    serde_json::json!({}),
+                    Self::device_audit_details(
+                        rec,
+                        &old_dec,
+                        computer_name.as_deref(),
+                        windows_user.as_deref(),
+                        policy_revision.as_deref(),
+                        None,
+                        Some("disconnected"),
+                        None,
+                    ),
                 )
                 .map_err(storage_err)?;
             }
@@ -1427,12 +1725,34 @@ impl AppService {
         view
     }
 
-    fn mutate(
+    pub(crate) fn event_view(e: SecurityEvent, names: l10n::Names<'_>) -> EventView {
+        event_view(e, names)
+    }
+
+    pub(crate) fn event_filter(q: &EventQuery) -> Result<EventFilter, IpcError> {
+        event_filter(q)
+    }
+
+    pub(crate) fn apply_edit_with_actor(
         &self,
         edit: &PolicyEdit,
         expected: u64,
         identity: &ClientIdentity,
+        actor_override: Option<&str>,
     ) -> Result<ResponseBody, IpcError> {
+        self.mutate_with_actor(edit, expected, identity, actor_override)
+    }
+
+    fn mutate_with_actor(
+        &self,
+        edit: &PolicyEdit,
+        expected: u64,
+        identity: &ClientIdentity,
+        actor_override: Option<&str>,
+    ) -> Result<ResponseBody, IpcError> {
+        let actor_str = actor_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| identity.actor());
         let mut g = self.lock()?;
         let v = Self::validated(&g.store)?;
         if v.version != expected {
@@ -1446,7 +1766,7 @@ impl AppService {
         }
         let outcome = apply_edit(&v.state, edit).map_err(edit_err)?;
         g.store
-            .commit_policy_edit(&outcome, &identity.actor())
+            .commit_policy_edit(&outcome, &actor_str)
             .map_err(storage_err)?;
         self.reevaluate_locked(&mut g)?;
         let names = Self::brand_names(&g.store);
@@ -1467,6 +1787,29 @@ impl AppService {
             summary_tr,
             warnings_tr,
         }))
+    }
+
+    fn verified_denied_keys(
+        &self,
+        g: &Inner,
+        captured: &Result<rustward_enforcement::policy_inspect::CapturedPolicy, String>,
+    ) -> HashSet<String> {
+        let Ok(cap) = captured else {
+            return HashSet::new();
+        };
+        let Ok(v) = Self::validated(&g.store) else {
+            return HashSet::new();
+        };
+        let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+        if matches!(snap.source, SnapshotSource::Synthetic { .. }) {
+            return HashSet::new();
+        }
+        rustward_enforcement::observer::observe(&snap, &v.policy, &v.catalog, cap)
+            .devices
+            .into_iter()
+            .filter(|d| d.evidence == rustward_enforcement::observer::EvidenceLevel::InstallDenied)
+            .map(|d| device_key(&d.instance_id))
+            .collect()
     }
 
     fn manufacturers(v: &Validated) -> ManufacturersView {
@@ -1558,9 +1901,20 @@ impl AppService {
         let names = Self::brand_names(&g.store);
         let mut warnings = Vec::new();
         let mut warnings_tr = Vec::new();
+        let validated = match Self::validated(&g.store) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warnings_tr.push(format!(
+                    "Politika kullanılamıyor. (Teknik ayrıntı: {})",
+                    e.message
+                ));
+                warnings.push(format!("policy unavailable: {}", e.message));
+                None
+            }
+        };
         let (workstation_id, policy_version, catalog_version, last_update, allowed) =
-            match Self::validated(&g.store) {
-                Ok(v) => {
+            match &validated {
+                Some(v) => {
                     warnings.extend(v.policy.warnings().iter().map(|w| w.detail.clone()));
                     warnings_tr.extend(
                         v.policy
@@ -1576,14 +1930,7 @@ impl AppService {
                         u32::try_from(v.policy.enabled_brands().count()).unwrap_or(u32::MAX),
                     )
                 }
-                Err(e) => {
-                    warnings_tr.push(format!(
-                        "Politika kullanılamıyor. (Teknik ayrıntı: {})",
-                        e.message
-                    ));
-                    warnings.push(format!("policy unavailable: {}", e.message));
-                    ("?".into(), 0, "?".into(), None, 0)
-                }
+                None => ("?".into(), 0, "?".into(), None, 0),
             };
         if let Some(e) = &g.last_inventory_error {
             warnings.push(format!("inventory error: {e}"));
@@ -1606,15 +1953,34 @@ impl AppService {
                 ..EventFilter::default()
             })
             .map_err(storage_err)?;
+        let verified_denied_keys = self.verified_denied_keys(g, &captured);
+        let compound_plan = validated.as_ref().map(|v| {
+            let snap = g.last.clone().unwrap_or_else(empty_snapshot);
+            let snapshot_ref = captured.as_ref().ok().map(|c| &c.values);
+            rustward_enforcement::compound_policy::compile_compound_policy(
+                &v.policy,
+                &v.catalog,
+                &snap.devices,
+                snapshot_ref,
+                true,
+            )
+        });
         let windows_protection = self.windows_protection(g, captured)?;
-        let protection_verified =
-            state.is_verified_protection() || windows_protection.state == "verified_active";
+        let prot = v11::compute_dashboard_protection(
+            self,
+            &g.store,
+            compound_plan.as_ref(),
+            &windows_protection,
+            synthetic_data_present,
+            validated.as_ref(),
+        );
+        let policy_ref = validated.as_ref().map(|v| &v.policy);
         Ok(DashboardView {
             enforcement_state: state.code().into(),
             enforcement_label_tr: state.label_tr().into(),
             enforcement_label_en: state.label_en().into(),
-            protection_verified,
-            not_validated_banner: (!protection_verified).then(|| NOT_VALIDATED_BANNER_TR.into()),
+            protection_verified: prot.protection_verified,
+            not_validated_banner: prot.not_validated_banner,
             service: self.service_status(g),
             workstation_id,
             policy_version,
@@ -1628,12 +1994,22 @@ impl AppService {
                     .count(),
             )
             .unwrap_or(u32::MAX),
-            recent_denied: denied.into_iter().take(5).map(device_view).collect(),
+            recent_denied: denied
+                .into_iter()
+                .take(5)
+                .map(|d| device_view_with_evidence(d, policy_ref, Some(&verified_denied_keys)))
+                .collect(),
             recent_events: events.into_iter().map(|e| event_view(e, &names)).collect(),
             windows_protection,
             warnings_tr,
             warnings,
             synthetic_data_present,
+            protection_category: prot.protection_category,
+            protection_detail_tr: prot.protection_detail_tr,
+            protection_detail_en: prot.protection_detail_en,
+            pending_policy_apply: prot.pending_policy_apply,
+            approved_policy_version: prot.approved_policy_version,
+            startup_reconcile_status: g.startup_reconcile_status.clone(),
         })
     }
 
@@ -1832,8 +2208,9 @@ impl AppService {
         q: &EventQuery,
         format: ExportFormat,
         identity: &ClientIdentity,
+        actor_override: Option<&str>,
     ) -> Result<ExportView, IpcError> {
-        let mut f = event_filter(q);
+        let mut f = event_filter(q)?;
         f.limit = Some(q.limit.unwrap_or(5000).min(5000));
         let events = g.store.list_events(&f).map_err(storage_err)?;
         let names = Self::brand_names(&g.store);
@@ -1853,9 +2230,14 @@ impl AppService {
             ),
             ExportFormat::Csv => {
                 let mut s = String::from(
-                    "id,utc,severity,kind,simulated,enforcement_state,policy_version,device_key,message\n",
+                    "id,utc,severity,kind,simulated,enforcement_state,policy_version,device_key,computer_name,manufacturer_id,device_name,vid_pid,transport,pnp_problem_code,effective_decision,enforcement_outcome,actor_username,windows_user,policy_revision,message\n",
                 );
                 for e in events {
+                    let meta = EventMetadata::from_details(&e.details);
+                    let policy_rev = meta
+                        .policy_revision
+                        .or_else(|| e.policy_version.map(|v| format!("v{v}")))
+                        .unwrap_or_default();
                     let fields = [
                         e.id.to_string(),
                         utc_iso(e.utc_ms),
@@ -1865,6 +2247,19 @@ impl AppService {
                         e.enforcement_state,
                         e.policy_version.map(|v| v.to_string()).unwrap_or_default(),
                         e.device_key.unwrap_or_default(),
+                        meta.computer_name.unwrap_or_default(),
+                        meta.manufacturer_id.unwrap_or_default(),
+                        meta.device_name.unwrap_or_default(),
+                        meta.vid_pid.unwrap_or_default(),
+                        meta.transport.unwrap_or_default(),
+                        meta.pnp_problem_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_default(),
+                        meta.effective_decision.unwrap_or_default(),
+                        meta.enforcement_outcome.unwrap_or_default(),
+                        meta.actor_username.unwrap_or_default(),
+                        meta.windows_user.unwrap_or_default(),
+                        policy_rev,
                         e.message,
                     ];
                     s.push_str(
@@ -1879,16 +2274,27 @@ impl AppService {
                 (s, "text/csv", "csv")
             }
         };
+        let actor_str = actor_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| identity.actor());
+        let windows_user = self.resolved_windows_user();
+        let computer_name = self.resolved_computer_name();
         g.store
             .append_event(&NewEvent {
                 severity: Severity::Info,
                 kind: "audit_exported".into(),
                 device_key: None,
-                message: format!("{count} events exported by {}", identity.actor()),
+                message: format!("{count} events exported by {actor_str}"),
                 simulated: false,
                 enforcement_state: "n/a".into(),
                 policy_version: None,
-                details: serde_json::json!({ "format": ext, "count": count }),
+                details: serde_json::json!({
+                    "format": ext,
+                    "count": count,
+                    "actor_username": actor_str,
+                    "windows_user": windows_user,
+                    "computer_name": computer_name,
+                }),
             })
             .map_err(storage_err)?;
         Ok(ExportView {
@@ -1958,19 +2364,168 @@ impl Handler for AppService {
         request: &Request,
         identity: &ClientIdentity,
     ) -> Result<ResponseBody, IpcError> {
+        self.handle_with_token(request, identity, None)
+    }
+
+    fn handle_with_token(
+        &self,
+        request: &Request,
+        identity: &ClientIdentity,
+        auth_token: Option<&str>,
+    ) -> Result<ResponseBody, IpcError> {
+        let session_ctx = if Self::requires_authenticated_session(request) {
+            let mut g = self.lock()?;
+            if g.auth.is_enforced(&g.store).map_err(storage_err)? {
+                let settings = g.store.settings().map_err(storage_err)?;
+                let now_ms = self.clock.now_ms();
+                let Some(sess) = g.auth.touch_authenticated_session(
+                    auth_token,
+                    settings.session_idle_timeout_minutes,
+                    now_ms,
+                ) else {
+                    let has_users = g.store.has_any_users().map_err(storage_err)?;
+                    let msg = if has_users {
+                        "valid operator session required or session locked/expired"
+                    } else {
+                        "initial administrator setup required before accessing RustWard"
+                    };
+                    return Err(IpcError::new(ErrorCode::Unauthorized, msg));
+                };
+                if Self::requires_admin_role(request) && sess.role != UserRole::Admin {
+                    let req_name = request.name();
+                    drop(g);
+                    self.record_authorization_failure(
+                        request,
+                        identity,
+                        &IpcError::new(
+                            ErrorCode::Unauthorized,
+                            format!("administrator role in RustWard is required for {req_name}"),
+                        ),
+                    );
+                    return Err(IpcError::new(
+                        ErrorCode::Unauthorized,
+                        "administrator role in RustWard is required for this operation",
+                    ));
+                }
+                Some(sess)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let actor_override = session_ctx.as_ref().map(|s| s.username.clone());
+        let identity_actor = identity.actor();
+        let effective_actor = actor_override.as_deref().unwrap_or(&identity_actor);
+
         match request {
+            Request::GetAuthStatus => Ok(ResponseBody::AuthStatus(
+                self.get_auth_status_view(auth_token, identity)?,
+            )),
+            Request::SetupInitialAdmin {
+                username,
+                display_name,
+                password,
+            } => Ok(ResponseBody::Login(self.setup_initial_admin(
+                username,
+                display_name,
+                password,
+                identity,
+            )?)),
+            Request::Login { username, password } => Ok(ResponseBody::Login(
+                self.login_operator(username, password, identity)?,
+            )),
+            Request::Logout => Ok(ResponseBody::AuthStatus(
+                self.logout_operator(auth_token, identity)?,
+            )),
+            Request::LockSession => Ok(ResponseBody::AuthStatus(
+                self.lock_operator_session(auth_token, identity)?,
+            )),
+            Request::HeartbeatSession => Ok(ResponseBody::AuthStatus(
+                self.get_auth_status_view(auth_token, identity)?,
+            )),
+            Request::ChangePassword {
+                current_password,
+                new_password,
+            } => self.change_operator_password(
+                session_ctx.as_ref(),
+                current_password,
+                new_password,
+            ),
+            Request::ResetPasswordWithRecovery {
+                username,
+                recovery_key,
+                new_password,
+            } => Ok(ResponseBody::RecoveryReset(
+                self.reset_password_with_recovery(username, recovery_key, new_password, identity)?,
+            )),
+            Request::CreateAppUser {
+                username,
+                display_name,
+                role,
+                password,
+            } => Ok(ResponseBody::Login(self.create_app_user_cmd(
+                username,
+                display_name,
+                role,
+                password,
+                effective_actor,
+            )?)),
+            Request::ListAppUsers => Ok(ResponseBody::AppUsers(self.list_app_users_cmd()?)),
+            Request::DeleteAppUser { username } => {
+                self.delete_app_user_cmd(username, effective_actor)
+            }
+            Request::VerifyExitAuthorization { username, password } => Ok(
+                ResponseBody::ExitAuthorized(self.verify_exit_authorization(username, password)?),
+            ),
+            Request::PreviewBulkManufacturers { action } => Ok(ResponseBody::BulkPreview(
+                self.preview_bulk_manufacturers(*action)?,
+            )),
+            Request::ApplyBulkManufacturers {
+                action,
+                apply_to_windows,
+                retroactive,
+                expected_policy_version,
+            } => Ok(ResponseBody::BulkApplyResult(
+                self.apply_bulk_manufacturers(
+                    *action,
+                    *apply_to_windows,
+                    *retroactive,
+                    *expected_policy_version,
+                    identity,
+                    actor_override.as_deref(),
+                )?,
+            )),
+            Request::GetNotificationFeed { after_event_id } => Ok(ResponseBody::NotificationFeed(
+                self.get_notification_feed(*after_event_id)?,
+            )),
+            Request::QueryAuditEvents { query } => {
+                Ok(ResponseBody::AuditPage(self.query_audit_events(query)?))
+            }
+            Request::VerifyAuditChain => Ok(ResponseBody::AuditChainVerification(
+                self.verify_audit_chain_view()?,
+            )),
+            Request::GetAboutInfo => Ok(ResponseBody::AboutInfo(self.about_info())),
             Request::GetDashboard => {
                 let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
                 Ok(ResponseBody::Dashboard(self.dashboard(&g, captured)?))
             }
             Request::ListDevices { include_absent } => {
+                let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
                 let v = Self::validated(&g.store).ok();
+                let verified = self.verified_denied_keys(&g, &captured);
                 let rows = g.store.list_devices(!include_absent).map_err(storage_err)?;
                 Ok(ResponseBody::Devices(
                     rows.iter()
-                        .map(|r| device_view_with_policy(r, v.as_ref().map(|x| &x.policy)))
+                        .map(|r| {
+                            device_view_with_evidence(
+                                r,
+                                v.as_ref().map(|x| &x.policy),
+                                Some(&verified),
+                            )
+                        })
                         .collect(),
                 ))
             }
@@ -1987,13 +2542,22 @@ impl Handler for AppService {
                 ))
             }
             Request::ListBlocked { limit } => {
+                let captured = self.capture_policy_unlocked();
                 let g = self.lock()?;
+                let v = Self::validated(&g.store).ok();
+                let verified = self.verified_denied_keys(&g, &captured);
                 let rows = g.store.list_devices(false).map_err(storage_err)?;
                 Ok(ResponseBody::Devices(
                     rows.iter()
                         .filter(|d| d.last_verdict == "deny" && is_storage_category(&d.category))
                         .take(usize::try_from(*limit).unwrap_or(usize::MAX))
-                        .map(device_view)
+                        .map(|r| {
+                            device_view_with_evidence(
+                                r,
+                                v.as_ref().map(|x| &x.policy),
+                                Some(&verified),
+                            )
+                        })
                         .collect(),
                 ))
             }
@@ -2002,7 +2566,7 @@ impl Handler for AppService {
                 let names = Self::brand_names(&g.store);
                 let events = g
                     .store
-                    .list_events(&event_filter(query))
+                    .list_events(&event_filter(query)?)
                     .map_err(storage_err)?;
                 Ok(ResponseBody::Events(
                     events.into_iter().map(|e| event_view(e, &names)).collect(),
@@ -2158,83 +2722,93 @@ impl Handler for AppService {
                 input,
                 allowed,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::AddManufacturer {
                     input: input.clone(),
                     allowed: *allowed,
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::UpdateManufacturer {
                 id,
                 input,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::UpdateManufacturer {
                     id: id.clone(),
                     input: input.clone(),
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::RemoveManufacturer {
                 id,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::RemoveManufacturer { id: id.clone() },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::SetManufacturerAllowed {
                 id,
                 allowed,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::SetAllowed {
                     id: id.clone(),
                     allowed: *allowed,
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::SetManufacturerDenied {
                 id,
                 denied,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::SetDenied {
                     id: id.clone(),
                     denied: *denied,
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::SetRuleEnabled {
                 id,
                 enabled,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::SetRuleEnabled {
                     id: id.clone(),
                     enabled: *enabled,
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::UpdateSettings { settings } => {
                 let s = settings_from(settings)?;
                 let mut g = self.lock()?;
                 g.store
-                    .save_settings(&s, &identity.actor())
+                    .save_settings(&s, effective_actor)
                     .map_err(storage_err)?;
                 Ok(ResponseBody::Settings(settings_view(&s)))
             }
             Request::ExportEvents { query, format } => {
                 let mut g = self.lock()?;
-                Ok(ResponseBody::Export(
-                    self.export(&mut g, query, *format, identity)?,
-                ))
+                Ok(ResponseBody::Export(self.export(
+                    &mut g,
+                    query,
+                    *format,
+                    identity,
+                    actor_override.as_deref(),
+                )?))
             }
             Request::ApplyRetention => {
                 let mut g = self.lock()?;
@@ -2249,7 +2823,7 @@ impl Handler for AppService {
                 let mut g = self.lock()?;
                 let rec = g
                     .store
-                    .create_backup(&dir, BackupKind::Manual, &identity.actor())
+                    .create_backup(&dir, BackupKind::Manual, effective_actor)
                     .map_err(storage_err)?;
                 Ok(done(ResponseBody::Done {
                     message_tr: String::new(),
@@ -2294,11 +2868,13 @@ impl Handler for AppService {
                     *retroactive,
                     *expected_policy_version,
                     identity,
+                    actor_override.as_deref(),
                 )?;
                 Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
             }
             Request::RollbackCompoundPolicy => {
-                let plan = self.rollback_compound_policy_direct(identity)?;
+                let plan =
+                    self.rollback_compound_policy_direct(identity, actor_override.as_deref())?;
                 Ok(ResponseBody::CompoundPolicyPlan(Box::new(plan)))
             }
             Request::RecoverDevice { device_key } => {
@@ -2307,12 +2883,13 @@ impl Handler for AppService {
             Request::SetWorkstationId {
                 workstation_id,
                 expected_policy_version,
-            } => self.mutate(
+            } => self.mutate_with_actor(
                 &PolicyEdit::SetWorkstationId {
                     workstation_id: workstation_id.clone(),
                 },
                 *expected_policy_version,
                 identity,
+                actor_override.as_deref(),
             ),
             Request::RefreshInventory => {
                 let s = self.refresh_inventory()?;

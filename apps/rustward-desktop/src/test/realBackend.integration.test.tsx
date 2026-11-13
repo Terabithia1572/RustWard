@@ -24,19 +24,38 @@ function data<T extends ResponseBody["type"]>(r: ResponseBody, type: T): DataOf<
   return r.data as DataOf<T>;
 }
 
-async function boot(page: PageId, caller: "admin" | "user" = "admin", synthetic = true) {
-  real = startRealBackend(caller);
-  if (synthetic) {
-    // A standard user cannot load the fixture; use an admin process on the
-    // same database first.
-    if (caller === "admin") {
-      await real.call({ type: "load_synthetic_inventory" });
-    } else {
-      const admin = startRealBackend("admin", real.dataDir);
-      await admin.call({ type: "load_synthetic_inventory" });
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "V11Admin!Pass#2026";
+
+async function authenticateBackend(target: RealBackend, caller: "admin" | "user", synthetic: boolean) {
+  if (caller === "admin") {
+    await target.call({
+      type: "setup_initial_admin",
+      username: ADMIN_USER,
+      display_name: "Administrator",
+      password: ADMIN_PASS,
+    });
+    if (synthetic) await target.call({ type: "load_synthetic_inventory" });
+  } else {
+    const admin = startRealBackend("admin", target.dataDir);
+    try {
+      await admin.call({
+        type: "setup_initial_admin",
+        username: ADMIN_USER,
+        display_name: "Administrator",
+        password: ADMIN_PASS,
+      });
+      if (synthetic) await admin.call({ type: "load_synthetic_inventory" });
+    } finally {
       await admin.close();
     }
+    await target.call({ type: "login", username: ADMIN_USER, password: ADMIN_PASS });
   }
+}
+
+async function boot(page: PageId, caller: "admin" | "user" = "admin", synthetic = true) {
+  real = startRealBackend(caller);
+  await authenticateBackend(real, caller, synthetic);
   const user = userEvent.setup();
   render(<App api={new Api(real.backend)} initialPage={page} />);
   return { user, real };
@@ -101,6 +120,7 @@ describe("real backend: manufacturers and policy history", () => {
       expect(m.manufacturers.some((b) => b.display_name === "Integration Brand")).toBe(true);
     });
 
+    await user.type(screen.getByRole("searchbox", { name: "Ara" }), "Integration Brand");
     const sw = await screen.findByRole("switch", { name: "İzinli: Integration Brand" });
     const wasAllowed = sw.getAttribute("aria-checked") === "true";
     await user.click(sw);
@@ -118,7 +138,9 @@ describe("real backend: manufacturers and policy history", () => {
 
   it("surfaces a real version conflict from the backend", async () => {
     const { user, real } = await boot("manufacturers");
-    const sw = await screen.findAllByRole("switch");
+    const allSwitches = await screen.findAllByRole("switch");
+    const sw = allSwitches.find((s) => s.getAttribute("aria-label")?.startsWith("İzinli:"));
+    expect(sw).toBeDefined();
     // Someone else changes the policy after the page loaded.
     const m = data(await real.call({ type: "list_manufacturers" }), "manufacturers");
     await real.call({
@@ -126,7 +148,7 @@ describe("real backend: manufacturers and policy history", () => {
       workstation_id: "PC-ELSEWHERE",
       expected_policy_version: m.policy_version,
     });
-    await user.click(sw[0]!);
+    await user.click(sw!);
     expect(await screen.findByText("Çakışma — politika bu arada değişmiş olabilir; yenileyip yeniden deneyin")).toBeInTheDocument();
   });
 });
@@ -246,8 +268,10 @@ describe("real backend: standard user (no administrator rights)", () => {
   it("cannot change brands from the UI", async () => {
     const { user, real } = await boot("manufacturers", "user");
     const before = data(await real.call({ type: "list_manufacturers" }), "manufacturers");
-    const sw = await screen.findAllByRole("switch");
-    await user.click(sw[0]!);
+    const allSwitches = await screen.findAllByRole("switch");
+    const sw = allSwitches.find((s) => s.getAttribute("aria-label")?.startsWith("İzinli:"));
+    expect(sw).toBeDefined();
+    await user.click(sw!);
     expect(await screen.findByText("Bu işlem için yükseltilmiş yönetici yetkisi gerekir.")).toBeInTheDocument();
     const after = data(await real.call({ type: "list_manufacturers" }), "manufacturers");
     expect(after.policy_version).toBe(before.policy_version);
@@ -261,7 +285,7 @@ const POLICY_FIXTURE = resolve(process.cwd(), "../../tests/fixtures/policy-captu
 describe("real backend: enforcement readiness (read-only)", () => {
   it("inspects a synthetic policy capture, merges around existing entries and keeps activation disabled", async () => {
     real = startRealBackend("admin", undefined, { policyCapture: POLICY_FIXTURE });
-    await real.call({ type: "load_synthetic_inventory" });
+    await authenticateBackend(real, "admin", true);
     const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
     expect(v.actual_enforcement.verified_protection).toBe(false);
     expect(v.actual_enforcement.activation_available).toBe(false);
@@ -295,6 +319,7 @@ describe("real backend: enforcement readiness (read-only)", () => {
 
   it("is readable by a standard user, whose administrator gate is not met", async () => {
     real = startRealBackend("user", undefined, { policyCapture: POLICY_FIXTURE });
+    await authenticateBackend(real, "user", false);
     const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
     expect(v.gates.find((g) => g.code === "administrator_authorized")?.status).toBe("not_met");
     render(<App api={new Api(real.backend)} initialPage="readiness" />);
@@ -305,6 +330,7 @@ describe("real backend: enforcement readiness (read-only)", () => {
     "reads live Windows DeviceInstall\\Restrictions read-only on Windows without mutating anything",
     async () => {
       real = startRealBackend("admin", undefined, { policyCapture: "live" });
+      await authenticateBackend(real, "admin", false);
       const v = data(await real.call({ type: "get_enforcement_readiness" }), "enforcement_readiness");
       expect(v.inspection_source).toBe("windows_registry_read_only");
       expect(v.inspection).not.toBeNull();

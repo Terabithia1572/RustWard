@@ -80,7 +80,8 @@ mod dev {
                 },
                 &default_policy_state()?,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .with_app_auth(true);
             // Development only: a SYNTHETIC policy capture file (or explicit
             // "unavailable" sentinel for hermetic integration tests) can stand
             // in for the read-only Windows registry capture. Never used by the
@@ -126,12 +127,22 @@ mod dev {
         /// Process a request through the same validation/authorization path
         /// the service uses.
         pub fn call(&self, request: Request) -> Result<ResponseBody, IpcError> {
+            self.call_with_token(request, None)
+        }
+
+        /// Process a request with an explicit operator session bearer token.
+        pub fn call_with_token(
+            &self,
+            request: Request,
+            auth_token: Option<String>,
+        ) -> Result<ResponseBody, IpcError> {
             let env = RequestEnvelope {
                 version: PROTOCOL_VERSION,
                 request_id: self
                     .next_id
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                 request,
+                auth_token,
             };
             let reply = process(&env, &self.identity, self.app.as_ref());
             if reply.request_id != env.request_id {
@@ -204,19 +215,28 @@ impl Bridge {
         }
     }
 
-    /// Execute a request.
+    /// Execute a request without a session token.
     pub fn call(&self, request: Request) -> Result<ResponseBody, IpcError> {
+        self.call_with_token(request, None)
+    }
+
+    /// Execute a request with an optional operator session bearer token.
+    pub fn call_with_token(
+        &self,
+        request: Request,
+        auth_token: Option<String>,
+    ) -> Result<ResponseBody, IpcError> {
         match self {
-            Self::Service => call_service(request),
+            Self::Service => call_service(request, auth_token),
             #[cfg(all(debug_assertions, feature = "dev-backend"))]
-            Self::Dev(d) => d.call(request),
+            Self::Dev(d) => d.call_with_token(request, auth_token),
         }
     }
 }
 
 #[cfg(any(windows, feature = "host-typecheck"))]
 #[cfg_attr(not(windows), allow(dead_code))]
-fn call_service_pipe(request: Request) -> Result<ResponseBody, IpcError> {
+fn call_service_pipe(request: Request, auth_token: Option<String>) -> Result<ResponseBody, IpcError> {
     use std::time::Duration;
 
     use rustward_ipc::messages::AccessLevel;
@@ -232,7 +252,11 @@ fn call_service_pipe(request: Request) -> Result<ResponseBody, IpcError> {
     let timeout = match &request {
         Request::RefreshInventory
         | Request::VerifyEnforcementApplied { .. }
-        | Request::VerifyEnforcementRollback { .. } => Duration::from_secs(25),
+        | Request::VerifyEnforcementRollback { .. }
+        | Request::ApplyCompoundPolicy { .. }
+        | Request::RollbackCompoundPolicy
+        | Request::RecoverDevice { .. }
+        | Request::ApplyBulkManufacturers { .. } => Duration::from_secs(25),
         _ => DEFAULT_TIMEOUT,
     };
     let conn = PipeConnection::connect(pipe, Duration::from_secs(5)).map_err(|e| match e {
@@ -240,7 +264,7 @@ fn call_service_pipe(request: Request) -> Result<ResponseBody, IpcError> {
         other => rustward_ipc::rpc::ClientError::Transport(other).into_ipc_error(),
     })?;
     Client::new(conn, timeout)
-        .call(request)
+        .call_with_token(request, auth_token)
         .map_err(rustward_ipc::rpc::ClientError::into_ipc_error)
 }
 
@@ -283,14 +307,14 @@ fn unreachable_reason(admin_pipe: bool) -> IpcError {
     IpcError::new(rustward_ipc::ErrorCode::Unavailable, message)
 }
 
-fn call_service(request: Request) -> Result<ResponseBody, IpcError> {
+fn call_service(request: Request, auth_token: Option<String>) -> Result<ResponseBody, IpcError> {
     #[cfg(windows)]
     {
-        call_service_pipe(request)
+        call_service_pipe(request, auth_token)
     }
     #[cfg(not(windows))]
     {
-        let _ = request;
+        let _ = (request, auth_token);
         Err(IpcError::new(
             rustward_ipc::ErrorCode::Unavailable,
             "the service backend requires Windows",

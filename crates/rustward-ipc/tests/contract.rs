@@ -5,7 +5,7 @@
 //! after an intentional protocol change; the frontend test then fails until the
 //! TypeScript mirror is updated too.
 
-use rustward_core::policy_edit::ManufacturerInput;
+use rustward_core::policy_edit::{BulkManufacturerAction, ManufacturerInput};
 use rustward_ipc::PROTOCOL_VERSION;
 use rustward_ipc::messages::{AccessLevel, EventQuery, ExportFormat, Request, SettingsView};
 use serde_json::{Value, json};
@@ -27,6 +27,7 @@ fn settings() -> SettingsView {
         notifications_enabled: true,
         audit_retention_days: 365,
         inventory_refresh_seconds: 30,
+        ..SettingsView::default()
     }
 }
 
@@ -141,6 +142,59 @@ fn all_requests() -> Vec<Request> {
         Request::RecoverDevice {
             device_key: "0123456789abcdef0123456789abcdef".into(),
         },
+        Request::GetAuthStatus,
+        Request::SetupInitialAdmin {
+            username: "secadmin".into(),
+            display_name: "Security Admin".into(),
+            password: "InitPassword#1".into(),
+        },
+        Request::Login {
+            username: "secadmin".into(),
+            password: "InitPassword#1".into(),
+        },
+        Request::Logout,
+        Request::LockSession,
+        Request::HeartbeatSession,
+        Request::ChangePassword {
+            current_password: "InitPassword#1".into(),
+            new_password: "NewPassword#2".into(),
+        },
+        Request::ResetPasswordWithRecovery {
+            username: "secadmin".into(),
+            recovery_key: "RWREC-AAAAA-BBBBB-CCCCC-DDDDD-EEEEE".into(),
+            new_password: "NewPassword#2".into(),
+        },
+        Request::CreateAppUser {
+            username: "viewer1".into(),
+            display_name: "Auditor".into(),
+            role: "read_only".into(),
+            password: "ViewerPass#1".into(),
+        },
+        Request::ListAppUsers,
+        Request::DeleteAppUser {
+            username: "viewer1".into(),
+        },
+        Request::VerifyExitAuthorization {
+            username: "secadmin".into(),
+            password: "InitPassword#1".into(),
+        },
+        Request::PreviewBulkManufacturers {
+            action: BulkManufacturerAction::AllowAll,
+        },
+        Request::ApplyBulkManufacturers {
+            action: BulkManufacturerAction::ExplicitDenyAll,
+            apply_to_windows: true,
+            retroactive: true,
+            expected_policy_version: 1,
+        },
+        Request::GetNotificationFeed {
+            after_event_id: Some(0),
+        },
+        Request::QueryAuditEvents {
+            query: EventQuery::default(),
+        },
+        Request::VerifyAuditChain,
+        Request::GetAboutInfo,
     ];
     for r in &all {
         // Exhaustiveness guard.
@@ -185,7 +239,25 @@ fn all_requests() -> Vec<Request> {
             | Request::GetCompoundPolicyPlan
             | Request::ApplyCompoundPolicy { .. }
             | Request::RollbackCompoundPolicy
-            | Request::RecoverDevice { .. } => {}
+            | Request::RecoverDevice { .. }
+            | Request::GetAuthStatus
+            | Request::SetupInitialAdmin { .. }
+            | Request::Login { .. }
+            | Request::Logout
+            | Request::LockSession
+            | Request::HeartbeatSession
+            | Request::ChangePassword { .. }
+            | Request::ResetPasswordWithRecovery { .. }
+            | Request::CreateAppUser { .. }
+            | Request::ListAppUsers
+            | Request::DeleteAppUser { .. }
+            | Request::VerifyExitAuthorization { .. }
+            | Request::PreviewBulkManufacturers { .. }
+            | Request::ApplyBulkManufacturers { .. }
+            | Request::GetNotificationFeed { .. }
+            | Request::QueryAuditEvents { .. }
+            | Request::VerifyAuditChain
+            | Request::GetAboutInfo => {}
         }
     }
     all

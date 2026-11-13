@@ -77,6 +77,9 @@ fn run_service_inner(ctx: ServiceContext) -> Result<(), String> {
     }
 
     let pipes = crate::ipc_server::spawn_pipe_servers(&app);
+    // Reconcile the persisted approved policy against Windows GPO on startup
+    // so clean reboots or external drift restore active USB protections.
+    let _ = app.reconcile_startup();
     ctx.report_running();
     runtime.run(None, None);
     // Join the pipe threads (in-flight requests are answered first); an

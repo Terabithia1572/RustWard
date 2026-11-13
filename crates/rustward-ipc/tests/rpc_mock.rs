@@ -182,6 +182,7 @@ fn version_mismatch_is_reported() {
         version: 99,
         request_id: 5,
         request: Request::GetDashboard,
+        auth_token: None,
     })
     .unwrap();
     end.send(&f).unwrap();

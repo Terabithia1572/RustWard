@@ -27,6 +27,11 @@ export interface EventQuery {
   since_ms?: number | null;
   until_ms?: number | null;
   simulated?: boolean | null;
+  manufacturer_id?: string | null;
+  device_query?: string | null;
+  windows_user?: string | null;
+  effective_decision?: string | null;
+  actor_username?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
@@ -39,7 +44,14 @@ export interface SettingsView {
   notifications_enabled: boolean;
   audit_retention_days: number;
   inventory_refresh_seconds: number;
+  reconcile_on_startup?: boolean;
+  session_idle_timeout_minutes?: number;
+  notify_on_blocked?: boolean;
+  notify_on_unblocked_warning?: boolean;
 }
+
+export type BulkManufacturerAction = "allow_all" | "explicit_deny_all" | "unconfigured_all";
+export type UserRole = "admin" | "read_only";
 
 export type Request =
   | { type: "get_dashboard" }
@@ -82,7 +94,31 @@ export type Request =
   | { type: "get_compound_policy_plan" }
   | { type: "apply_compound_policy"; retroactive?: boolean | undefined; expected_policy_version: number }
   | { type: "rollback_compound_policy" }
-  | { type: "recover_device"; device_key: string };
+  | { type: "recover_device"; device_key: string }
+  | { type: "get_auth_status" }
+  | { type: "setup_initial_admin"; username: string; display_name: string; password: string }
+  | { type: "login"; username: string; password: string }
+  | { type: "logout" }
+  | { type: "lock_session" }
+  | { type: "heartbeat_session" }
+  | { type: "change_password"; current_password: string; new_password: string }
+  | { type: "reset_password_with_recovery"; username: string; recovery_key: string; new_password: string }
+  | { type: "create_app_user"; username: string; display_name: string; role: UserRole; password: string }
+  | { type: "list_app_users" }
+  | { type: "delete_app_user"; username: string }
+  | { type: "verify_exit_authorization"; username: string; password: string }
+  | { type: "preview_bulk_manufacturers"; action: BulkManufacturerAction }
+  | {
+      type: "apply_bulk_manufacturers";
+      action: BulkManufacturerAction;
+      apply_to_windows: boolean;
+      retroactive: boolean;
+      expected_policy_version: number;
+    }
+  | { type: "get_notification_feed"; after_event_id?: number | null }
+  | { type: "query_audit_events"; query: EventQuery }
+  | { type: "verify_audit_chain" }
+  | { type: "get_about_info" };
 
 export type RequestType = Request["type"];
 
@@ -129,6 +165,24 @@ export const REQUEST_TYPES: readonly RequestType[] = [
   "apply_compound_policy",
   "rollback_compound_policy",
   "recover_device",
+  "get_auth_status",
+  "setup_initial_admin",
+  "login",
+  "logout",
+  "lock_session",
+  "heartbeat_session",
+  "change_password",
+  "reset_password_with_recovery",
+  "create_app_user",
+  "list_app_users",
+  "delete_app_user",
+  "verify_exit_authorization",
+  "preview_bulk_manufacturers",
+  "apply_bulk_manufacturers",
+  "get_notification_feed",
+  "query_audit_events",
+  "verify_audit_chain",
+  "get_about_info",
 ];
 
 /** Requests that require an elevated administrator (server-enforced). */
@@ -159,6 +213,12 @@ export const PRIVILEGED: ReadonlySet<RequestType> = new Set<RequestType>([
   "apply_compound_policy",
   "rollback_compound_policy",
   "recover_device",
+  "setup_initial_admin",
+  "reset_password_with_recovery",
+  "create_app_user",
+  "list_app_users",
+  "delete_app_user",
+  "apply_bulk_manufacturers",
 ]);
 
 export interface ServiceStatusView {
@@ -209,6 +269,20 @@ export interface EventView {
   simulated: boolean;
   enforcement_state: string;
   policy_version: number | null;
+  computer_name?: string | null;
+  manufacturer_id?: string | null;
+  device_name?: string | null;
+  vid_pid?: string | null;
+  transport?: string | null;
+  pnp_problem_code?: number | null;
+  effective_decision?: string | null;
+  enforcement_outcome?: string | null;
+  actor_username?: string | null;
+  windows_user?: string | null;
+  policy_revision?: string | null;
+  details?: unknown;
+  prev_hash?: string;
+  hash?: string;
 }
 
 export interface DashboardView {
@@ -216,6 +290,12 @@ export interface DashboardView {
   enforcement_label_tr: string;
   enforcement_label_en: string;
   protection_verified: boolean;
+  protection_category?: string;
+  protection_detail_tr?: string;
+  protection_detail_en?: string;
+  pending_policy_apply?: boolean;
+  approved_policy_version?: number | null;
+  startup_reconcile_status?: string | null;
   not_validated_banner: string | null;
   service: ServiceStatusView;
   workstation_id: string;
@@ -466,7 +546,18 @@ export type ResponseBody =
   | { type: "enforcement_session"; data: EnforcementSessionView }
   | { type: "backups"; data: BackupView[] }
   | { type: "restore_preview"; data: RestorePreviewView }
-  | { type: "compound_policy_plan"; data: CompoundPolicyPlanView };
+  | { type: "compound_policy_plan"; data: CompoundPolicyPlanView }
+  | { type: "auth_status"; data: AuthStatusView }
+  | { type: "login"; data: LoginResultView }
+  | { type: "recovery_reset"; data: RecoveryResetView }
+  | { type: "app_users"; data: AppUserView[] }
+  | { type: "exit_authorized"; data: ExitAuthorizationView }
+  | { type: "bulk_preview"; data: BulkManufacturerPreviewView }
+  | { type: "bulk_apply_result"; data: BulkManufacturerApplyResultView }
+  | { type: "notification_feed"; data: NotificationFeedView }
+  | { type: "audit_page"; data: AuditPageView }
+  | { type: "audit_chain_verification"; data: AuditChainVerificationView }
+  | { type: "about_info"; data: AboutInfoView };
 
 export interface DoneView {
   message: string;
@@ -907,4 +998,150 @@ export interface CompoundPolicyPlanView {
   can_apply: boolean;
   blocker_reason?: TextTrEn | null;
   is_applied: boolean;
+}
+
+// ---- V1.1 Enterprise Security, Auth, Bulk Actions & Audited Operations ----
+
+export interface AuthUserView {
+  username: string;
+  display_name: string;
+  role: UserRole;
+}
+
+export interface AuthStatusView {
+  setup_required: boolean;
+  auth_enforced: boolean;
+  authenticated: boolean;
+  locked: boolean;
+  current_user: AuthUserView | null;
+  session_expires_at_ms: number | null;
+  idle_timeout_minutes: number;
+  lockout_remaining_seconds: number | null;
+  windows_admin_channel: boolean;
+}
+
+export interface LoginResultView {
+  user: AuthUserView;
+  session_token: string;
+  expires_at_ms: number;
+  idle_timeout_minutes: number;
+  recovery_key_once?: string | null;
+}
+
+export interface RecoveryResetView {
+  username: string;
+  new_recovery_key_once?: string | null;
+  message: string;
+  message_tr: string;
+}
+
+export interface AppUserView {
+  username: string;
+  display_name: string;
+  role: UserRole;
+  failed_attempts: number;
+  locked_until_ms: number | null;
+  created_ms: number;
+  has_recovery_key: boolean;
+}
+
+export interface ExitAuthorizationView {
+  authorized: boolean;
+  authorized_by: string;
+  exit_nonce: string;
+  message_tr: string;
+  message_en: string;
+}
+
+export interface BulkManufacturerPreviewView {
+  action: BulkManufacturerAction;
+  current_policy_version: number;
+  total_manufacturers: number;
+  currently_allowed: number;
+  currently_denied: number;
+  currently_unconfigured: number;
+  manufacturers_changing: number;
+  connected_storage_devices: number;
+  connected_likely_blocked: number;
+  connected_likely_allowed: number;
+  compiled_deny_ids_count: number;
+  compiled_allow_ids_count: number;
+  preserved_custom_identifiers_count: number;
+  preserved_device_overrides_count: number;
+}
+
+export interface BulkManufacturerApplyResultView {
+  action: BulkManufacturerAction;
+  policy_version: number;
+  total_manufacturers: number;
+  manufacturers_updated: number;
+  applied_to_windows: boolean;
+  windows_plan: CompoundPolicyPlanView | null;
+  windows_apply_result: MutationView | null;
+  warnings_tr: string[];
+  warnings_en: string[];
+}
+
+export interface NotificationItemView {
+  event_id: number;
+  utc_ms: number;
+  category: string;
+  dedup_key: string;
+  title_tr: string;
+  title_en: string;
+  body_tr: string;
+  body_en: string;
+  manufacturer_name?: string | null;
+  device_name?: string | null;
+  vid_pid?: string | null;
+  enforced_verified: boolean;
+}
+
+export interface NotificationFeedView {
+  latest_event_id: number;
+  notifications_enabled: boolean;
+  notify_on_blocked: boolean;
+  notify_on_unblocked_warning: boolean;
+  language: "tr" | "en" | string;
+  items: NotificationItemView[];
+}
+
+export interface AuditPageView {
+  events: EventView[];
+  total_count: number;
+  limit: number;
+  offset: number;
+  chain_ok: boolean;
+  chain_status: string;
+}
+
+export interface AuditChainVerificationView {
+  intact: boolean;
+  status_code: string;
+  entries: number;
+  summary_tr: string;
+  summary_en: string;
+  first_bad_id: number | null;
+}
+
+export interface AboutInfoView {
+  app_name: string;
+  tagline_tr: string;
+  tagline_en: string;
+  version: string;
+  commit_sha: string;
+  build_timestamp: string;
+  author: string;
+  repository_url: string;
+  license: string;
+  copyright_tr: string;
+  copyright_en: string;
+  architecture_summary_tr: string;
+  architecture_summary_en: string;
+  tech_stack: string[];
+  verified_environments: string[];
+  security_limits_tr: string[];
+  security_limits_en: string[];
+  acknowledgments_tr: string[];
+  third_party_notices: string[];
 }

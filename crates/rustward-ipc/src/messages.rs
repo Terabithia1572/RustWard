@@ -2,7 +2,7 @@
 //! `apps/rustward-desktop/src/api/types.ts`; keep both in sync.
 
 use rustward_core::explain::Explanation;
-use rustward_core::policy_edit::ManufacturerInput;
+use rustward_core::policy_edit::{BulkManufacturerAction, ManufacturerInput};
 pub use rustward_enforcement::compound_policy::{
     CompiledWindowsPolicy, CompoundPolicyDiff, CompoundPolicyPlanView, ConfiguredIntention,
     DeviceOutcomeStatus, DeviceOverrideView, IdentityCoverage, LocalizedText,
@@ -37,6 +37,21 @@ pub struct EventQuery {
     /// Only simulated (`true`) / only real (`false`).
     #[serde(default)]
     pub simulated: Option<bool>,
+    /// Filter by manufacturer/brand identifier.
+    #[serde(default)]
+    pub manufacturer_id: Option<String>,
+    /// Filter by device key, device name, or VID:PID substring.
+    #[serde(default)]
+    pub device_query: Option<String>,
+    /// Filter by Windows interactive account.
+    #[serde(default)]
+    pub windows_user: Option<String>,
+    /// Filter by effective decision (`allowed`, `blocked`, etc.).
+    #[serde(default)]
+    pub effective_decision: Option<String>,
+    /// Filter by RustWard authenticated actor username.
+    #[serde(default)]
+    pub actor_username: Option<String>,
     /// Page size.
     #[serde(default)]
     pub limit: Option<u32>,
@@ -55,6 +70,10 @@ pub enum ExportFormat {
     Json,
 }
 
+const fn default_idle_timeout_minutes() -> u32 {
+    15
+}
+
 /// Settings exchanged with the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsView {
@@ -68,6 +87,34 @@ pub struct SettingsView {
     pub audit_retention_days: u32,
     /// Service refresh interval.
     pub inventory_refresh_seconds: u32,
+    /// Re-apply the last admin-approved Windows USB GPO policy snapshot at Windows startup.
+    #[serde(default = "default_true")]
+    pub reconcile_on_startup: bool,
+    /// Idle session auto-lock threshold in minutes.
+    #[serde(default = "default_idle_timeout_minutes")]
+    pub session_idle_timeout_minutes: u32,
+    /// Desktop notification when Windows blocks a USB device.
+    #[serde(default = "default_true")]
+    pub notify_on_blocked: bool,
+    /// Desktop warning when a denied USB device is not yet blocked in Windows.
+    #[serde(default = "default_true")]
+    pub notify_on_unblocked_warning: bool,
+}
+
+impl Default for SettingsView {
+    fn default() -> Self {
+        Self {
+            theme: "system".into(),
+            language: "tr".into(),
+            notifications_enabled: true,
+            audit_retention_days: 365,
+            inventory_refresh_seconds: 30,
+            reconcile_on_startup: true,
+            session_idle_timeout_minutes: default_idle_timeout_minutes(),
+            notify_on_blocked: true,
+            notify_on_unblocked_warning: true,
+        }
+    }
 }
 
 /// A request.
@@ -297,6 +344,105 @@ pub enum Request {
         /// Device key (32 hex).
         device_key: String,
     },
+    // ---- V1.1 auth, bulk policy, audit, notifications & about -----------
+    /// Query authentication setup and session lock state (pre-login allowed).
+    GetAuthStatus,
+    /// Mandatory first-run initial administrator creation (when `app_users` is empty).
+    SetupInitialAdmin {
+        /// Admin username (`[A-Za-z0-9][A-Za-z0-9_.-]{2,63}`).
+        username: String,
+        /// Human display name.
+        display_name: String,
+        /// Password meeting minimum complexity requirements.
+        password: String,
+    },
+    /// Authenticate an operator account and obtain an opaque session token.
+    Login {
+        /// Operator username.
+        username: String,
+        /// Plaintext password (verified via backend Argon2id).
+        password: String,
+    },
+    /// Invalidate the active session token cleanly.
+    Logout,
+    /// Lock the active authenticated UI session cleanly.
+    LockSession,
+    /// Refresh session idle/activity deadline while authenticated.
+    HeartbeatSession,
+    /// Change the currently authenticated operator's password.
+    ChangePassword {
+        /// Current password for verification.
+        current_password: String,
+        /// New password meeting complexity rules.
+        new_password: String,
+    },
+    /// Reset an administrator password using a valid DPAPI-sealed recovery key.
+    ResetPasswordWithRecovery {
+        /// Target administrator username.
+        username: String,
+        /// One-time administrator recovery key (`RWREC-...`).
+        recovery_key: String,
+        /// New password.
+        new_password: String,
+    },
+    /// Create a new operator user (`admin` or `read_only`).
+    CreateAppUser {
+        /// Username.
+        username: String,
+        /// Display name.
+        display_name: String,
+        /// Role (`admin` | `read_only`).
+        role: String,
+        /// Initial password.
+        password: String,
+    },
+    /// List configured operator accounts without secrets.
+    ListAppUsers,
+    /// Delete an operator account (never removes the last administrator).
+    DeleteAppUser {
+        /// Target username.
+        username: String,
+    },
+    /// Verify administrator credentials prior to allowing normal application shutdown.
+    VerifyExitAuthorization {
+        /// Administrator username.
+        username: String,
+        /// Administrator password.
+        password: String,
+    },
+    /// Preview manufacturer and USB device impact before confirming bulk operations.
+    PreviewBulkManufacturers {
+        /// Target bulk state (`allow_all` | `explicit_deny_all` | `unconfigured_all`).
+        action: BulkManufacturerAction,
+    },
+    /// Atomically update all catalog manufacturers and optionally commit Windows GPO.
+    ApplyBulkManufacturers {
+        /// Target bulk state.
+        action: BulkManufacturerAction,
+        /// When `true`, also compiles and commits Windows GPO in the same operation.
+        #[serde(default)]
+        apply_to_windows: bool,
+        /// Include retroactive device restriction when applying to Windows.
+        #[serde(default = "default_true")]
+        retroactive: bool,
+        /// Optimistic concurrency version check.
+        expected_policy_version: u64,
+    },
+    /// Read sanitized real enforcement notification feed for desktop toast notifier.
+    GetNotificationFeed {
+        /// Return items strictly newer than this event id when set.
+        #[serde(default)]
+        after_event_id: Option<i64>,
+    },
+    /// Paginated audit event query with exact total count and chain integrity summary.
+    QueryAuditEvents {
+        /// Structured audit filter.
+        query: EventQuery,
+    },
+    /// Verify the cryptographic SHA-256 hash chain over `security_events`.
+    VerifyAuditChain,
+    /// Static and build-time metadata for the About page (`Hakkında`).
+    GetAboutInfo,
 }
 
 const fn default_true() -> bool {
@@ -333,7 +479,19 @@ impl Request {
             | Self::GetEnforcementSession
             | Self::GetSettings
             | Self::RunSimulation
-            | Self::GetCompoundPolicyPlan => AccessLevel::ReadOnly,
+            | Self::GetCompoundPolicyPlan
+            | Self::GetAuthStatus
+            | Self::Login { .. }
+            | Self::Logout
+            | Self::LockSession
+            | Self::HeartbeatSession
+            | Self::ChangePassword { .. }
+            | Self::VerifyExitAuthorization { .. }
+            | Self::PreviewBulkManufacturers { .. }
+            | Self::GetNotificationFeed { .. }
+            | Self::QueryAuditEvents { .. }
+            | Self::VerifyAuditChain
+            | Self::GetAboutInfo => AccessLevel::ReadOnly,
             Self::PrepareEnforcementSession { .. }
             | Self::PrepareDefaultDenySession
             | Self::VerifyEnforcementApplied { .. }
@@ -359,7 +517,13 @@ impl Request {
             | Self::RestoreDevicePolicy { .. }
             | Self::ApplyCompoundPolicy { .. }
             | Self::RollbackCompoundPolicy
-            | Self::RecoverDevice { .. } => AccessLevel::Administrator,
+            | Self::RecoverDevice { .. }
+            | Self::SetupInitialAdmin { .. }
+            | Self::ResetPasswordWithRecovery { .. }
+            | Self::CreateAppUser { .. }
+            | Self::ListAppUsers
+            | Self::DeleteAppUser { .. }
+            | Self::ApplyBulkManufacturers { .. } => AccessLevel::Administrator,
         }
     }
 
@@ -480,6 +644,24 @@ pub struct DashboardView {
     pub warnings_tr: Vec<String>,
     /// Synthetic data in the inventory.
     pub synthetic_data_present: bool,
+    /// Explicit Phase 13 protection category code.
+    #[serde(default)]
+    pub protection_category: String,
+    /// Natural Turkish detail describing real Windows enforcement status.
+    #[serde(default)]
+    pub protection_detail_tr: String,
+    /// English detail describing real Windows enforcement status.
+    #[serde(default)]
+    pub protection_detail_en: String,
+    /// True when local draft manufacturer/device rules differ from approved Windows GPO.
+    #[serde(default)]
+    pub pending_policy_apply: bool,
+    /// Policy version of the currently approved Windows GPO snapshot, if any.
+    #[serde(default)]
+    pub approved_policy_version: Option<u64>,
+    /// Outcome of service startup reconciliation (`reconciled`, `already_in_sync`, `skipped_disabled`, `failed`, `none`).
+    #[serde(default)]
+    pub startup_reconcile_status: Option<String>,
 }
 
 /// Identifier view.
@@ -574,6 +756,48 @@ pub struct EventView {
     pub enforcement_state: String,
     /// Policy version.
     pub policy_version: Option<u64>,
+    /// Local computer identifier.
+    #[serde(default)]
+    pub computer_name: Option<String>,
+    /// Matched manufacturer id.
+    #[serde(default)]
+    pub manufacturer_id: Option<String>,
+    /// Sanitized device display name.
+    #[serde(default)]
+    pub device_name: Option<String>,
+    /// Sanitized VID:PID.
+    #[serde(default)]
+    pub vid_pid: Option<String>,
+    /// Transport (`usbstor`, `uasp_scsi`, etc.).
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Windows PnP ProblemCode.
+    #[serde(default)]
+    pub pnp_problem_code: Option<u32>,
+    /// Effective decision (`allowed`, `blocked`, etc.).
+    #[serde(default)]
+    pub effective_decision: Option<String>,
+    /// Real Windows enforcement outcome.
+    #[serde(default)]
+    pub enforcement_outcome: Option<String>,
+    /// RustWard operator username.
+    #[serde(default)]
+    pub actor_username: Option<String>,
+    /// Unambiguously attributed Windows interactive user, or `None`.
+    #[serde(default)]
+    pub windows_user: Option<String>,
+    /// Policy revision id.
+    #[serde(default)]
+    pub policy_revision: Option<String>,
+    /// Full structured audit payload JSON (sanitized).
+    #[serde(default)]
+    pub details: serde_json::Value,
+    /// Previous SHA-256 chain hash.
+    #[serde(default)]
+    pub prev_hash: String,
+    /// Current SHA-256 chain hash.
+    #[serde(default)]
+    pub hash: String,
 }
 
 /// Policy change view.
@@ -811,6 +1035,29 @@ pub enum ResponseBody {
     RestorePreview(RestorePreviewView),
     /// Compound Windows policy plan.
     CompoundPolicyPlan(Box<CompoundPolicyPlanView>),
+    // ---- V1.1 responses ---------------------------------------------------
+    /// Authentication setup and active session lock status.
+    AuthStatus(AuthStatusView),
+    /// Successful login / setup / token issuance response.
+    Login(LoginResultView),
+    /// Password reset result (includes rotated recovery key once when applicable).
+    RecoveryReset(RecoveryResetView),
+    /// Registered application operator accounts.
+    AppUsers(Vec<AppUserView>),
+    /// Exit authorization outcome with single-use exit nonce.
+    ExitAuthorized(ExitAuthorizationView),
+    /// Impact preview before applying bulk manufacturer update.
+    BulkPreview(BulkManufacturerPreviewView),
+    /// Result of atomic bulk manufacturer update (and optional GPO commit).
+    BulkApplyResult(BulkManufacturerApplyResultView),
+    /// Sanitized Windows notification feed for session-0-free desktop toast notifier.
+    NotificationFeed(NotificationFeedView),
+    /// Paginated audit log page with exact total count and chain integrity summary.
+    AuditPage(AuditPageView),
+    /// Hash-chain integrity verification report.
+    AuditChainVerification(AuditChainVerificationView),
+    /// Application About metadata (`Hakkında`).
+    AboutInfo(AboutInfoView),
 }
 
 /// A registered database backup.
@@ -1175,4 +1422,286 @@ pub struct ProtectionBlockerView {
     pub tr: String,
     /// English text.
     pub en: String,
+}
+
+/// Public summary of the currently logged-in operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthUserView {
+    /// Operator username.
+    pub username: String,
+    /// Operator display name.
+    pub display_name: String,
+    /// Role (`admin` | `read_only`).
+    pub role: String,
+    /// Account creation timestamp in UTC ms.
+    pub created_ms: i64,
+}
+
+/// Authentication and session status returned by `GetAuthStatus` / `Logout` / `LockSession`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthStatusView {
+    /// True when no operator accounts exist yet and first-run admin setup is mandatory.
+    pub setup_required: bool,
+    /// True when backend requires valid session token authentication.
+    pub auth_enforced: bool,
+    /// True when a non-expired, unlocked session token was verified.
+    pub authenticated: bool,
+    /// True when session is currently locked (timed out or manually locked).
+    pub locked: bool,
+    /// Authenticated operator summary when `authenticated == true`.
+    pub current_user: Option<AuthUserView>,
+    /// Absolute session expiration UTC ms when authenticated.
+    pub session_expires_at_ms: Option<i64>,
+    /// Idle auto-lock threshold in minutes.
+    pub idle_timeout_minutes: u32,
+    /// Remaining seconds if client/account is locked due to failed logins.
+    pub lockout_remaining_seconds: Option<u64>,
+    /// True if caller is running on an elevated Windows Administrator IPC channel.
+    #[serde(default)]
+    pub windows_admin_channel: bool,
+}
+
+/// Login / initial admin setup result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoginResultView {
+    /// Authenticated operator summary.
+    pub user: AuthUserView,
+    /// Opaque session token held natively by Rust client / Tauri state.
+    pub session_token: String,
+    /// Absolute session expiration UTC ms.
+    pub expires_at_ms: i64,
+    /// Configured idle timeout in minutes.
+    pub idle_timeout_minutes: u32,
+    /// Shown ONCE upon `SetupInitialAdmin` or admin creation, then discarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_key_once: Option<String>,
+}
+
+/// Password recovery reset result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryResetView {
+    /// Account whose password was reset.
+    pub username: String,
+    /// Newly rotated one-time replacement recovery key (display once to administrator).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_recovery_key_once: Option<String>,
+    /// English status message.
+    pub message: String,
+    /// Turkish status message.
+    pub message_tr: String,
+}
+
+/// Sanitized operator account row listed for administrators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppUserView {
+    /// Username.
+    pub username: String,
+    /// Display name.
+    pub display_name: String,
+    /// `admin` | `read_only`.
+    pub role: String,
+    /// Consecutive failed attempts.
+    pub failed_attempts: u32,
+    /// Lockout expiration UTC ms, if currently locked.
+    pub locked_until_ms: Option<i64>,
+    /// Creation timestamp UTC ms.
+    pub created_ms: i64,
+    /// True if account holds a DPAPI-sealed recovery verifier.
+    pub has_recovery_key: bool,
+}
+
+/// Exit authorization result returned only after backend credential verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitAuthorizationView {
+    /// True when administrator credentials succeeded.
+    pub authorized: bool,
+    /// Verifying administrator username.
+    pub authorized_by: String,
+    /// Single-use nonce verified by the native desktop shell before exit.
+    pub exit_nonce: String,
+    /// Turkish confirmation message.
+    pub message_tr: String,
+    /// English confirmation message.
+    pub message_en: String,
+}
+
+/// Pre-confirmation impact summary before executing a bulk manufacturer change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BulkManufacturerPreviewView {
+    /// Target bulk action (`allow_all` | `explicit_deny_all` | `unconfigured_all`).
+    pub action: BulkManufacturerAction,
+    /// Active policy version prior to edit.
+    pub current_policy_version: u64,
+    /// Total catalog manufacturers affected/present.
+    pub total_manufacturers: u32,
+    /// Manufacturers currently allowed.
+    pub currently_allowed: u32,
+    /// Manufacturers currently explicitly denied.
+    pub currently_denied: u32,
+    /// Manufacturers currently unconfigured.
+    pub currently_unconfigured: u32,
+    /// Number of manufacturers whose state will change.
+    pub manufacturers_changing: u32,
+    /// Currently connected USB storage devices observed in inventory.
+    pub connected_storage_devices: u32,
+    /// Connected USB storage devices whose effective policy verdict after change is denied.
+    pub connected_likely_blocked: u32,
+    /// Connected USB storage devices whose effective policy verdict after change is allowed.
+    pub connected_likely_allowed: u32,
+    /// Number of compiled hardware/device IDs that would be in Windows `DenyDeviceIDs`.
+    pub compiled_deny_ids_count: u32,
+    /// Number of compiled hardware/device IDs that would be in Windows `AllowDeviceIDs`.
+    pub compiled_allow_ids_count: u32,
+    /// Count of custom user-supplied catalog identifiers preserved intact.
+    pub preserved_custom_identifiers_count: u32,
+    /// Count of explicit per-device overrides (`denied_devices` + `allowed_devices`) preserved intact.
+    pub preserved_device_overrides_count: u32,
+}
+
+/// Post-apply report after atomic bulk manufacturer update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BulkManufacturerApplyResultView {
+    /// Applied bulk action.
+    pub action: BulkManufacturerAction,
+    /// New persisted policy version.
+    pub policy_version: u64,
+    /// Total manufacturers in catalog.
+    pub total_manufacturers: u32,
+    /// Count updated (or 0 if idempotent already in state).
+    pub manufacturers_updated: u32,
+    /// True if also committed to Windows Local Group Policy in the same flow.
+    pub applied_to_windows: bool,
+    /// Updated compound policy plan after edit.
+    pub windows_plan: Option<CompoundPolicyPlanView>,
+    /// Result of Windows GPO apply transaction when `applied_to_windows == true`.
+    pub windows_apply_result: Option<MutationView>,
+    /// Turkish warnings/advisories (e.g., pending Windows apply or active devices requiring reconnect).
+    #[serde(default)]
+    pub warnings_tr: Vec<String>,
+    /// English warnings/advisories.
+    #[serde(default)]
+    pub warnings_en: Vec<String>,
+}
+
+/// Sanitized notification item streamed to the out-of-Session-0 desktop notifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationItemView {
+    /// Audit event sequence id.
+    pub event_id: i64,
+    /// UTC milliseconds timestamp.
+    pub utc_ms: i64,
+    /// `blocked_verified` | `deny_not_enforced_warning`.
+    pub category: String,
+    /// Deterministic deduplication key across reconnect polls.
+    pub dedup_key: String,
+    /// Localized Turkish toast title.
+    pub title_tr: String,
+    /// Localized English toast title.
+    pub title_en: String,
+    /// Localized Turkish toast body.
+    pub body_tr: String,
+    /// Localized English toast body.
+    pub body_en: String,
+    /// Matched manufacturer display name if known.
+    pub manufacturer_name: Option<String>,
+    /// Sanitized device display name if known.
+    pub device_name: Option<String>,
+    /// Sanitized VID:PID if known.
+    pub vid_pid: Option<String>,
+    /// True ONLY when Windows PnP ProblemCode/GPO evidence proves block occurred.
+    pub enforced_verified: bool,
+}
+
+/// Read-only notification feed returned over `PIPE_NAME_STATUS`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationFeedView {
+    /// Latest event id in `security_events` for incremental cursoring.
+    pub latest_event_id: i64,
+    /// Master notification toggle from settings.
+    pub notifications_enabled: bool,
+    /// Notify on real Windows USB blocks.
+    pub notify_on_blocked: bool,
+    /// Notify when a denied USB device was NOT enforced by Windows.
+    pub notify_on_unblocked_warning: bool,
+    /// Active UI language (`tr` | `en`).
+    pub language: String,
+    /// Eligible deduplicated notifications strictly newer than `after_event_id`.
+    pub items: Vec<NotificationItemView>,
+}
+
+/// Paginated audit query result with exact matching total count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditPageView {
+    /// Matching rows in descending order.
+    pub events: Vec<EventView>,
+    /// Total rows matching filter before LIMIT/OFFSET.
+    pub total_count: u64,
+    /// Applied page size.
+    pub limit: u32,
+    /// Applied row offset.
+    pub offset: u32,
+    /// Hash chain intact status at query time.
+    pub chain_ok: bool,
+    /// Short chain status label (`intact`, `broken`, `missing`, `truncated`).
+    pub chain_status: String,
+}
+
+/// Result of manual/UI hash-chain verification over `security_events`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditChainVerificationView {
+    /// True when the entire stored chain is intact.
+    pub intact: bool,
+    /// `intact` | `broken` | `missing` | `truncated`.
+    pub status_code: String,
+    /// Total checked entries.
+    pub entries: u64,
+    /// Turkish operator summary.
+    pub summary_tr: String,
+    /// English operator summary.
+    pub summary_en: String,
+    /// First invalid/missing event sequence id when tampered or truncated.
+    pub first_bad_id: Option<i64>,
+}
+
+/// Build and attribution metadata for the About page (`Hakkında`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AboutInfoView {
+    /// Product name (`RustWard`).
+    pub app_name: String,
+    /// Turkish subtitle.
+    pub tagline_tr: String,
+    /// English subtitle.
+    pub tagline_en: String,
+    /// Semantic version string (`1.1.0`).
+    pub version: String,
+    /// Build-time Git commit SHA (short/full or `unknown`).
+    pub commit_sha: String,
+    /// Build date/timestamp string.
+    pub build_timestamp: String,
+    /// Author name (`Yunus İNAN`).
+    pub author: String,
+    /// Repository URL.
+    pub repository_url: String,
+    /// License notice.
+    pub license: String,
+    /// Turkish copyright string.
+    pub copyright_tr: String,
+    /// English copyright string.
+    pub copyright_en: String,
+    /// Turkish architecture overview.
+    pub architecture_summary_tr: String,
+    /// English architecture overview.
+    pub architecture_summary_en: String,
+    /// Technology stack list.
+    pub tech_stack: Vec<String>,
+    /// Tested/verified OS environments.
+    pub verified_environments: Vec<String>,
+    /// Honest security boundaries/limits in Turkish.
+    pub security_limits_tr: Vec<String>,
+    /// Honest security boundaries/limits in English.
+    pub security_limits_en: Vec<String>,
+    /// Acknowledgments in Turkish.
+    pub acknowledgments_tr: Vec<String>,
+    /// Third-party notices.
+    pub third_party_notices: Vec<String>,
 }

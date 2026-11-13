@@ -92,10 +92,25 @@ impl AppService {
         // Without a readable policy nothing can be correlated: never report
         // a Windows rule state then.
         let policy_ok = policy_error.is_none();
+        let policy_rev = Some(format!("v{}", v.version));
+        let windows_user = self.resolved_windows_user();
+        let computer_name = Some(
+            self.resolved_computer_name()
+                .unwrap_or_else(|| v.state.policy.workstation_id.clone()),
+        );
+        let eval_by_key: std::collections::HashMap<String, _> =
+            rustward_core::evaluate::evaluate_snapshot(&snap, &v.policy, &v.catalog)
+                .into_iter()
+                .map(|dec| (device_key(&dec.instance_id), dec))
+                .collect();
         let mut newly = Vec::new();
         let mut devices = Vec::new();
         for mut d in obs.devices.drain(..) {
             let key = device_key(&d.instance_id);
+            let eval_dec = eval_by_key.get(&key);
+            let manufacturer_id = eval_dec.and_then(|dec| crate::decision_brand_id(&dec.reason));
+            let transport =
+                eval_dec.and_then(|dec| crate::decision_transport(&dec.classification.category));
             let last_seen = last_event(g, KIND_DENIAL_OBSERVED, &key)?;
             let last_end = last_event(g, KIND_DENIAL_ENDED, &key)?;
             let active = match (&last_seen, &last_end) {
@@ -125,14 +140,23 @@ impl AppService {
                             ),
                             simulated: false,
                             enforcement_state: self.enforcement_state_code().into(),
-                            policy_version: None,
+                            policy_version: Some(v.version),
                             details: serde_json::json!({
                                 "device": masked,
+                                "computer_name": computer_name,
+                                "manufacturer_id": manufacturer_id,
+                                "device_name": d.name,
                                 "hardware_id": d.hardware_id,
                                 "vid_pid": d.vid_pid,
+                                "transport": transport,
+                                "problem_code": d.problem_code,
+                                "pnp_problem_code": d.problem_code,
+                                "effective_decision": "blocked",
+                                "enforcement_outcome": "windows_blocked_verified",
+                                "windows_user": windows_user,
+                                "policy_revision": policy_rev,
                                 "policy_list": list,
                                 "rule_entry": entry,
-                                "problem_code": d.problem_code,
                                 "observed_ms": now,
                                 "verification_level": "install_denied",
                                 "read_write_tested": false,
@@ -151,6 +175,11 @@ impl AppService {
                 } else {
                     "no matching Windows rule"
                 };
+                let outcome = if d.present != Some(true) {
+                    "disconnected"
+                } else {
+                    "windows_allowed_verified"
+                };
                 g.store
                     .append_event(&NewEvent {
                         severity: Severity::Info,
@@ -162,9 +191,19 @@ impl AppService {
                         ),
                         simulated: false,
                         enforcement_state: self.enforcement_state_code().into(),
-                        policy_version: None,
+                        policy_version: Some(v.version),
                         details: serde_json::json!({
                             "device": masked,
+                            "computer_name": computer_name,
+                            "manufacturer_id": manufacturer_id,
+                            "device_name": d.name,
+                            "vid_pid": d.vid_pid,
+                            "transport": transport,
+                            "pnp_problem_code": d.problem_code,
+                            "effective_decision": "allowed",
+                            "enforcement_outcome": outcome,
+                            "windows_user": windows_user,
+                            "policy_revision": policy_rev,
                             "reason": reason,
                             "observed_ms": now,
                         }),

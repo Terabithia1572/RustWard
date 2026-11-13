@@ -75,6 +75,18 @@ pub struct ManufacturerInput {
     pub notes: Option<String>,
 }
 
+/// Target state for a bulk update across all catalog manufacturers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BulkManufacturerAction {
+    /// Allow all catalog manufacturers (clears explicit brand denies).
+    AllowAll,
+    /// Explicitly deny all catalog manufacturers (clears brand allow rules).
+    ExplicitDenyAll,
+    /// Clear both allow and explicit-deny rules for all manufacturers.
+    UnconfiguredAll,
+}
+
 /// An edit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -148,6 +160,12 @@ pub enum PolicyEdit {
         /// Whether the device is allowed.
         allowed: bool,
     },
+    /// Atomically set every catalog manufacturer to Allowed, Explicit Deny, or Unconfigured
+    /// while preserving catalog entries, custom identifiers, and per-device overrides.
+    BulkManufacturers {
+        /// Bulk target state across all manufacturers in the catalog.
+        action: BulkManufacturerAction,
+    },
 }
 
 impl PolicyEdit {
@@ -164,6 +182,7 @@ impl PolicyEdit {
             Self::SetWorkstationId { .. } => "workstation_id_changed",
             Self::SetDeviceDenied { .. } => "device_denied_changed",
             Self::SetDeviceAllowed { .. } => "device_allowed_changed",
+            Self::BulkManufacturers { .. } => "bulk_manufacturers_changed",
         }
     }
 }
@@ -730,6 +749,69 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
             }
             hw_clean.to_string()
         }
+        PolicyEdit::BulkManufacturers { action } => {
+            let brand_count = next.catalog.brands.len();
+            let already_active_in = |rules: &[BrandRule]| {
+                rules.len() == brand_count
+                    && next
+                        .catalog
+                        .brands
+                        .iter()
+                        .all(|b| rules.iter().any(|r| r.brand_id == b.id && r.enabled))
+            };
+            let already_matches = match action {
+                BulkManufacturerAction::AllowAll => {
+                    current.policy.denied_brands.is_empty()
+                        && already_active_in(&current.policy.allowed_brands)
+                }
+                BulkManufacturerAction::ExplicitDenyAll => {
+                    current.policy.allowed_brands.is_empty()
+                        && already_active_in(&current.policy.denied_brands)
+                }
+                BulkManufacturerAction::UnconfiguredAll => {
+                    current.policy.allowed_brands.is_empty()
+                        && current.policy.denied_brands.is_empty()
+                }
+            };
+            if already_matches {
+                return Err(EditError::NoChange);
+            }
+            let existing_note = |brand_id: &str| {
+                current
+                    .policy
+                    .allowed_brands
+                    .iter()
+                    .chain(current.policy.denied_brands.iter())
+                    .find(|r| r.brand_id == brand_id)
+                    .and_then(|r| r.note.clone())
+            };
+            let build_rules = || -> Vec<BrandRule> {
+                next.catalog
+                    .brands
+                    .iter()
+                    .map(|b| BrandRule {
+                        brand_id: b.id.clone(),
+                        enabled: true,
+                        note: existing_note(&b.id),
+                    })
+                    .collect()
+            };
+            match action {
+                BulkManufacturerAction::AllowAll => {
+                    next.policy.allowed_brands = build_rules();
+                    next.policy.denied_brands.clear();
+                }
+                BulkManufacturerAction::ExplicitDenyAll => {
+                    next.policy.allowed_brands.clear();
+                    next.policy.denied_brands = build_rules();
+                }
+                BulkManufacturerAction::UnconfiguredAll => {
+                    next.policy.allowed_brands.clear();
+                    next.policy.denied_brands.clear();
+                }
+            }
+            String::new()
+        }
     };
 
     if catalog_changed {
@@ -789,6 +871,20 @@ pub fn apply_edit(current: &PolicyState, edit: &PolicyEdit) -> Result<EditOutcom
                 format!("device {hardware_id} allowed (explicit allow)")
             } else {
                 format!("device {hardware_id} allow removed")
+            }
+        }
+        PolicyEdit::BulkManufacturers { action } => {
+            let count = next.catalog.brands.len();
+            match action {
+                BulkManufacturerAction::AllowAll => {
+                    format!("bulk manufacturer update: all {count} manufacturers allowed")
+                }
+                BulkManufacturerAction::ExplicitDenyAll => {
+                    format!("bulk manufacturer update: all {count} manufacturers explicitly denied")
+                }
+                BulkManufacturerAction::UnconfiguredAll => {
+                    format!("bulk manufacturer update: all {count} manufacturers unconfigured")
+                }
             }
         }
     };
@@ -1306,5 +1402,102 @@ mod tests {
         assert_eq!(out2.state.policy.policy_version, out1.state.policy.policy_version + 1);
         assert!(!out2.validated.policy.device_denied(hwid));
         assert!(out2.change.summary.contains("removed"));
+    }
+
+    #[test]
+    fn bulk_manufacturer_transitions_preserve_catalog_and_device_overrides() {
+        let mut s = state();
+        let total_brands = s.catalog.brands.len();
+        let hwid_deny = "USBSTOR\\DiskKingstonDataTraveler_3.0____";
+        let hwid_allow = "USBSTOR\\DiskSanDiskCruzer_Glide____";
+        s = apply_edit(
+            &s,
+            &PolicyEdit::SetDeviceDenied {
+                hardware_id: hwid_deny.into(),
+                instance_id: None,
+                label: Some("Custom Deny".into()),
+                denied: true,
+            },
+        )
+        .unwrap()
+        .state;
+        s = apply_edit(
+            &s,
+            &PolicyEdit::SetDeviceAllowed {
+                hardware_id: hwid_allow.into(),
+                instance_id: None,
+                label: Some("Custom Allow".into()),
+                allowed: true,
+            },
+        )
+        .unwrap()
+        .state;
+        let expected_catalog = s.catalog.clone();
+        let expected_denied_devices = s.policy.denied_devices.clone();
+        let expected_allowed_devices = s.policy.allowed_devices.clone();
+
+        // 1. ExplicitDenyAll atomically denies all brands in a single version bump.
+        let out_deny = apply_edit(
+            &s,
+            &PolicyEdit::BulkManufacturers {
+                action: BulkManufacturerAction::ExplicitDenyAll,
+            },
+        )
+        .unwrap();
+        assert_eq!(out_deny.state.policy.policy_version, s.policy.policy_version + 1);
+        assert_eq!(out_deny.state.policy.denied_brands.len(), total_brands);
+        assert!(out_deny.state.policy.allowed_brands.is_empty());
+        assert_eq!(out_deny.state.catalog, expected_catalog);
+        assert_eq!(out_deny.state.policy.denied_devices, expected_denied_devices);
+        assert_eq!(out_deny.state.policy.allowed_devices, expected_allowed_devices);
+        assert_eq!(out_deny.change.action, "bulk_manufacturers_changed");
+
+        // Repeating ExplicitDenyAll produces NoChange.
+        assert!(matches!(
+            apply_edit(
+                &out_deny.state,
+                &PolicyEdit::BulkManufacturers {
+                    action: BulkManufacturerAction::ExplicitDenyAll,
+                },
+            ),
+            Err(EditError::NoChange)
+        ));
+
+        // 2. AllowAll atomically allows all brands and clears brand denies.
+        let out_allow = apply_edit(
+            &out_deny.state,
+            &PolicyEdit::BulkManufacturers {
+                action: BulkManufacturerAction::AllowAll,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out_allow.state.policy.policy_version,
+            out_deny.state.policy.policy_version + 1
+        );
+        assert_eq!(out_allow.state.policy.allowed_brands.len(), total_brands);
+        assert!(out_allow.state.policy.denied_brands.is_empty());
+        assert!(out_allow.state.policy.allowed_brands.iter().all(|r| r.enabled));
+        assert_eq!(out_allow.state.catalog, expected_catalog);
+        assert_eq!(out_allow.state.policy.denied_devices, expected_denied_devices);
+        assert_eq!(out_allow.state.policy.allowed_devices, expected_allowed_devices);
+
+        // 3. UnconfiguredAll clears both brand allow and brand deny rules, keeping overrides & catalog.
+        let out_clear = apply_edit(
+            &out_allow.state,
+            &PolicyEdit::BulkManufacturers {
+                action: BulkManufacturerAction::UnconfiguredAll,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out_clear.state.policy.policy_version,
+            out_allow.state.policy.policy_version + 1
+        );
+        assert!(out_clear.state.policy.allowed_brands.is_empty());
+        assert!(out_clear.state.policy.denied_brands.is_empty());
+        assert_eq!(out_clear.state.catalog, expected_catalog);
+        assert_eq!(out_clear.state.policy.denied_devices, expected_denied_devices);
+        assert_eq!(out_clear.state.policy.allowed_devices, expected_allowed_devices);
     }
 }
